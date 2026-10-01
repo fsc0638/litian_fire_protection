@@ -343,3 +343,60 @@ def test_ask_sources_no_duplicate_when_already_retrieved(fake_db, monkeypatch):
     retrieved = [{"node_id": "D0120029/12/1/1/1", "citation": "設置標準第12條第1款第1目", "text": OCC_ROWS[0]["text"]}]
     monkeypatch.setattr(api, "_retrieve", lambda q, limit: [dict(r) for r in retrieved])
     assert [r["node_id"] for r in api._ask_sources("KTV 屬於哪一類")] == ["D0120029/12/1/1/1"]
+
+
+# ---------------- 測試期提問紀錄 ----------------
+
+@pytest.fixture
+def logs(monkeypatch):
+    saved: list[dict] = []
+    monkeypatch.setattr(api, "_save_log", lambda rec: saved.append(dict(rec)))
+    return saved
+
+
+def test_log_records_ai_answer(client, monkeypatch, logs):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    client.post("/api/law/ask", json={"question": "KTV要不要裝撒水"}, headers={"X-Forwarded-For": "203.0.113.5"})
+    rec = logs[-1]
+    assert rec["mode"] == "ai" and rec["question"] == "KTV要不要裝撒水"
+    assert rec["answer"] == "KTV 屬甲類，樓地板面積合計三百平方公尺以上要設[1]。另依第30條[9]……"
+    assert rec["cited"] == [1] and rec["invalid_cites"] == [9] and rec["unverified"] == ["30"]
+    assert rec["usage"] == {"input_tokens": 1200, "output_tokens": 300} and rec["stop_reason"] == "end_turn"
+    assert [s["node_id"] for s in rec["sources"]] == ["D0120029/17/1/1", "D0120029/157/1"] and rec["sources"][0]["n"] == 1
+    assert len(rec["client"]) == 12 and "203.0.113.5" not in json.dumps(rec, ensure_ascii=False)   # 不存 IP
+    assert rec.get("error") is None and isinstance(rec["duration_ms"], int)
+
+
+def test_log_records_search_only(client, logs):
+    client.post("/api/law/ask", json={"question": "旅館屬於哪一類"})
+    rec = logs[-1]
+    assert rec["mode"] == "search_only" and rec["answer"] is None and rec.get("error") is None
+    assert len(rec["sources"]) == 2
+
+
+def test_log_records_rejected(client, monkeypatch, logs):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("ASK_DAILY_LIMIT", "1")
+    client.post("/api/law/ask", json={"question": "第一題"})
+    r = client.post("/api/law/ask", json={"question": "第二題"})
+    assert r.status_code == 429
+    rec = logs[-1]
+    assert rec["mode"] == "rejected" and rec["question"] == "第二題" and rec["error"].startswith("429")
+
+
+def test_log_records_midstream_error(client, monkeypatch, logs):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    class Broken(FakeResponses):
+        async def create(self, **kwargs):
+            async def gen():
+                for e in fake_events()[:2]:
+                    yield e
+                raise ConnectionResetError("上游中途斷線")
+            return gen()
+
+    monkeypatch.setattr(api, "_client", lambda: NS(responses=Broken([])))
+    client.post("/api/law/ask", json={"question": "KTV"})
+    rec = logs[-1]
+    assert rec["mode"] == "ai" and rec["error"].startswith("ConnectionResetError")
+    assert rec["answer"] == "KTV 屬甲類，樓地板面積合計三百平方公尺以上要設["

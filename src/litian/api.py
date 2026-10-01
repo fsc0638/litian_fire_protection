@@ -7,7 +7,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
+import json
 import logging
 import os
 import re
@@ -56,6 +58,7 @@ async def lifespan(_: FastAPI):
     pool = ConnectionPool(os.environ["DATABASE_URL"], min_size=1, max_size=4, kwargs={"row_factory": dict_row}, open=True)
     with pool.connection() as c:
         c.execute(USAGE_SCHEMA)
+        c.execute(ASK_LOG_SCHEMA)
     yield
     pool.close()
 
@@ -209,6 +212,26 @@ def table(node_id: str):
 
 _openai: openai.AsyncOpenAI | None = None
 USAGE_SCHEMA = "CREATE TABLE IF NOT EXISTS ask_usage (day text PRIMARY KEY, count integer NOT NULL)"
+# 測試期提問紀錄：每次按「查詢」一筆（問題、檢索結果、AI 回答與查核結果）。來源只存雜湊，不存 IP。
+ASK_LOG_SCHEMA = """CREATE TABLE IF NOT EXISTS ask_log (
+  id bigserial PRIMARY KEY,
+  at timestamptz NOT NULL DEFAULT now(),
+  client text,
+  question text NOT NULL,
+  mode text NOT NULL,
+  sources jsonb NOT NULL,
+  answer text,
+  cited integer[],
+  invalid_cites integer[],
+  unverified text[],
+  stop_reason text,
+  error text,
+  input_tokens integer,
+  output_tokens integer,
+  duration_ms integer)"""
+ASK_LOG_INSERT = ("INSERT INTO ask_log (client, question, mode, sources, answer, cited, invalid_cites, unverified, "
+                  "stop_reason, error, input_tokens, output_tokens, duration_ms) "
+                  "VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
 # 原子地加一；已達上限時不加、不回傳列
 USAGE_BUMP = ("INSERT INTO ask_usage (day, count) VALUES (%s, 1) "
               "ON CONFLICT (day) DO UPDATE SET count = ask_usage.count + 1 WHERE ask_usage.count < %s RETURNING count")
@@ -266,6 +289,31 @@ def _take_quota() -> None:
     limit = _daily_limit()
     if not _bump_daily(_usage_day(), limit):
         raise HTTPException(429, f"今天的 AI 問答次數已達上限（{limit} 次），每天 23:59 重新計算。檢索條文仍可使用。")
+
+
+def _client_tag(request: Request) -> str:
+    """來源 IP 的 HMAC 雜湊前 12 碼：只用來區分不同測試者，無法還原成 IP。"""
+    key = os.environ.get("MEILI_MASTER_KEY", "").encode("utf-8")
+    return hmac.new(key, _client_ip(request).encode("utf-8"), hashlib.sha256).hexdigest()[:12]
+
+
+def _source_summary(sources: list[dict]) -> list[dict]:
+    return [{"n": i + 1, "node_id": s["node_id"], "citation": s.get("citation"), "routes": s.get("routes"),
+             "score": s.get("score")} for i, s in enumerate(sources)]
+
+
+def _save_log(rec: dict) -> None:
+    """寫一筆提問紀錄；失敗只記警告，不影響使用者。"""
+    try:
+        u = rec.get("usage") or {}
+        with pool.connection() as c:
+            c.execute(ASK_LOG_INSERT, (rec.get("client"), rec["question"], rec["mode"],
+                                       json.dumps(rec.get("sources", []), ensure_ascii=False), rec.get("answer"),
+                                       rec.get("cited"), rec.get("invalid_cites"), rec.get("unverified"),
+                                       rec.get("stop_reason"), rec.get("error"), u.get("input_tokens"),
+                                       u.get("output_tokens"), rec.get("duration_ms")))
+    except Exception as e:
+        log.warning("ask_log write failed: %s", type(e).__name__)
 
 
 def _check_code(ip: str, given: str, code: str) -> None:
@@ -351,34 +399,58 @@ async def ask(body: AskBody, request: Request, x_access_code: str = Header("")):
     q = body.question.strip()
     if not q:
         raise HTTPException(422, "請輸入問題")
+    t0 = time.monotonic()
+    rec = {"client": _client_tag(request), "question": q}
     ai, message = _ai_state()
     if ai:
-        ip = _client_ip(request)
-        if _access_code():
-            _check_code(ip, unquote(x_access_code), _access_code())
-        _take_quota()
+        try:
+            if _access_code():
+                _check_code(_client_ip(request), unquote(x_access_code), _access_code())
+            _take_quota()
+        except HTTPException as e:
+            await run_in_threadpool(_save_log, {**rec, "mode": "rejected", "error": f"{e.status_code} {e.detail}"})
+            raise
     sources = await run_in_threadpool(_ask_sources, q)
+    rec["sources"] = _source_summary(sources)
+    rec["mode"] = "search_only" if not ai else ("ai" if sources else "no_sources")
 
     async def events():
-        yield A.sse("sources", {"query": q, "sources": sources})
-        if not ai:
-            yield A.sse("notice", {"message": message})
-            yield A.sse("done", {"stop_reason": None, "unverified": []})
-            return
-        if not sources:
-            yield A.sse("notice", {"message": "沒有查到相關條文，請換個說法，或直接輸入條號（例如「設置標準第17條」）。"})
-            yield A.sse("done", {"stop_reason": None, "unverified": []})
-            return
+        parts: list[str] = []
+        finished = False
         try:
-            async for name, data in A.stream_answer(_client(), q, sources):
-                if name == "done":
-                    log.info("ask done stop=%s usage=%s qlen=%d", data.get("stop_reason"), data.get("usage"), len(q))
-                    data = {k: v for k, v in data.items() if k != "usage"}
-                yield A.sse(name, data)
-        except Exception as e:   # API 錯誤，或串流途中連線中斷（SDK 會直接丟出底層連線錯誤）
-            log.warning("ask failed: %s status=%s request_id=%s", type(e).__name__,
-                        getattr(e, "status_code", None), getattr(e, "request_id", None))
-            yield A.sse("error", {"message": "AI 服務暫時無法回應或連線中斷，請稍後再試。下面的條文仍可參考。"})
+            yield A.sse("sources", {"query": q, "sources": sources})
+            if not ai:
+                yield A.sse("notice", {"message": message})
+                yield A.sse("done", {"stop_reason": None, "unverified": []})
+                finished = True
+                return
+            if not sources:
+                yield A.sse("notice", {"message": "沒有查到相關條文，請換個說法，或直接輸入條號（例如「設置標準第17條」）。"})
+                yield A.sse("done", {"stop_reason": None, "unverified": []})
+                finished = True
+                return
+            try:
+                async for name, data in A.stream_answer(_client(), q, sources):
+                    if name == "text":
+                        parts.append(data["text"])
+                    elif name == "done":
+                        log.info("ask done stop=%s usage=%s qlen=%d", data.get("stop_reason"), data.get("usage"), len(q))
+                        rec.update({k: data.get(k) for k in ("stop_reason", "cited", "invalid_cites", "unverified", "usage")})
+                        data = {k: v for k, v in data.items() if k != "usage"}
+                    yield A.sse(name, data)
+            except Exception as e:   # API 錯誤，或串流途中連線中斷（SDK 會直接丟出底層連線錯誤）
+                log.warning("ask failed: %s status=%s request_id=%s", type(e).__name__,
+                            getattr(e, "status_code", None), getattr(e, "request_id", None))
+                rec["error"] = f"{type(e).__name__} status={getattr(e, 'status_code', None)}"
+                yield A.sse("error", {"message": "AI 服務暫時無法回應或連線中斷，請稍後再試。下面的條文仍可參考。"})
+            finished = True
+        finally:
+            # 使用者中途關掉頁面時也會走到這裡（串流被取消），一樣記下已收到的部分
+            if not finished and not rec.get("error"):
+                rec["error"] = "client_disconnected"
+            rec["answer"] = "".join(parts) or None
+            rec["duration_ms"] = int((time.monotonic() - t0) * 1000)
+            _save_log(rec)
 
     return StreamingResponse(events(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

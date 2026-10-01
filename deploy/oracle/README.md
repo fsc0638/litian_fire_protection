@@ -64,3 +64,4 @@ curl https://<對外網址>/healthz    # 應回 "litian ok"
 | `05_route_api.sh` | 更新本系統網站區塊，把 `/api/*` 轉送到 API 容器 |
 | `06_update_from_git.sh` | 從 GitHub 更新並重新部署 |
 | `07_add_developer.sh` | 新增協作開發者帳號：只能金鑰登入、無 sudo、不在 docker 群組、限 CPU 與記憶體；`--disable` 停用 |
+| `08_export_ask_log.sh` | 匯出法規問答的提問紀錄成 CSV（Excel 可開） |

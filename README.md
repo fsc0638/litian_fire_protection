@@ -98,6 +98,7 @@ bash /opt/litian/repo/deploy/oracle/06_update_from_git.sh
 - `ASK_ACCESS_CODE` 選填（至少 12 個字元）：設定後才要求存取碼；目前不用（2026-10-01 決定），任何人都能用 AI 回答，只受下列上限控管。設定後，同一來源一小時內錯 10 次就暫停一小時。
 - 費用防護：每日總數 `ASK_DAILY_LIMIT`（預設 500，不分來源；台北時間每天 23:59 重新計算；計數存在資料庫 `ask_usage` 表，重新部署不會歸零）。今日用量見 `/api/law/ask/status` 的 `used_today`，每題的 token 用量記在 API 容器日誌。
 - 問題提到具體場所（例：KTV、旅館）時，自動把該場所的第 12 條分類條文排在最前面，AI 才能先判斷場所類別再套門檻。
+- 測試期提問紀錄：每次按「查詢」寫一筆到 `ask_log` 表（問題、檢索結果、AI 回答與查核結果、用量、耗時；來源只存 IP 的雜湊，無法還原）。頁尾已告知使用者。匯出 CSV：`bash /opt/litian/repo/deploy/oracle/08_export_ask_log.sh [起始日 YYYY-MM-DD]`。
 - LINE 版本目前不做（2026-10-01 決定）。
 
 ## 資料來源與授權
