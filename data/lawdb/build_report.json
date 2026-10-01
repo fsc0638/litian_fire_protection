@@ -1,0 +1,85 @@
+{
+ "built_at": "2026-10-01T06:32:07+00:00",
+ "source": "全國法規資料庫 Open API（law.moj.gov.tw/api）；消防署法令查詢系統行動版（law.nfa.gov.tw/MOBILE）",
+ "source_update": {
+  "law": "2026/9/18 上午 12:00:00",
+  "order": "2026/9/18 上午 12:00:00"
+ },
+ "laws": [
+  {
+   "pcode": "D0120001",
+   "name": "消防法",
+   "modified": "20241129",
+   "articles": 80,
+   "deleted": 1
+  },
+  {
+   "pcode": "D0120029",
+   "name": "各類場所消防安全設備設置標準",
+   "modified": "20240424",
+   "articles": 266,
+   "deleted": 7
+  },
+  {
+   "pcode": "D0120002",
+   "name": "消防法施行細則",
+   "modified": "20240122",
+   "articles": 17,
+   "deleted": 0
+  },
+  {
+   "pcode": "D0120054",
+   "name": "消防安全設備檢修及申報辦法",
+   "modified": "20260225",
+   "articles": 13,
+   "deleted": 0
+  },
+  {
+   "pcode": "D0120075",
+   "name": "消防安全設備設計監造測試及檢修作業辦法",
+   "modified": "20231222",
+   "articles": 14,
+   "deleted": 0
+  },
+  {
+   "pcode": "FL019489",
+   "name": "消防機關辦理建築物消防安全設備審查及查驗作業基準",
+   "modified": "20200417",
+   "articles": 12,
+   "deleted": 0
+  }
+ ],
+ "nodes": 2667,
+ "levels": {
+  "article": 402,
+  "paragraph": 642,
+  "item": 1004,
+  "subitem": 330,
+  "subsubitem": 4,
+  "attachment": 1,
+  "legend": 284
+ },
+ "pdf_table_articles": 20,
+ "occupancy_codes": 29,
+ "legend_entries": 284,
+ "legend_categories": 17,
+ "tables": [
+  {
+   "node_id": "D0120029/157",
+   "status": "draft",
+   "rows": 5
+  },
+  {
+   "node_id": "D0120029/18",
+   "status": "draft",
+   "rows": 7
+  }
+ ],
+ "xrefs": {
+  "total": 830,
+  "resolved": 809,
+  "external": 4,
+  "unresolved": 17
+ },
+ "warnings": []
+}

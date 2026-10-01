@@ -1,0 +1,89 @@
+# 消防圖審系統：第 0 期基礎服務（Oracle Always Free，ARM64）
+# 所有映像都已確認有 arm64 版（2026-09-30 查 Docker Hub）。
+# 資料庫、搜尋、佇列只接內部網路，不對外開埠；只有 Caddy 對外 80/443。
+name: litian
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: litian-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: litian
+      POSTGRES_USER: litian
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?缺 POSTGRES_PASSWORD}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks: [internal]
+    mem_limit: 1536m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litian -d litian"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.54.2
+    container_name: litian-meilisearch
+    restart: unless-stopped
+    environment:
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:?缺 MEILI_MASTER_KEY}
+      MEILI_ENV: production
+      MEILI_NO_ANALYTICS: "true"
+    volumes:
+      - ./data/meili:/meili_data
+    networks: [internal]
+    mem_limit: 1g
+
+  redis:
+    image: redis:8.8-alpine
+    container_name: litian-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - ./data/redis:/data
+    networks: [internal]
+    mem_limit: 256m
+
+  api:
+    build: ./repo                # /opt/litian/repo＝GitHub clone（06_update_from_git.sh 更新）
+    image: litian-api:0.1
+    container_name: litian-api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://litian:${POSTGRES_PASSWORD}@postgres:5432/litian
+      MEILI_URL: http://meilisearch:7700
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      meilisearch:
+        condition: service_started
+    ports:
+      - "127.0.0.1:8100:8000"   # 只綁主機本機，由主機層 Caddy 轉送 /api/*
+    networks: [internal, edge]  # internal 連資料庫；edge 讓之後呼叫 Claude／Voyage API 能出外網
+    mem_limit: 768m
+
+  # 獨立主機才用自己的 Caddy（LITIAN_STANDALONE=1 時 02_up.sh 會帶 --profile standalone）。
+  # 主機上已有 Caddy 時不啟用，改在主機層 Caddy 加網站區塊（04_host_caddy_site.sh）。
+  caddy:
+    profiles: ["standalone"]
+    image: caddy:2.11.4-alpine
+    container_name: litian-caddy
+    restart: unless-stopped
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data/caddy:/data
+      - ./data/caddy_config:/config
+    networks: [internal, edge]
+    mem_limit: 256m
+
+networks:
+  internal:
+    internal: true   # 內部網路：資料庫等服務連不到外網，外網也連不到它們
+  edge: {}

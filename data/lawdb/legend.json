@@ -1,0 +1,3440 @@
+[
+ {
+  "node_id": "FL019489/A3/1",
+  "seq": 1,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "滅火器",
+  "name": "乾粉滅火器",
+  "note": "滅火器可以依不同藥劑在圖例旁邊加註說明。例：表示泡沫滅火器表示二氧化碳滅火器表示強化液滅火器表示水滅火器",
+  "symbols": [
+   "FL019489_A3_001.png"
+  ],
+  "note_images": [
+   "FL019489_A3_001_note1.png",
+   "FL019489_A3_001_note2.png",
+   "FL019489_A3_001_note3.png",
+   "FL019489_A3_001_note4.png"
+  ]
+ },
+ {
+  "node_id": "FL019489/A3/2",
+  "seq": 2,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "滅火器",
+  "name": "大型滅火器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_002.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/3",
+  "seq": 3,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "滅火器",
+  "name": "懸掛式自動滅火器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_003.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/4",
+  "seq": 4,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "室內（外）消防栓設備",
+  "name": "室內消防栓",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_004.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/5",
+  "seq": 5,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "室內（外）消防栓設備",
+  "name": "綜合消防栓箱",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_005.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/6",
+  "seq": 6,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "室內（外）消防栓設備",
+  "name": "綜合消防栓箱（含連結送水管出水口）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_006.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/7",
+  "seq": 7,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "室內（外）消防栓設備",
+  "name": "綜合消防栓箱（含緊急電話、緊急電源插座）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_007.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/8",
+  "seq": 8,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "室內（外）消防栓設備",
+  "name": "綜合消防栓箱（含緊急電源插座）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_008.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/9",
+  "seq": 9,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "室內（外）消防栓設備",
+  "name": "綜合消防栓箱（含緊急電話、緊急電源插座、連結送水管出水口）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_009.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/10",
+  "seq": 10,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "室內（外）消防栓設備",
+  "name": "綜合消防栓箱（含緊急電話插座、連結送水管出水口）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_010.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/11",
+  "seq": 11,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "室內（外）消防栓設備",
+  "name": "綜合消防栓箱（含緊急電話）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_011.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/12",
+  "seq": 12,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "室內（外）消防栓設備",
+  "name": "綜合消防栓箱（含緊急電話箱、連結送水管出水口）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_012.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/13",
+  "seq": 13,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "室內（外）消防栓設備",
+  "name": "室外消防栓",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_013.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/14",
+  "seq": 14,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "室內（外）消防栓設備",
+  "name": "消防水帶箱（防雨型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_014.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/15",
+  "seq": 15,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "室內（外）消防栓設備",
+  "name": "消防水帶箱",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_015.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/16",
+  "seq": 16,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "室內（外）消防栓設備",
+  "name": "室外消防栓含消防水帶箱（放雨型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_016.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/17",
+  "seq": 17,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "室內（外）消防栓設備",
+  "name": "室外消防栓含消防水帶箱",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_017.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/18",
+  "seq": 18,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "室內（外）消防栓設備",
+  "name": "減壓閥（可調壓式消防栓）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_018.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/19",
+  "seq": 19,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "室內（外）消防栓設備",
+  "name": "測試用出水口",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_019.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/20",
+  "seq": 20,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "室內（外）消防栓設備",
+  "name": "壓力調整閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_020.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/21",
+  "seq": 21,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "室內（外）消防栓設備",
+  "name": "消防幫浦",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_021.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/22",
+  "seq": 22,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "室內（外）消防栓設備",
+  "name": "消防輔助幫浦",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_022.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/23",
+  "seq": 23,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "室內（外）消防栓設備",
+  "name": "底閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_023.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/24",
+  "seq": 24,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "室內（外）消防栓設備",
+  "name": "制水閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_024.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/25",
+  "seq": 25,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "室內（外）消防栓設備",
+  "name": "逆止閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_025.png",
+   "FL019489_A3_025_2.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/26",
+  "seq": 26,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "室內（外）消防栓設備",
+  "name": "防震軟管",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_026.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/27",
+  "seq": 27,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "密閉式撒水頭（向下型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_027.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/28",
+  "seq": 28,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "密閉式撒水頭（向上型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_028.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/29",
+  "seq": 29,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "密閉式撒水頭（高溫用）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_029.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/30",
+  "seq": 30,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "撒水頭（開放式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_030.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/31",
+  "seq": 31,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "撒水頭（附防護板）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_031.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/32",
+  "seq": 32,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "撒水頭（側壁式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_032.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/33",
+  "seq": 33,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "撒水頭（開方式）（昇位圖用）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_033.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/34",
+  "seq": 34,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "撒水頭（昇位圖用）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_034.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/35",
+  "seq": 35,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "自動警報逆止閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_035.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/36",
+  "seq": 36,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "自動警報逆止閥（濕式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_036.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/37",
+  "seq": 37,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "水流警報器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_037.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/38",
+  "seq": 38,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "末端查驗閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_038.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/39",
+  "seq": 39,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "自動撒水幫浦",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_039.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/40",
+  "seq": 40,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "自動撒水輔助幫浦",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_040.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/41",
+  "seq": 41,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "自動撒水送水口",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_041.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/42",
+  "seq": 42,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "幫浦啟動開關",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_042.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/43",
+  "seq": 43,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "綜合輔助撒水栓箱",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_043.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/44",
+  "seq": 44,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "輔助撒水栓箱",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_044.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/45",
+  "seq": 45,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "一齊開放閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_045.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/46",
+  "seq": 46,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "手動啟動裝置（開放式自動撒水設備）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_046.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/47",
+  "seq": 47,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "測試閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_047.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/48",
+  "seq": 48,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "底閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_048.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/49",
+  "seq": 49,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "止水閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_049.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/50",
+  "seq": 50,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "逆止閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_050.png",
+   "FL019489_A3_050_2.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/51",
+  "seq": 51,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "自動撒水設備",
+  "name": "防震軟管",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_051.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/52",
+  "seq": 52,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "水霧滅火設備",
+  "name": "水霧噴頭",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_052.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/53",
+  "seq": 53,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "水霧滅火設備",
+  "name": "感知撒水頭",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_053.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/54",
+  "seq": 54,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "水霧滅火設備",
+  "name": "感知撒水頭（昇位圖用）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_054.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/55",
+  "seq": 55,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "水霧滅火設備",
+  "name": "水霧手動啟動裝置",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_055.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/56",
+  "seq": 56,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "水霧滅火設備",
+  "name": "自動警報逆止閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_056.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/57",
+  "seq": 57,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "水霧滅火設備",
+  "name": "自動警報逆止閥（昇位圖用）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_057.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/58",
+  "seq": 58,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "水霧滅火設備",
+  "name": "水流警報器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_058.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/59",
+  "seq": 59,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "水霧滅火設備",
+  "name": "一齊開放閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_059.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/60",
+  "seq": 60,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "水霧滅火設備",
+  "name": "測試閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_060.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/61",
+  "seq": 61,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "水霧滅火設備",
+  "name": "水霧用送水口",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_061.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/62",
+  "seq": 62,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "水霧滅火設備",
+  "name": "水霧幫浦",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_062.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/63",
+  "seq": 63,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "水霧滅火設備",
+  "name": "水霧輔助幫浦",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_063.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/64",
+  "seq": 64,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "水霧滅火設備",
+  "name": "幫浦啟動開關",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_064.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/65",
+  "seq": 65,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "水霧滅火設備",
+  "name": "底閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_065.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/66",
+  "seq": 66,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "水霧滅火設備",
+  "name": "制水閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_066.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/67",
+  "seq": 67,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "水霧滅火設備",
+  "name": "逆止閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_067.png",
+   "FL019489_A3_067_2.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/68",
+  "seq": 68,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "水霧滅火設備",
+  "name": "防震軟管",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_068.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/69",
+  "seq": 69,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "水霧滅火設備",
+  "name": "Ｙ型過濾器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_069.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/70",
+  "seq": 70,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "泡沫噴頭",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_070.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/71",
+  "seq": 71,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "泡沫頭（側噴式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_071.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/72",
+  "seq": 72,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "感知撒水頭",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_072.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/73",
+  "seq": 73,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "感知撒水頭（昇位圖用）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_073.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/74",
+  "seq": 74,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "自動警報逆止閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_074.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/75",
+  "seq": 75,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "自動警報逆止閥（昇位圖用）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_075.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/76",
+  "seq": 76,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "水流警報器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_076.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/77",
+  "seq": 77,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "手動啟動裝置",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_077.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/78",
+  "seq": 78,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "一齊開放閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_078.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/79",
+  "seq": 79,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "測試閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_079.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/80",
+  "seq": 80,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "比例混合器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_080.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/81",
+  "seq": 81,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "泡沫原液槽",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_081.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/82",
+  "seq": 82,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "電磁閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_082.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/83",
+  "seq": 83,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "一齊開放閥組（昇位圖及立體圖用）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_083.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/84",
+  "seq": 84,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "泡沫幫浦",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_084.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/85",
+  "seq": 85,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "泡沫輔助幫浦",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_085.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/86",
+  "seq": 86,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "幫浦啟動開關",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_086.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/87",
+  "seq": 87,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "移動式綜合泡沫消防栓箱（防雨型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_087.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/88",
+  "seq": 88,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "移動式綜合泡沫消防栓箱",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_088.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/89",
+  "seq": 89,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "移動式泡沫消防栓箱（防雨型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_089.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/90",
+  "seq": 90,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "移動式泡沫消防栓箱",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_090.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/91",
+  "seq": 91,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "輔助泡沫消防栓箱（防雨型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_091.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/92",
+  "seq": 92,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "輔助泡沫消防栓箱",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_092.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/93",
+  "seq": 93,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "泡沫放出口",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_093.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/94",
+  "seq": 94,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "底閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_094.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/95",
+  "seq": 95,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "制水閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_095.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/96",
+  "seq": 96,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "逆止閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_096.png",
+   "FL019489_A3_096_2.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/97",
+  "seq": 97,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "防震軟管",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_097.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/98",
+  "seq": 98,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "泡沫滅火設備",
+  "name": "Ｙ型過濾器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_098.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/99",
+  "seq": 99,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "二氧化碳滅火設備",
+  "name": "CO2控制盤",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_099.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/100",
+  "seq": 100,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "二氧化碳滅火設備",
+  "name": "CO2噴頭（崁頂式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_100.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/101",
+  "seq": 101,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "二氧化碳滅火設備",
+  "name": "CO2噴頭（吸頂式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_101.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/102",
+  "seq": 102,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "二氧化碳滅火設備",
+  "name": "CO2噴頭（測噴式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_102.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/103",
+  "seq": 103,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "二氧化碳滅火設備",
+  "name": "CO2放射表示燈",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_103.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/104",
+  "seq": 104,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "二氧化碳滅火設備",
+  "name": "CO2放射表示燈（防水型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_104.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/105",
+  "seq": 105,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "二氧化碳滅火設備",
+  "name": "CO2手動啟動裝置",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_105.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/106",
+  "seq": 106,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "二氧化碳滅火設備",
+  "name": "CO2手動啟動裝置（防水型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_106.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/107",
+  "seq": 107,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "二氧化碳滅火設備",
+  "name": "壓力開關",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_107.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/108",
+  "seq": 108,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "二氧化碳滅火設備",
+  "name": "CO2啟動用氣體容器附電磁閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_108.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/109",
+  "seq": 109,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "二氧化碳滅火設備",
+  "name": "選擇閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_109.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/110",
+  "seq": 110,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "二氧化碳滅火設備",
+  "name": "選擇閥固定架",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_110.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/111",
+  "seq": 111,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "二氧化碳滅火設備",
+  "name": "安全裝置",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_111.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/112",
+  "seq": 112,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "二氧化碳滅火設備",
+  "name": "啟動用電磁閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_112.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/113",
+  "seq": 113,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "二氧化碳滅火設備",
+  "name": "壓力開關",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_113.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/114",
+  "seq": 114,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "二氧化碳滅火設備",
+  "name": "閉止閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_114.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/115",
+  "seq": 115,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "二氧化碳滅火設備",
+  "name": "逆止閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_115.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/116",
+  "seq": 116,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "二氧化碳滅火設備",
+  "name": "CO2氣體容器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_116.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/117",
+  "seq": 117,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "二氧化碳滅火設備",
+  "name": "CO2排風機手動啟動裝置",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_117.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/118",
+  "seq": 118,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "乾粉（海龍替代品）滅火設備",
+  "name": "乾粉（海龍替代品）套裝型（含控制盤）",
+  "note": "乾粉或海龍替代圖例可依不同藥劑在圖例旁加註說明或以圖說說明。例：表示FM200控制盤",
+  "symbols": [
+   "FL019489_A3_118.png"
+  ],
+  "note_images": [
+   "FL019489_A3_118_note1.png"
+  ]
+ },
+ {
+  "node_id": "FL019489/A3/119",
+  "seq": 119,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "乾粉（海龍替代品）滅火設備",
+  "name": "乾粉（海龍替代品）套裝型",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_119.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/120",
+  "seq": 120,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "乾粉（海龍替代品）滅火設備",
+  "name": "乾粉（海龍替代品）控制盤",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_120.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/121",
+  "seq": 121,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "乾粉（海龍替代品）滅火設備",
+  "name": "乾粉（海龍替代品）噴頭（崁頂式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_121.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/122",
+  "seq": 122,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "乾粉（海龍替代品）滅火設備",
+  "name": "乾粉（海龍替代品）噴頭（吸頂式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_122.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/123",
+  "seq": 123,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "乾粉（海龍替代品）滅火設備",
+  "name": "乾粉（海龍替代品）噴頭（喇叭式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_123.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/124",
+  "seq": 124,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "乾粉（海龍替代品）滅火設備",
+  "name": "乾粉（海龍替代品）放射表示燈",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_124.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/125",
+  "seq": 125,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "乾粉（海龍替代品）滅火設備",
+  "name": "乾粉（海龍替代品）放射表示燈（防水型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_125.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/126",
+  "seq": 126,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "乾粉（海龍替代品）滅火設備",
+  "name": "乾粉（海龍替代品）手動啟動裝置",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_126.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/127",
+  "seq": 127,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "乾粉（海龍替代品）滅火設備",
+  "name": "乾粉（海龍替代品）手動啟動裝置（防水型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_127.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/128",
+  "seq": 128,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "乾粉（海龍替代品）滅火設備",
+  "name": "壓力開關",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_128.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/129",
+  "seq": 129,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "乾粉（海龍替代品）滅火設備",
+  "name": "乾粉（海龍替代品）啟動用氣體容器附電磁閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_129.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/130",
+  "seq": 130,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "乾粉（海龍替代品）滅火設備",
+  "name": "選擇閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_130.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/131",
+  "seq": 131,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "乾粉（海龍替代品）滅火設備",
+  "name": "選擇閥固定架",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_131.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/132",
+  "seq": 132,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "乾粉（海龍替代品）滅火設備",
+  "name": "安全裝置",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_132.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/133",
+  "seq": 133,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "乾粉（海龍替代品）滅火設備",
+  "name": "啟動用電磁閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_133.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/134",
+  "seq": 134,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "乾粉（海龍替代品）滅火設備",
+  "name": "壓力開關",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_134.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/135",
+  "seq": 135,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "乾粉（海龍替代品）滅火設備",
+  "name": "閉止閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_135.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/136",
+  "seq": 136,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "乾粉（海龍替代品）滅火設備",
+  "name": "逆止閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_136.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/137",
+  "seq": 137,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "乾粉（海龍替代品）滅火設備",
+  "name": "乾粉（海龍替代品）氣體容器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_137.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/138",
+  "seq": 138,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "簡易自動滅火設備",
+  "name": "簡易自動滅火設備",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_138.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/139",
+  "seq": 139,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "火警受信總機",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_139.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/140",
+  "seq": 140,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "火警授信副機",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_140.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/141",
+  "seq": 141,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "差動式局限型探測器（1種）",
+  "note": "住宅用火災警報器可在探測器旁加註Ｒ表示定溫式住警器表示定溫式住警器",
+  "symbols": [
+   "FL019489_A3_141.png"
+  ],
+  "note_images": [
+   "FL019489_A3_141_note1.png",
+   "FL019489_A3_141_note2.png"
+  ]
+ },
+ {
+  "node_id": "FL019489/A3/142",
+  "seq": 142,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "差動式局限型探測器（2種）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_142.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/143",
+  "seq": 143,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "差動式局限型探測器（1種、定址式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_143.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/144",
+  "seq": 144,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "差動式局限型探測器（2種、定址式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_144.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/145",
+  "seq": 145,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "差動式分佈型探測器（2種）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_145.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/146",
+  "seq": 146,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "定溫式局限型探測器（特種）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_146.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/147",
+  "seq": 147,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "定溫式局限型探測器（1種）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_147.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/148",
+  "seq": 148,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "定溫式局限型探測器（特種、定址式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_148.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/149",
+  "seq": 149,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "定溫式局限型探測器（1種、定址式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_149.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/150",
+  "seq": 150,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "定溫式局限型探測器（特種、防水型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_150.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/151",
+  "seq": 151,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "定溫式局限型探測器（1種、防水型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_151.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/152",
+  "seq": 152,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "定溫式局限型探測器（特種、定址式、防水型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_152.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/153",
+  "seq": 153,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "定溫式局限型探測器（1種、定址式、防水型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_153.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/154",
+  "seq": 154,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "偵煙式局限型探測器（1種）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_154.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/155",
+  "seq": 155,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "偵煙式局限型探測器（2種）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_155.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/156",
+  "seq": 156,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "偵煙式局限型探測器（3種）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_156.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/157",
+  "seq": 157,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "偵煙式局限型探測器（1種、定址式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_157.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/158",
+  "seq": 158,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "偵煙式局限型探測器（2種、定址式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_158.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/159",
+  "seq": 159,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "偵煙式局限型探測器（3種、定址式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_159.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/160",
+  "seq": 160,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "偵煙式局限型探測器（2種）（管道間、用附壁掛型檢點箱）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_160.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/161",
+  "seq": 161,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "偵煙式局限型探測器（2種）（定址式）（管道間、用附壁掛型檢點箱）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_161.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/162",
+  "seq": 162,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "光電式分離型探測器（送光部）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_162.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/163",
+  "seq": 163,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "光電式分離型探測器（受光部）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_163.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/164",
+  "seq": 164,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "光電式分離型探測器（定址式、送光部）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_164.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/165",
+  "seq": 165,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "光電式分離型探測器（定址式、受光部）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_165.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/166",
+  "seq": 166,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "試驗器（光電式分離型探測器用）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_166.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/167",
+  "seq": 167,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "補償式侷限型探測器（1種）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_167.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/168",
+  "seq": 168,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "補償式侷限型探測器（2種）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_168.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/169",
+  "seq": 169,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "補償式侷限型探測器（1種、防水型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_169.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/170",
+  "seq": 170,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "補償式侷限型探測器（2種、防水型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_170.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/171",
+  "seq": 171,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "補償式侷限型探測器（1種、定址式、防水型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_171.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/172",
+  "seq": 172,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "補償式侷限型探測器（2種、定址式、防水型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_172.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/173",
+  "seq": 173,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "火焰式探測器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_173.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/174",
+  "seq": 174,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "熱煙複合式探測器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_174.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/175",
+  "seq": 175,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "火警室外表示燈",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_175.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/176",
+  "seq": 176,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "緊急電源裝置盤",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_176.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/177",
+  "seq": 177,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "中文圖控顯示幕",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_177.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/178",
+  "seq": 178,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "中繼器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_178.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/179",
+  "seq": 179,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "火警型中繼器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_179.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/180",
+  "seq": 180,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "監控、控制型中繼器",
+  "note": "排煙、撒水、泡沫",
+  "symbols": [
+   "FL019489_A3_180.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/181",
+  "seq": 181,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "電鈴型中繼器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_181.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/182",
+  "seq": 182,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "移報型中繼器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_182.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/183",
+  "seq": 183,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "信號隔離型中繼器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_183.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/184",
+  "seq": 184,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "信號轉換型中繼器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_184.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/185",
+  "seq": 185,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "定址型接點監視中繼器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_185.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/186",
+  "seq": 186,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "定址型控制中繼器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_186.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/187",
+  "seq": 187,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "分散型中繼器控制盤",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_187.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/188",
+  "seq": 188,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "終端電阻",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_188.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/189",
+  "seq": 189,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "手動警報機",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_189.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/190",
+  "seq": 190,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "火警警鈴",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_190.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/191",
+  "seq": 191,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "標示燈",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_191.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/192",
+  "seq": 192,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "火警綜合盤",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_192.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/193",
+  "seq": 193,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "差動式分布型空氣管",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_193.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/194",
+  "seq": 194,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "消防啟動箱",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_194.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/195",
+  "seq": 195,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "幫浦警示",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_195.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/196",
+  "seq": 196,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "火警自動警報設備",
+  "name": "幫浦啟動開關",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_196.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/197",
+  "seq": 197,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "緊急廣播設備",
+  "name": "緊急廣播主機",
+  "note": "揚聲器如有使用不同等級時，可在圖利旁邊加註L.M.S文字。例：表示L級表示M級表示S級(2)揚聲器及音量控制器有使用不同W數時，可在圖利旁加註W數例：表示1W表示3W表示6W表示30W",
+  "symbols": [
+   "FL019489_A3_197.png"
+  ],
+  "note_images": [
+   "FL019489_A3_197_note1.png",
+   "FL019489_A3_197_note2.png",
+   "FL019489_A3_197_note3.png",
+   "FL019489_A3_197_note4.png",
+   "FL019489_A3_197_note5.png",
+   "FL019489_A3_197_note6.png",
+   "FL019489_A3_197_note7.png"
+  ]
+ },
+ {
+  "node_id": "FL019489/A3/198",
+  "seq": 198,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "緊急廣播設備",
+  "name": "緊急電話主機",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_198.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/199",
+  "seq": 199,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "緊急廣播設備",
+  "name": "緊急電話子機",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_199.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/200",
+  "seq": 200,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "緊急廣播設備",
+  "name": "緊急電話子機附收容箱",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_200.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/201",
+  "seq": 201,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "緊急廣播設備",
+  "name": "揚聲器（嵌頂式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_201.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/202",
+  "seq": 202,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "緊急廣播設備",
+  "name": "揚聲器（吸頂式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_202.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/203",
+  "seq": 203,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "緊急廣播設備",
+  "name": "揚聲器（壁掛式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_203.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/204",
+  "seq": 204,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "緊急廣播設備",
+  "name": "揚聲器（號角式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_204.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/205",
+  "seq": 205,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "緊急廣播設備",
+  "name": "音量調整器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_205.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/206",
+  "seq": 206,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "瓦斯漏氣火警自動警報設備",
+  "name": "瓦斯漏氣檢知器（吸頂式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_206.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/207",
+  "seq": 207,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "瓦斯漏氣火警自動警報設備",
+  "name": "瓦斯漏氣檢知器（壁掛式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_207.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/208",
+  "seq": 208,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "瓦斯漏氣火警自動警報設備",
+  "name": "瓦斯漏氣檢知型中繼器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_208.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/209",
+  "seq": 209,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "瓦斯漏氣火警自動警報設備",
+  "name": "瓦斯漏氣受信總機",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_209.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/210",
+  "seq": 210,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "瓦斯漏氣火警自動警報設備",
+  "name": "瓦斯漏氣表示燈",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_210.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/211",
+  "seq": 211,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "瓦斯漏氣火警自動警報設備",
+  "name": "瓦斯漏氣表示燈（防水型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_211.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/212",
+  "seq": 212,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "一一九火災通報裝置",
+  "name": "一一九火災通報裝置",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_212.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/213",
+  "seq": 213,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "一一九火災通報裝置",
+  "name": "一一九火災通報裝置專用電話機",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_213.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/214",
+  "seq": 214,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "出口標示燈",
+  "note": "標示設備如有使用不同等級時，可在圖例旁加註S.M.L文字。例：A表示A級B表示B級C表示C級",
+  "symbols": [
+   "FL019489_A3_214.png"
+  ],
+  "note_images": [
+   "FL019489_A3_214_note1.png",
+   "FL019489_A3_214_note2.png",
+   "FL019489_A3_214_note3.png"
+  ]
+ },
+ {
+  "node_id": "FL019489/A3/215",
+  "seq": 215,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "避難方向指標（出口用）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_215.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/216",
+  "seq": 216,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "避難方向指示燈（單面單向）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_216.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/217",
+  "seq": 217,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "避難方向指示燈（雙面單向）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_217.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/218",
+  "seq": 218,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "避難方向指示燈（單面雙向）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_218.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/219",
+  "seq": 219,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "避難方向指示燈（雙面雙向）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_219.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/220",
+  "seq": 220,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "避難方向指示燈（單面單向、埋入型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_220.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/221",
+  "seq": 221,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "避難方向指示燈（雙面單向、地板型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_221.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/222",
+  "seq": 222,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "避難方向指示燈（單面雙向、埋入行）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_222.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/223",
+  "seq": 223,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "避難方向指示燈（雙面雙向、地板型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_223.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/224",
+  "seq": 224,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "避難方向指標（單向）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_224.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/225",
+  "seq": 225,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "避難方向指標（雙向）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_225.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/226",
+  "seq": 226,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "避難器具設置位置標示牌",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_226.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/227",
+  "seq": 227,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "避難器具指標（入口用）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_227.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/228",
+  "seq": 228,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "避難器具指標（單向）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_228.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/229",
+  "seq": 229,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "避難器具指標（雙向）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_229.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/230",
+  "seq": 230,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "避難器具設置位置標示燈",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_230.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/231",
+  "seq": 231,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "避難器具指示燈（單面單向）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_231.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/232",
+  "seq": 232,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "避難器具指示燈（雙面單向）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_232.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/233",
+  "seq": 233,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "避難器具指示燈（單面雙向）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_233.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/234",
+  "seq": 234,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "避難器具指示燈（雙面雙向）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_234.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/235",
+  "seq": 235,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "救助袋（直降式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_235.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/236",
+  "seq": 236,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "救助袋（斜降式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_236.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/237",
+  "seq": 237,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "緩降機",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_237.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/238",
+  "seq": 238,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "避難梯",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_238.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/239",
+  "seq": 239,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "避難逃生設備",
+  "name": "避難梯（出口）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_239.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/240",
+  "seq": 240,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "緊急照明設備",
+  "name": "緊急照明燈（嵌頂式）",
+  "note": "緊急照明燈如有使用不同W數時，可在圖利旁加註W數例：表示13W表示27W",
+  "symbols": [
+   "FL019489_A3_240.png"
+  ],
+  "note_images": [
+   "FL019489_A3_240_note1.png",
+   "FL019489_A3_240_note2.png"
+  ]
+ },
+ {
+  "node_id": "FL019489/A3/241",
+  "seq": 241,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "緊急照明設備",
+  "name": "緊急照明燈（吸頂式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_241.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/242",
+  "seq": 242,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "緊急照明設備",
+  "name": "緊急照明燈（壁掛式）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_242.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/243",
+  "seq": 243,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "緊急照明設備",
+  "name": "緊急照明燈兼樓梯避難方向指示燈",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_243.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/244",
+  "seq": 244,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "消防搶救上之必要設備",
+  "name": "綜合消防栓箱（含連結送水管出水口）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_244.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/245",
+  "seq": 245,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "消防搶救上之必要設備",
+  "name": "綜合消防栓箱（含緊急電話、緊急電源插座、連結送水管出水口）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_245.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/246",
+  "seq": 246,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "消防搶救上之必要設備",
+  "name": "綜合消防栓箱（含緊急電源插座、連結送水管出水口）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_246.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/247",
+  "seq": 247,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "消防搶救上之必要設備",
+  "name": "綜合消防栓（含緊急電源插座、連結送水管出水口）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_247.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/248",
+  "seq": 248,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "消防搶救上之必要設備",
+  "name": "連結送水管出水口箱（單口型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_248.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/249",
+  "seq": 249,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "消防搶救上之必要設備",
+  "name": "連結送水管出水口箱（雙口型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_249.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/250",
+  "seq": 250,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "消防搶救上之必要設備",
+  "name": "消防水帶箱（含連結送水管出水口）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_250.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/251",
+  "seq": 251,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "消防搶救上之必要設備",
+  "name": "消防水帶箱",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_251.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/252",
+  "seq": 252,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "消防搶救上之必要設備",
+  "name": "連結送水管出水口",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_252.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/253",
+  "seq": 253,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "消防搶救上之必要設備",
+  "name": "採水口",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_253.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/254",
+  "seq": 254,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "消防搶救上之必要設備",
+  "name": "採水幫浦",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_254.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/255",
+  "seq": 255,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "消防搶救上之必要設備",
+  "name": "採水輔助幫浦",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_255.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/256",
+  "seq": 256,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "消防搶救上之必要設備",
+  "name": "緊急電源插座",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_256.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/257",
+  "seq": 257,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "消防搶救上之必要設備",
+  "name": "防火鐵捲門控制控制切換器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_257.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/258",
+  "seq": 258,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "消防搶救上之必要設備",
+  "name": "防火門扣",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_258.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/259",
+  "seq": 259,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "消防搶救上之必要設備",
+  "name": "蜂鳴器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_259.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/260",
+  "seq": 260,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "消防搶救上之必要設備",
+  "name": "防火鐵捲門連動控制盤",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_260.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/261",
+  "seq": 261,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "消防搶救上之必要設備",
+  "name": "幫浦啟動開關",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_261.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/262",
+  "seq": 262,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "消防搶救上之必要設備",
+  "name": "底閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_262.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/263",
+  "seq": 263,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "消防搶救上之必要設備",
+  "name": "止水閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_263.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/264",
+  "seq": 264,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "消防搶救上之必要設備",
+  "name": "逆止閥",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_264.png",
+   "FL019489_A3_264_2.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/265",
+  "seq": 265,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "消防搶救上之必要設備",
+  "name": "防震軟管",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_265.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/266",
+  "seq": 266,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "排煙設備",
+  "name": "排煙口（天花板型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_266.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/267",
+  "seq": 267,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "排煙設備",
+  "name": "排煙口（側壁型）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_267.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/268",
+  "seq": 268,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "排煙設備",
+  "name": "進風口",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_268.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/269",
+  "seq": 269,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "排煙設備",
+  "name": "防火閘門（排煙閘門）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_269.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/270",
+  "seq": 270,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "排煙設備",
+  "name": "防火防火閘門（排煙閘門）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_270.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/271",
+  "seq": 271,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "排煙設備",
+  "name": "手動開關裝置",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_271.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/272",
+  "seq": 272,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "排煙設備",
+  "name": "排煙機（平面圖用）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_272.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/273",
+  "seq": 273,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "排煙設備",
+  "name": "排煙機控制盤",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_273.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/274",
+  "seq": 274,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "排煙設備",
+  "name": "排煙機（昇位圖用）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_274.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/275",
+  "seq": 275,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "排煙設備",
+  "name": "活動式防煙壁控制切換器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_275.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/276",
+  "seq": 276,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "排煙設備",
+  "name": "防煙壁",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_276.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/277",
+  "seq": 277,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "無線電通信輔助設備",
+  "name": "屋外型端子箱",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_277.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/278",
+  "seq": 278,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "無線電通信輔助設備",
+  "name": "屋內型端子箱",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_278.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/279",
+  "seq": 279,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "無線電通信輔助設備",
+  "name": "4混合器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_279.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/280",
+  "seq": 280,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "無線電通信輔助設備",
+  "name": "3分配器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_280.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/281",
+  "seq": 281,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "無線電通信輔助設備",
+  "name": "2分配器",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_281.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/282",
+  "seq": 282,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "無線電通信輔助設備",
+  "name": "2分配器（不等分配）",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_282.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/283",
+  "seq": 283,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "無線電通信輔助設備",
+  "name": "天線",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_283.png"
+  ],
+  "note_images": []
+ },
+ {
+  "node_id": "FL019489/A3/284",
+  "seq": 284,
+  "attachment": "附件三：消防圖說圖示範例",
+  "category": "無線電通信輔助設備",
+  "name": "洩波同軸電纜",
+  "note": "",
+  "symbols": [
+   "FL019489_A3_284.png"
+  ],
+  "note_images": []
+ }
+]

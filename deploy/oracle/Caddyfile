@@ -1,0 +1,15 @@
+# SITE_ADDRESS 在 .env 設定：
+#   測試：<主機IP>.sslip.io（Caddy 會自動申請 HTTPS 憑證）
+#   正式：你的網域，例如 fire.example.com（先在 DNS 設 A 記錄指向主機 IP）
+#   未設定：:80（只有 HTTP，LINE webhook 不能用）
+{$SITE_ADDRESS} {
+	encode zstd gzip
+	handle /healthz {
+		respond "litian ok" 200
+	}
+	# 第 0 期程式完成後，改成：reverse_proxy litian-api:8000
+	handle {
+		header Content-Type "text/plain; charset=utf-8"
+		respond "消防圖審系統：建置中" 200
+	}
+}
