@@ -16,6 +16,7 @@ import re
 import time
 from collections import deque
 from contextlib import asynccontextmanager
+from functools import lru_cache
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import unquote
@@ -31,6 +32,7 @@ from psycopg_pool import ConnectionPool
 from . import ask as A
 from .lawdb import search as S
 from .lawdb import tables as T
+from .lawdb import vectors as V
 
 log = logging.getLogger("litian.ask")
 if not log.handlers:   # uvicorn 不會替自訂 logger 設輸出；沒有這段，INFO 等級的用量紀錄會被丟掉
@@ -144,7 +146,32 @@ def index():
     return HTMLResponse(WEB_INDEX.read_text(encoding="utf-8"), headers={"Cache-Control": "no-cache"})
 
 
-def _retrieve(q: str, limit: int) -> list[dict]:
+_openai_sync: openai.OpenAI | None = None
+
+
+@lru_cache(maxsize=1024)
+def _embed_query(q: str) -> tuple[float, ...]:
+    global _openai_sync
+    if _openai_sync is None:
+        _openai_sync = openai.OpenAI(timeout=8, max_retries=1)   # 讀 OPENAI_API_KEY
+    r = _openai_sync.embeddings.create(model=V.MODEL, input=[q], dimensions=V.DIM)
+    return tuple(r.data[0].embedding)
+
+
+def _vector_route(q: str, pcode: str | None) -> list[str]:
+    """向量檢索路線；沒有金鑰、索引還沒建或 OpenAI 連不上時回空清單，不影響其他路線。"""
+    if not os.environ.get("OPENAI_API_KEY", "").strip():
+        return []
+    try:
+        vec = list(_embed_query(q))
+        with pool.connection() as c:
+            return V.search(c, vec, pcode=pcode, allow_legend=bool(S.LEGEND_INTENT.search(q)))
+    except Exception as e:
+        log.warning("vector route failed: %s", type(e).__name__)
+        return []
+
+
+def _retrieve(q: str, limit: int, vector_weight: float | None = None) -> list[dict]:
     exists = lambda nid: _one("SELECT 1 AS x FROM law_node WHERE node_id = %s", nid) is not None
     occ_rows = _all("SELECT code, node_id, text FROM occupancy_code")
     occ = {r["code"]: r["node_id"] for r in occ_rows}
@@ -155,7 +182,12 @@ def _retrieve(q: str, limit: int) -> list[dict]:
               "keyword_last": S.keyword(q, base, key, law, strategy="last"),
               "occupancy": S.occupancy_route(q, S.place_terms(occ_rows), list(occ), base, key),
               "legend": S.legend_route(q, base, key)}
-    hits = S.fuse(routes, pinned)[:limit]
+    weights = None
+    if vector_weight != 0:
+        routes["vector"] = _vector_route(q, law)
+    if vector_weight is not None:
+        weights = {**S.ROUTE_WEIGHT, "vector": vector_weight}
+    hits = S.fuse(routes, pinned, weights)[:limit]
     laws = _law_names()
     results = []
     for h in hits:
@@ -166,9 +198,12 @@ def _retrieve(q: str, limit: int) -> list[dict]:
 
 
 @app.get("/api/law/search")
-def law_search(q: str = Query(..., min_length=1, max_length=200), limit: int = Query(5, ge=1, le=20)):
-    return {"query": q, "normalized": S.normalize_query(q), "results": _retrieve(q, limit),
-            "note": "向量檢索尚未啟用（待 VOYAGE_API_KEY）"}
+def law_search(q: str = Query(..., min_length=1, max_length=200), limit: int = Query(5, ge=1, le=20),
+               vw: float | None = Query(None, ge=0, le=5, include_in_schema=False)):
+    """vw：評測用，暫時改向量路線權重（0＝不走向量路線）。"""
+    vec = "已啟用（OpenAI text-embedding-3-large）" if os.environ.get("OPENAI_API_KEY", "").strip() else "未啟用（沒有 OPENAI_API_KEY）"
+    return {"query": q, "normalized": S.normalize_query(q), "results": _retrieve(q, limit, vw),
+            "note": "向量檢索" + vec}
 
 
 @app.get("/api/law/legend")

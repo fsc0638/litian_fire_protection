@@ -15,11 +15,14 @@ import httpx
 import yaml
 
 
-def run(base: str, questions: list[dict], k: int = 3) -> list[dict]:
+def run(base: str, questions: list[dict], k: int = 3, vw: float | None = None) -> list[dict]:
     rows = []
     with httpx.Client(base_url=base, timeout=30) as c:
         for qd in questions:
-            r = c.get("/api/law/search", params={"q": qd["q"], "limit": 5})
+            params = {"q": qd["q"], "limit": 5}
+            if vw is not None:
+                params["vw"] = vw
+            r = c.get("/api/law/search", params=params)
             r.raise_for_status()
             got = [x["node_id"] for x in r.json()["results"]]
             rank = next((i + 1 for i, nid in enumerate(got) if nid in qd["expect"]), None)
@@ -52,9 +55,10 @@ def main() -> None:
     ap.add_argument("--base", default="http://127.0.0.1:18100")
     ap.add_argument("--questions", type=Path, default=Path("eval/law_questions.yaml"))
     ap.add_argument("--out", type=Path, default=Path("eval/report.md"))
+    ap.add_argument("--vw", type=float, default=None, help="向量路線權重（0＝不走向量；預設用伺服器設定）")
     a = ap.parse_args()
     qs = yaml.safe_load(a.questions.read_text(encoding="utf-8"))
-    md = report(run(a.base, qs))
+    md = report(run(a.base, qs, vw=a.vw))
     a.out.write_text(md, encoding="utf-8")
     print(md)
 

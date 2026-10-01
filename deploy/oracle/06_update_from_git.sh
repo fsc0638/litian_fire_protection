@@ -27,5 +27,7 @@ cd "$RUN"
 nice -n 19 sudo docker compose build api >/tmp/litian-build.log 2>&1 || { tail -20 /tmp/litian-build.log; exit 1; }
 sudo docker compose up -d api
 for i in $(seq 1 20); do curl -sf http://127.0.0.1:8100/api/health >/dev/null && break; sleep 2; done
-sudo docker compose exec -T api python -m litian.lawdb.store
+sudo docker compose exec -T api python -m litian.lawdb.store </dev/null
+# 向量索引：只補算有變動的節點（沒有 OPENAI_API_KEY 時自動略過）
+sudo docker compose exec -T api python -m litian.lawdb.vectors </dev/null
 say "健康檢查：$(curl -s http://127.0.0.1:8100/api/health)"

@@ -20,7 +20,7 @@ MEILI_INDEX = "law_nodes"
 RRF_K = 60
 # keyword 與 keyword_last 是同一份查詢的兩種比對方式（見 keyword() 說明），兩路互補
 # 兩種比對方式是同一份查詢的同一種訊號，各 0.5、合計 1，維持與場所展開路（2）的相對份量
-ROUTE_WEIGHT = {"keyword": 0.5, "keyword_last": 0.5, "occupancy": 2.0, "legend": 2.0}
+ROUTE_WEIGHT = {"keyword": 0.5, "keyword_last": 0.5, "occupancy": 2.0, "legend": 2.0, "vector": 0.5}
 # 圖例（附件三消防圖說圖示範例）只在問到圖例時才進檢索：圖例名稱都是設備名，混進一般檢索會擠掉法條
 LEGEND_INTENT = re.compile(r"圖例|圖示|符號|標示記號|記號|怎麼畫|畫法")
 
@@ -251,13 +251,13 @@ def occupancy_of(text: str, refs: list[str], occ_by_node: dict[str, str], occ_co
 
 # ---------- 合併 ----------
 
-def fuse(routes: dict[str, list[str]], pinned: list[str]) -> list[Hit]:
+def fuse(routes: dict[str, list[str]], pinned: list[str], weights: dict[str, float] | None = None) -> list[Hit]:
     """RRF 合併；條號／代碼直取的結果固定排最前面。場所展開路權重較高（已同時對上場所與主題兩個條件）。"""
     scores: dict[str, Hit] = {}
     for name, ids in routes.items():
         for rank, nid in enumerate(ids):
             h = scores.setdefault(nid, Hit(nid, 0.0, []))
-            h.score += ROUTE_WEIGHT.get(name, 1.0) / (RRF_K + rank + 1)
+            h.score += (weights or ROUTE_WEIGHT).get(name, 1.0) / (RRF_K + rank + 1)
             h.routes.append(name)
     for i, nid in enumerate(pinned):
         h = scores.setdefault(nid, Hit(nid, 0.0, []))

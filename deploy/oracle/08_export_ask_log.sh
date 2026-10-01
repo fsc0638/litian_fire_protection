@@ -12,7 +12,7 @@ mkdir -p "$OUT_DIR"
 OUT="$OUT_DIR/ask_log_$(date +%Y%m%d-%H%M%S).csv"
 SQL="COPY (
   SELECT to_char(at AT TIME ZONE 'Asia/Taipei', 'YYYY-MM-DD HH24:MI:SS') AS 時間,
-         client AS 來源代號, mode AS 模式, question AS 問題, answer AS AI回答,
+         client AS 來源代號, mode AS 模式, question AS 問題, answer AS \"AI回答\",
          array_to_string(cited, ',') AS 引用, array_to_string(invalid_cites, ',') AS 無效引用,
          array_to_string(unverified, ',') AS 未經檢索條號, stop_reason AS 結束原因, error AS 錯誤,
          input_tokens AS 輸入token, output_tokens AS 輸出token, duration_ms AS 耗時毫秒,
