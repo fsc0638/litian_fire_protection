@@ -109,6 +109,9 @@ table.law th, table.law td { border: 1px solid var(--border); padding: 4px 6px; 
 table.law th { background: var(--surface); }
 table.law td:first-child, table.law th:first-child { min-width: 15em; }
 table.law td:not(:first-child) { min-width: 6em; }
+.part-title { font-weight: 600; margin: 12px 0 6px; }
+.formula { font-family: ui-monospace, Consolas, monospace; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; margin: 6px 0; overflow-x: auto; white-space: pre; }
+.vars { margin: 4px 0 8px; padding-left: 1.2em; font-size: .88rem; }
 footer { color: var(--muted); font-size: .8rem; border-top: 1px solid var(--border); padding: 16px 0 28px; }
 footer p { margin: 0 0 .4em; }
 .hidden { display: none !important; }
@@ -385,19 +388,35 @@ footer p { margin: 0 0 .4em; }
   }
 
   function tableHtml(t) {
-    const cols = t.columns || [];
+    // 新格式：parts（多張表、公式、配線圖）；舊格式（第 18、157 條）整份就是一張表
+    const multi = Array.isArray(t.parts);
+    const parts = multi ? t.parts : [t];
     let h = "";
     if (t.warning) h += '<p class="note warn" style="margin-top:0">' + esc(t.warning) + "</p>";
-    h += '<table class="law"><thead><tr><th>' + esc(t.title || "") + "</th>" + cols.map((c) => "<th>" + esc(c) + "</th>").join("") + "</tr></thead><tbody>";
-    for (const r of t.rows || []) {
-      h += "<tr><td>" + esc(r.place) + "</td>" + cols.map((c) => {
-        if (r.marks) return "<td>" + (r.marks.includes(c) ? "○" : "") + "</td>";
-        const cell = (r.cells || {})[c];
-        return "<td>" + esc(cell && cell.devices && cell.devices.length ? cell.devices.join("、") : "") + "</td>";
-      }).join("") + "</tr>";
+    for (const p of parts) {
+      if (multi && p.title) h += '<p class="part-title">' + esc(p.title) + "</p>";
+      if (p.kind === "formula") {
+        h += '<p class="formula">' + esc(p.formula) + "</p>";
+        const vars = Object.entries(p.variables || {});
+        if (vars.length) h += '<ul class="vars">' + vars.map(([k, v]) => "<li><b>" + esc(k) + "</b>：" + esc(v) + "</li>").join("") + "</ul>";
+      } else {
+        const cols = p.columns || [];
+        h += '<div class="scroll"><table class="law"><thead><tr><th>' + esc(multi ? "項目" : (t.title || "")) + "</th>" +
+          cols.map((c) => "<th>" + esc(c) + "</th>").join("") + "</tr></thead><tbody>";
+        for (const r of p.rows || []) {
+          h += "<tr><td>" + esc(r.place) + "</td>" + cols.map((c) => {
+            if (r.marks) return "<td>" + (r.marks.includes(c) ? "○" : "") + "</td>";
+            const cell = (r.cells || {})[c];
+            const txt = !cell ? "" : (Array.isArray(cell.devices) ? cell.devices.join("、") : (cell.raw ?? ""));
+            return "<td>" + esc(txt) + "</td>";
+          }).join("") + "</tr>";
+        }
+        h += "</tbody></table></div>";
+      }
+      if (multi && p.notes && p.notes.length) h += p.notes.map((x) => '<p class="meta">' + esc(x) + "</p>").join("");
     }
-    h += "</tbody></table>";
     if (t.notes && t.notes.length) h += t.notes.map((x) => '<p class="meta">' + esc(x) + "</p>").join("");
+    if (t.uncertain && t.uncertain.length) h += '<p class="note warn">轉錄時不確定、待校對的地方：' + esc(t.uncertain.join("；")) + "</p>";
     return h;
   }
 

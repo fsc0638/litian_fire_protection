@@ -98,31 +98,74 @@ def load_tables(table_dir: Path = TABLE_DIR) -> list[dict]:
     return tables
 
 
+PART_KINDS = ("table", "diagram", "formula")
+
+
+def parts_of(t: dict) -> list[dict]:
+    """一條的表格部分。新格式用 parts（可含多張表、公式、配線圖）；舊格式（第 18、157 條）整份就是一張表。"""
+    return t["parts"] if "parts" in t else [t]
+
+
+def _validate_part(nid: str, p: dict, label: str) -> None:
+    kind = p.get("kind", "table")
+    if kind not in PART_KINDS:
+        raise ValueError(f"{nid} {label} kind 只能是 {'/'.join(PART_KINDS)}")
+    if kind == "formula":
+        if not p.get("formula"):
+            raise ValueError(f"{nid} {label} 公式部分缺 formula")
+        return
+    for k in ("columns", "rows"):
+        if k not in p:
+            raise ValueError(f"{nid} {label} 缺欄位 {k}")
+    cols = set(p["columns"])
+    for r in p["rows"]:
+        for c in r.get("marks", []):
+            if c not in cols:
+                raise ValueError(f"{nid} {label}第 {r['no']} 列標記了不存在的欄：{c}")
+        for c in r.get("cells", {}):
+            if c not in cols:
+                raise ValueError(f"{nid} {label}第 {r['no']} 列有不存在的欄：{c}")
+
+
 def validate(t: dict) -> None:
-    for k in ("node_id", "citation", "source", "law_version", "status", "columns", "rows"):
+    for k in ("node_id", "citation", "source", "law_version", "status"):
         if k not in t:
             raise ValueError(f"{t.get('node_id')} 缺欄位 {k}")
+    if "parts" not in t and not ("columns" in t and "rows" in t):
+        raise ValueError(f"{t['node_id']} 缺欄位 columns／rows（或改用 parts）")
     if t["status"] not in ("draft", "verified"):
         raise ValueError(f"{t['node_id']} status 只能是 draft 或 verified")
     if t["status"] == "verified" and not (t.get("verified_by") and t.get("verified_at")):
         raise ValueError(f"{t['node_id']} 標 verified 必須填 verified_by 與 verified_at")
-    cols = set(t["columns"])
-    for r in t["rows"]:
-        for c in r.get("marks", []):
-            if c not in cols:
-                raise ValueError(f"{t['node_id']} 第 {r['no']} 列標記了不存在的欄：{c}")
-        for c in r.get("cells", {}):
-            if c not in cols:
-                raise ValueError(f"{t['node_id']} 第 {r['no']} 列有不存在的欄：{c}")
+    multi = "parts" in t
+    for i, p in enumerate(parts_of(t), 1):
+        _validate_part(t["node_id"], p, f"第 {i} 部分" if multi else "")
+
+
+def cell_text(v: dict) -> str:
+    """儲存格文字：第 157 條有拆好的器具清單（devices）就用清單，其他用原文（raw）。"""
+    if "devices" in v:
+        return "、".join(v["devices"]) or "（不適用）"
+    return str(v.get("raw", ""))
 
 
 def rows_text(t: dict) -> str:
-    """供檢索用的表格文字（每列一行）。"""
-    lines = []
-    for r in t["rows"]:
-        if "marks" in r:
-            lines.append(f"{r['place']} 可選設：{'、'.join(r['marks'])}")
+    """供檢索與 AI 問答用的表格文字（每列一行；公式寫出變數定義）。"""
+    multi = "parts" in t
+    lines: list[str] = []
+    for p in parts_of(t):
+        if multi and p.get("title"):
+            lines.append(f"【{p['title']}】")
+        if p.get("kind") == "formula":
+            lines.append(f"公式：{p['formula']}")
+            lines += [f"{k}：{v}" for k, v in (p.get("variables") or {}).items()]
         else:
-            parts = [f"{c}：{'、'.join(v['devices']) or '（不適用）'}" for c, v in r["cells"].items()]
-            lines.append(f"{r['place']} " + "；".join(parts))
+            for r in p["rows"]:
+                if "marks" in r:
+                    lines.append(f"{r['place']} 可選設：{'、'.join(r['marks'])}")
+                else:
+                    cells = [f"{c}：{cell_text(v)}" for c, v in r.get("cells", {}).items()]
+                    lines.append(f"{r['place']} " + "；".join(cells))
+        if multi:
+            lines += p.get("notes", [])
     return "\n".join(lines + t.get("notes", []))

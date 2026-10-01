@@ -74,3 +74,54 @@ def test_validate_rejects_unknown_column(tbl):
 def test_rows_text_for_search(tbl):
     s = T.rows_text(tbl["D0120029/18"])
     assert "室內停車空間" in s and "可選設：水霧、泡沫、二氧化碳或惰性氣體、鹵化烴、乾粉" in s
+
+
+# ---- 多部分格式（parts）：表格＋公式＋配線圖，2026-10-01 新增 ----
+
+MULTI = {
+    "node_id": "D0120029/83-2", "citation": "設置標準第83條之2附表", "law_version": "20240424",
+    "source": {"kind": "pdf"}, "status": "draft",
+    "parts": [
+        {"title": "所需滅火藥劑量", "kind": "formula", "formula": "W = V / S × ln(100 / (100 − C))",
+         "variables": {"W": "防護空間所需藥劑量（kg）", "C": "設計濃度百分比"}},
+        {"title": "比容積公式", "kind": "table", "columns": ["比容積公式"],
+         "rows": [{"no": 1, "place": "IG-100", "cells": {"比容積公式": {"raw": "s=0.7997+0.00293t"}}}],
+         "notes": ["本表為示意"]},
+        {"title": "配線", "kind": "diagram", "columns": ["耐燃保護", "耐熱保護"],
+         "rows": [{"no": 1, "place": "7.緊急廣播設備", "cells": {"耐燃保護": {"raw": "緊急電源—擴音機"}}}]},
+    ],
+    "notes": ["整條備註"],
+}
+
+
+def test_validate_multi_part_ok():
+    T.validate(MULTI)
+
+
+def test_validate_multi_part_errors():
+    import copy
+    bad = copy.deepcopy(MULTI)
+    bad["parts"][0]["formula"] = ""
+    with pytest.raises(ValueError, match="缺 formula"):
+        T.validate(bad)
+    bad = copy.deepcopy(MULTI)
+    bad["parts"][1]["rows"][0]["cells"]["不存在"] = {"raw": "x"}
+    with pytest.raises(ValueError, match="第 2 部分第 1 列有不存在的欄"):
+        T.validate(bad)
+    bad = copy.deepcopy(MULTI)
+    bad["parts"][2]["kind"] = "picture"
+    with pytest.raises(ValueError, match="kind 只能是"):
+        T.validate(bad)
+    bad = copy.deepcopy(MULTI)
+    del bad["parts"]
+    with pytest.raises(ValueError, match="columns／rows"):
+        T.validate(bad)
+
+
+def test_rows_text_multi_part():
+    s = T.rows_text(MULTI)
+    assert s.splitlines() == [
+        "【所需滅火藥劑量】", "公式：W = V / S × ln(100 / (100 − C))", "W：防護空間所需藥劑量（kg）", "C：設計濃度百分比",
+        "【比容積公式】", "IG-100 比容積公式：s=0.7997+0.00293t", "本表為示意",
+        "【配線】", "7.緊急廣播設備 耐燃保護：緊急電源—擴音機",
+        "整條備註"]
