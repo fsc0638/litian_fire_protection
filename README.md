@@ -107,6 +107,12 @@ bash /opt/litian/repo/deploy/oracle/06_update_from_git.sh
 - `worker` 從 PostgreSQL 佇列取檔，在子行程（限時、限記憶體）用 ezdxf 抽出圖面中介資料：依圖框與「圖號」屬性把模型空間切成各張圖，收文字、圖塊（含屬性）、線段、封閉多邊形（`src/litian/drawing/ir.py`）。
 - 命令列（主機上）：`sudo docker compose exec worker python -m litian.drawing.cli ingest --name 名稱 /data/samples/*.dwg`，再用 `status 案件ID`、`sheets 案件ID` 看結果。
 
+## 審核工作台（第 1 期 M1b）
+
+- 網址 `/workbench`：登入、建立案件、上傳 DWG／DXF（拖放、單檔上限 200 MB）、看處理狀態、各張圖的圖號圖名與抽出的文字。
+- 帳號只能在主機上建立，密碼由本人輸入：`sudo docker compose exec api python -m litian.auth create-user 帳號 [--role admin]`（另有 `set-password`、`disable`、`list`）。
+- 密碼以 scrypt 雜湊保存；登入狀態放在 HttpOnly、Secure、SameSite=Lax 的 Cookie，資料庫只存權杖雜湊，12 小時過期；同一來源一小時內登入失敗 10 次會暫停。
+
 ## 資料來源與授權
 
 - 法律、命令條文：法務部全國法規資料庫 Open API（https://law.moj.gov.tw/api），依「政府資料開放授權條款－第 1 版」使用，須標示出處。

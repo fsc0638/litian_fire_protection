@@ -65,3 +65,4 @@ curl https://<對外網址>/healthz    # 應回 "litian ok"
 | `06_update_from_git.sh` | 從 GitHub 更新並重新部署 |
 | `07_add_developer.sh` | 新增協作開發者帳號：只能金鑰登入、無 sudo、不在 docker 群組、限 CPU 與記憶體；`--disable` 停用 |
 | `08_export_ask_log.sh` | 匯出法規問答的提問紀錄成 CSV（Excel 可開） |
+| `09_db_tests.sh` | 在主機上跑全部測試（含資料庫整合測試，用獨立的 litian_test 資料庫） |

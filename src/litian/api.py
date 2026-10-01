@@ -1,4 +1,4 @@
-"""消防圖審系統 API（第 0 期：法規庫與法規問答網頁）。
+"""消防圖審系統 API（第 0 期：法規庫與法規問答網頁；第 1 期：審核工作台）。
 
 環境變數：DATABASE_URL、MEILI_URL、MEILI_MASTER_KEY
   法規問答（選填）：OPENAI_API_KEY（有才啟用 AI 回答，模型 gpt-5.6-sol）、ASK_ACCESS_CODE（選填，設定後才要求存取碼）、ASK_DAILY_LIMIT（每日 AI 問答上限，預設 500；台北時間每天 23:59 重新計算，計數存在資料庫）
@@ -22,7 +22,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 import openai
-from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi import Cookie, Depends, FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
@@ -30,6 +30,9 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
 from . import ask as A
+from . import auth as AU
+from .drawing import store as DS
+from .drawing.cli import safe_name
 from .lawdb import search as S
 from .lawdb import tables as T
 from .lawdb import vectors as V
@@ -45,6 +48,7 @@ pool: ConnectionPool | None = None
 LEGEND_DIR = Path("data/lawdb/legend")
 LEGEND_FILE_RE = re.compile(r"[A-Za-z0-9_]+\.png")   # 只允許建置產生的檔名，防路徑穿越
 WEB_INDEX = Path(__file__).parent / "web" / "index.html"
+WEB_WORKBENCH = Path(__file__).parent / "web" / "workbench.html"
 TW = timezone(timedelta(hours=8))
 ASK_SOURCES = 8          # 每題送給 AI 的條文數
 ARTICLE_CONTEXT_MIN = 3  # 同一條被檢索到幾個款目以上，就把整條原文也交給 AI（最多補 2 條）
@@ -62,6 +66,8 @@ async def lifespan(_: FastAPI):
     with pool.connection() as c:
         c.execute(USAGE_SCHEMA)
         c.execute(ASK_LOG_SCHEMA)
+        AU.ensure_schema(c)
+        DS.ensure_schema(c)
     yield
     pool.close()
 
@@ -534,3 +540,147 @@ async def ask(body: AskBody, request: Request, x_access_code: str = Header("")):
 
     return StreamingResponse(events(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+# ---------------- 審核工作台（第 1 期 M1b）：登入、案件、上傳、圖紙 ----------------
+
+CASES_DIR = Path(os.environ.get("CASES_DIR", "/data/cases"))
+UPLOAD_MAX = 200 * 1024 * 1024        # 單檔上限
+LOGIN_FAIL_MAX = 10                   # 同一來源一小時內登入失敗上限
+_login_fails: dict[str, deque] = {}
+
+
+def _login_rate(ip: str, failed: bool = False) -> None:
+    now = time.monotonic()
+    f = _login_fails.setdefault(ip, deque())
+    while f and now - f[0] > 3600:
+        f.popleft()
+    if failed:
+        f.append(now)
+    elif len(f) >= LOGIN_FAIL_MAX:
+        raise HTTPException(429, "登入失敗次數太多，請一小時後再試。")
+
+
+def current_user(fr_session: str | None = Cookie(None)) -> dict:
+    with pool.connection() as c:
+        u = AU.session_user(c, fr_session)
+    if not u:
+        raise HTTPException(401, "請先登入")
+    return u
+
+
+class LoginBody(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=256)
+
+
+@app.post("/api/auth/login")
+def auth_login(body: LoginBody, request: Request, response: Response):
+    ip = _client_ip(request)
+    _login_rate(ip)
+    with pool.connection() as c:
+        r = AU.login(c, body.username.strip(), body.password)
+    if not r:
+        _login_rate(ip, failed=True)
+        raise HTTPException(401, "帳號或密碼不正確")
+    token, user = r
+    response.set_cookie(AU.COOKIE, token, max_age=AU.SESSION_HOURS * 3600, httponly=True, secure=True,
+                        samesite="lax", path="/")
+    return {"user": user}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(response: Response, fr_session: str | None = Cookie(None)):
+    with pool.connection() as c:
+        AU.logout(c, fr_session)
+    response.delete_cookie(AU.COOKIE, path="/")
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+def auth_me(user: dict = Depends(current_user)):
+    return user
+
+
+@app.get("/workbench", include_in_schema=False)
+def workbench():
+    return HTMLResponse(WEB_WORKBENCH.read_text(encoding="utf-8"), headers={"Cache-Control": "no-cache"})
+
+
+class CaseBody(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+@app.get("/api/cases")
+def cases_list(user: dict = Depends(current_user)):
+    return _all("SELECT c.id, c.name, c.created_by, c.created_at, count(f.id) AS files, "
+                "count(f.id) FILTER (WHERE f.status = 'done') AS done, "
+                "count(f.id) FILTER (WHERE f.status IN ('queued', 'processing')) AS pending, "
+                "count(f.id) FILTER (WHERE f.status = 'failed') AS failed "
+                "FROM review_case c LEFT JOIN case_file f ON f.case_id = c.id "
+                "GROUP BY c.id ORDER BY c.id DESC LIMIT 200")
+
+
+@app.post("/api/cases")
+def cases_create(body: CaseBody, user: dict = Depends(current_user)):
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(422, "請輸入案件名稱")
+    with pool.connection() as c:
+        return {"id": DS.create_case(c, name, user["username"])}
+
+
+def _case_or_404(case_id: int) -> dict:
+    row = _one("SELECT id, name, created_by, created_at FROM review_case WHERE id = %s", case_id)
+    if not row:
+        raise HTTPException(404, "沒有這個案件")
+    return row
+
+
+@app.post("/api/cases/{case_id}/files")
+async def cases_upload(case_id: int, files: list[UploadFile] = File(...), user: dict = Depends(current_user)):
+    _case_or_404(case_id)
+    d = CASES_DIR / str(case_id)
+    d.mkdir(parents=True, exist_ok=True)
+    start = _one("SELECT count(*) AS n FROM case_file WHERE case_id = %s", case_id)["n"]
+    out = []
+    for i, f in enumerate(files, start + 1):
+        name = (f.filename or "file")[:200]
+        dst = d / f"{i:03d}_{safe_name(name)}"
+        h, size = hashlib.sha256(), 0
+        with open(dst, "wb") as fh:
+            while chunk := await f.read(1 << 20):
+                size += len(chunk)
+                if size > UPLOAD_MAX:
+                    fh.close()
+                    dst.unlink(missing_ok=True)
+                    raise HTTPException(413, f"「{name}」超過單檔上限 {UPLOAD_MAX // (1024 * 1024)} MB")
+                h.update(chunk)
+                fh.write(chunk)
+        with pool.connection() as c:
+            fid = DS.add_file(c, case_id, name, size, h.hexdigest(), str(dst))
+        out.append({"id": fid, "name": name, "size": size})
+    return {"files": out}
+
+
+@app.get("/api/cases/{case_id}")
+def cases_detail(case_id: int, user: dict = Depends(current_user)):
+    case = _case_or_404(case_id)
+    with pool.connection() as c:
+        files = DS.case_status(c, case_id)
+    sheets = _all("SELECT s.id, s.file_id, s.idx, s.number, s.title, s.scale, s.unit FROM case_sheet s "
+                  "JOIN case_file f ON f.id = s.file_id WHERE f.case_id = %s ORDER BY s.number NULLS LAST, s.id", case_id)
+    return {"case": case, "files": files, "sheets": sheets}
+
+
+@app.get("/api/cases/{case_id}/sheets/{sheet_id}/texts")
+def cases_sheet_texts(case_id: int, sheet_id: int, user: dict = Depends(current_user)):
+    s = _one("SELECT s.file_id, s.idx, s.number, s.title FROM case_sheet s JOIN case_file f ON f.id = s.file_id "
+             "WHERE s.id = %s AND f.case_id = %s", sheet_id, case_id)
+    if not s:
+        raise HTTPException(404, "沒有這張圖")
+    rows = _all("SELECT t->>'t' AS t, (t->>'x')::float AS x, (t->>'y')::float AS y, t->>'layer' AS layer "
+                "FROM file_ir i, jsonb_array_elements(i.ir->'texts') t "
+                "WHERE i.file_id = %s AND t->>'f' IS NOT NULL AND (t->>'f')::int = %s", s["file_id"], s["idx"])
+    rows.sort(key=lambda r: (-r["y"], r["x"]))
+    return {"sheet": s, "texts": rows}

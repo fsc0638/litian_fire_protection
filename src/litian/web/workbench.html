@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>審核工作台</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%23c2410c%22/%3E%3Cpath d=%22M9 8h14v16H9z%22 fill=%22none%22 stroke=%22%23fff%22 stroke-width=%222.5%22/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #f7f6f3; --surface: #ffffff; --surface-2: #f1efea; --text: #1c1b19; --muted: #6b675f;
+  --border: #e2ded5; --accent: #c2410c; --accent-soft: #fdecdf; --accent-text: #9a3412;
+  --ok: #15803d; --ok-soft: #e7f6ec; --warn: #a16207; --warn-soft: #fff7e0; --err: #b91c1c; --err-soft: #fdeceb;
+  --focus: #2563eb; --shadow: 0 1px 2px rgba(0,0,0,.05), 0 2px 8px rgba(0,0,0,.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #151412; --surface: #1e1d1a; --surface-2: #272521; --text: #ece9e2; --muted: #a39e93;
+    --border: #36332d; --accent: #f97316; --accent-soft: #3a2416; --accent-text: #fdba74;
+    --ok: #4ade80; --ok-soft: #12301d; --warn: #facc15; --warn-soft: #2f2710; --err: #fca5a5; --err-soft: #3a1716;
+    --focus: #60a5fa; --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #151412; --surface: #1e1d1a; --surface-2: #272521; --text: #ece9e2; --muted: #a39e93;
+  --border: #36332d; --accent: #f97316; --accent-soft: #3a2416; --accent-text: #fdba74;
+  --ok: #4ade80; --ok-soft: #12301d; --warn: #facc15; --warn-soft: #2f2710; --err: #fca5a5; --err-soft: #3a1716;
+  --focus: #60a5fa; --shadow: none;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.6 system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", sans-serif; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+a { color: var(--accent-text); }
+.wrap { max-width: 1100px; margin: 0 auto; padding: 0 16px; }
+header.top { background: var(--surface); border-bottom: 1px solid var(--border); }
+header.top .wrap { display: flex; align-items: center; gap: 12px; min-height: 56px; }
+header h1 { font-size: 1.1rem; margin: 0; }
+.grow { flex: 1 1 auto; }
+.muted { color: var(--muted); }
+.small { font-size: .85rem; }
+main { padding: 20px 0 48px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 16px; }
+.stack > * + * { margin-top: 14px; }
+h2 { font-size: 1rem; margin: 0 0 10px; }
+input[type=text], input[type=password], input[type=search] { font: inherit; padding: 8px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text); width: 100%; }
+button { font: inherit; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text);
+  padding: 7px 14px; cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+button:disabled { opacity: .55; cursor: progress; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.login { max-width: 360px; margin: 40px auto; }
+.login label { display: block; margin: 10px 0 4px; font-weight: 600; }
+.note { border-radius: 8px; padding: 9px 12px; font-size: .9rem; }
+.note.err { background: var(--err-soft); color: var(--err); }
+.note.info { background: var(--surface-2); color: var(--muted); }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: .8rem; }
+tr.click { cursor: pointer; }
+tr.click:hover td, tr.sel td { background: var(--surface-2); }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: .78rem; font-weight: 600; white-space: nowrap; }
+.b-done { background: var(--ok-soft); color: var(--ok); }
+.b-queued, .b-processing { background: var(--warn-soft); color: var(--warn); }
+.b-failed { background: var(--err-soft); color: var(--err); }
+.b-skipped { background: var(--surface-2); color: var(--muted); }
+.drop { border: 2px dashed var(--border); border-radius: 12px; padding: 18px; text-align: center; color: var(--muted); }
+.drop.over { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-text); }
+.cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+.scrollbox { max-height: 520px; overflow: auto; }
+.mono { font-family: ui-monospace, Consolas, monospace; font-size: .8rem; color: var(--muted); }
+.hidden { display: none !important; }
+@media (max-width: 760px) { .cols { grid-template-columns: minmax(0, 1fr); } th.opt, td.opt { display: none; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <h1>消防圖審系統｜審核工作台</h1>
+    <span class="grow"></span>
+    <span id="who" class="muted small"></span>
+    <button id="logout" class="hidden" type="button">登出</button>
+  </div>
+</header>
+
+<main class="wrap">
+  <form id="login" class="card login hidden">
+    <h2>登入</h2>
+    <label for="u">帳號</label>
+    <input id="u" type="text" autocomplete="username" required>
+    <label for="p">密碼</label>
+    <input id="p" type="password" autocomplete="current-password" required>
+    <div class="row" style="margin-top:14px"><button class="primary" type="submit">登入</button></div>
+    <p id="login-msg" class="note err hidden"></p>
+    <p class="muted small">帳號由系統管理者在主機上建立。圖說屬客戶機密，僅限授權人員使用。</p>
+  </form>
+
+  <section id="app" class="stack hidden">
+    <div id="list-view" class="stack">
+      <form id="new-case" class="card row">
+        <input id="case-name" type="text" maxlength="100" placeholder="新案件名稱，例如：某某廠房新建工程" required style="flex:1 1 260px">
+        <button class="primary" type="submit">建立案件</button>
+      </form>
+      <div class="card">
+        <h2>案件</h2>
+        <table>
+          <thead><tr><th>編號</th><th>名稱</th><th class="opt">建立者</th><th>檔案</th><th class="opt">建立時間</th></tr></thead>
+          <tbody id="cases"></tbody>
+        </table>
+        <p id="no-cases" class="muted small hidden">還沒有案件。</p>
+      </div>
+    </div>
+
+    <div id="case-view" class="stack hidden">
+      <div class="row"><button id="back" type="button">← 案件列表</button><h2 id="case-title" style="margin:0"></h2></div>
+      <div class="card stack">
+        <div id="drop" class="drop">
+          把 DWG、DXF 檔拖到這裡，或 <label style="color:var(--accent-text);cursor:pointer;text-decoration:underline">選擇檔案<input id="pick" type="file" multiple accept=".dwg,.dxf,.pdf" class="hidden"></label>
+          <div class="small">單檔上限 200 MB；.dwl、.bak 等暫存檔會自動略過。</div>
+        </div>
+        <p id="upload-msg" class="note info hidden"></p>
+      </div>
+      <div class="card">
+        <h2>檔案處理狀態</h2>
+        <table>
+          <thead><tr><th>檔名</th><th>狀態</th><th>抽取結果</th></tr></thead>
+          <tbody id="files"></tbody>
+        </table>
+      </div>
+      <div class="cols">
+        <div class="card">
+          <h2>圖紙</h2>
+          <div class="scrollbox">
+            <table>
+              <thead><tr><th>圖號</th><th>圖名</th><th class="opt">比例</th><th class="opt">單位</th></tr></thead>
+              <tbody id="sheets"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="card">
+          <h2 id="texts-title">圖面文字</h2>
+          <input id="filter" type="search" placeholder="搜尋文字，例如：面積" class="hidden" style="margin-bottom:8px">
+          <div class="scrollbox"><table><tbody id="texts"></tbody></table></div>
+          <p id="texts-hint" class="muted small">點左邊的圖紙，看抽出的文字。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  const $ = (s) => document.querySelector(s);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const STATUS = { queued: "排隊中", processing: "處理中", done: "完成", failed: "失敗", skipped: "略過" };
+  let currentCase = null, timer = null, sheetTexts = [];
+
+  async function api(path, opts = {}) {
+    const res = await fetch(path, { credentials: "same-origin", ...opts });
+    if (res.status === 401 && !path.endsWith("/login")) { showLogin(); throw new Error("請先登入"); }
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(typeof body.detail === "string" ? body.detail : "操作失敗（" + res.status + "）");
+    return body;
+  }
+
+  function showLogin() { $("#app").classList.add("hidden"); $("#login").classList.remove("hidden"); $("#logout").classList.add("hidden"); $("#who").textContent = ""; }
+  function showApp(user) {
+    $("#login").classList.add("hidden"); $("#app").classList.remove("hidden");
+    $("#who").textContent = user.username + (user.role === "admin" ? "（管理者）" : ""); $("#logout").classList.remove("hidden");
+    route();
+  }
+
+  $("#login").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    $("#login-msg").classList.add("hidden");
+    try {
+      const r = await api("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: $("#u").value.trim(), password: $("#p").value }) });
+      $("#p").value = ""; showApp(r.user);
+    } catch (err) { $("#login-msg").textContent = err.message; $("#login-msg").classList.remove("hidden"); }
+  });
+  $("#logout").addEventListener("click", async () => { try { await api("/api/auth/logout", { method: "POST" }); } catch {} showLogin(); });
+
+  // ---------- 路由：#case=ID ----------
+  window.addEventListener("hashchange", route);
+  function route() {
+    clearInterval(timer);
+    const m = location.hash.match(/case=(\d+)/);
+    if (m) openCase(Number(m[1])); else listCases();
+  }
+
+  async function listCases() {
+    $("#case-view").classList.add("hidden"); $("#list-view").classList.remove("hidden");
+    const rows = await api("/api/cases");
+    $("#no-cases").classList.toggle("hidden", rows.length > 0);
+    $("#cases").innerHTML = rows.map((c) => '<tr class="click" data-id="' + c.id + '"><td>' + c.id + "</td><td>" + esc(c.name) +
+      '</td><td class="opt">' + esc(c.created_by || "") + "</td><td>" + c.done + " / " + c.files +
+      (c.pending ? '　<span class="badge b-processing">處理中 ' + c.pending + "</span>" : "") +
+      (c.failed ? '　<span class="badge b-failed">失敗 ' + c.failed + "</span>" : "") +
+      '</td><td class="opt">' + esc(String(c.created_at).slice(0, 16).replace("T", " ")) + "</td></tr>").join("");
+  }
+  $("#cases").addEventListener("click", (e) => { const tr = e.target.closest("tr[data-id]"); if (tr) location.hash = "case=" + tr.dataset.id; });
+
+  $("#new-case").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const r = await api("/api/cases", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: $("#case-name").value.trim() }) });
+    $("#case-name").value = ""; location.hash = "case=" + r.id;
+  });
+  $("#back").addEventListener("click", () => { location.hash = ""; });
+
+  async function openCase(id) {
+    currentCase = id;
+    $("#list-view").classList.add("hidden"); $("#case-view").classList.remove("hidden");
+    $("#texts").innerHTML = ""; $("#filter").classList.add("hidden"); $("#texts-hint").classList.remove("hidden"); $("#texts-title").textContent = "圖面文字";
+    await refreshCase();
+  }
+
+  async function refreshCase() {
+    const d = await api("/api/cases/" + currentCase);
+    $("#case-title").textContent = "案件 " + d.case.id + "｜" + d.case.name;
+    $("#files").innerHTML = d.files.map((f) => {
+      const s = f.stats || {};
+      const info = f.status === "done" ? "圖 " + s.sheets + "｜文字 " + s.texts + "｜圖塊 " + s.inserts + "｜圖號 " + esc((s.sheet_numbers || []).map((x) => x || "—").join("、"))
+        : esc(f.error || "");
+      return "<tr><td>" + esc(f.name) + '</td><td><span class="badge b-' + f.status + '">' + STATUS[f.status] + "</span></td><td class=\"small\">" + info + "</td></tr>";
+    }).join("") || '<tr><td colspan="3" class="muted">尚未上傳檔案。</td></tr>';
+    $("#sheets").innerHTML = d.sheets.map((s) => '<tr class="click" data-id="' + s.id + '"><td>' + esc(s.number || "—") + "</td><td>" + esc(s.title || "") +
+      '</td><td class="opt">' + esc(s.scale || "") + '</td><td class="opt">' + esc(s.unit || "") + "</td></tr>").join("");
+    clearInterval(timer);
+    if (d.files.some((f) => f.status === "queued" || f.status === "processing")) timer = setInterval(refreshCase, 3000);
+  }
+
+  $("#sheets").addEventListener("click", async (e) => {
+    const tr = e.target.closest("tr[data-id]"); if (!tr) return;
+    document.querySelectorAll("#sheets tr").forEach((x) => x.classList.toggle("sel", x === tr));
+    const d = await api("/api/cases/" + currentCase + "/sheets/" + tr.dataset.id + "/texts");
+    sheetTexts = d.texts;
+    $("#texts-title").textContent = "圖面文字｜" + (d.sheet.number || "") + " " + (d.sheet.title || "") + "（" + sheetTexts.length + " 筆）";
+    $("#texts-hint").classList.add("hidden"); $("#filter").classList.remove("hidden"); $("#filter").value = "";
+    renderTexts();
+  });
+  $("#filter").addEventListener("input", renderTexts);
+  function renderTexts() {
+    const q = $("#filter").value.trim();
+    const rows = q ? sheetTexts.filter((t) => t.t.includes(q)) : sheetTexts;
+    $("#texts").innerHTML = rows.slice(0, 2000).map((t) => "<tr><td>" + esc(t.t) + '</td><td class="mono opt">' + Math.round(t.x) + ", " + Math.round(t.y) + "</td></tr>").join("");
+  }
+
+  // ---------- 上傳 ----------
+  async function upload(fileList) {
+    const files = [...fileList]; if (!files.length || !currentCase) return;
+    const fd = new FormData(); files.forEach((f) => fd.append("files", f, f.name));
+    const msg = $("#upload-msg"); msg.classList.remove("hidden"); msg.className = "note info"; msg.textContent = "上傳中：" + files.length + " 個檔案…";
+    try {
+      const r = await api("/api/cases/" + currentCase + "/files", { method: "POST", body: fd });
+      msg.textContent = "已上傳 " + r.files.length + " 個檔案，排入處理。";
+    } catch (err) { msg.className = "note err"; msg.textContent = err.message; }
+    await refreshCase();
+  }
+  $("#pick").addEventListener("change", (e) => { upload(e.target.files); e.target.value = ""; });
+  const drop = $("#drop");
+  ["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+  ["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+  drop.addEventListener("drop", (e) => upload(e.dataTransfer.files));
+
+  // ---------- 啟動 ----------
+  fetch("/api/auth/me", { credentials: "same-origin" }).then((r) => r.ok ? r.json().then(showApp) : showLogin()).catch(showLogin);
+})();
+</script>
+</body>
+</html>
