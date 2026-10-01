@@ -400,3 +400,20 @@ def test_log_records_midstream_error(client, monkeypatch, logs):
     rec = logs[-1]
     assert rec["mode"] == "ai" and rec["error"].startswith("ConnectionResetError")
     assert rec["answer"] == "KTV 屬甲類，樓地板面積合計三百平方公尺以上要設["
+
+
+def test_ask_sources_adds_whole_article_when_fragments_cluster(fake_db, monkeypatch):
+    """同一條抓到 3 個以上款目時補整條原文（例：免設排煙條件 → 第 190 條）。"""
+    frag = lambda nid: {"node_id": nid, "citation": nid, "text": "片段", "level": "subitem"}
+    NODES.update({
+        "D0120029/190": {"node_id": "D0120029/190", "pcode": "D0120029", "article": "190", "level": "article",
+                         "path": [], "text": "下列處所得免設排煙設備：……（整條）", "parent_id": None,
+                         "citation": "設置標準第190條", "chapter": "", "has_table": False, "pdf_table_url": None,
+                         "deleted": False, "children": 1},
+    })
+    retrieved = [frag("D0120029/190/1/1/1"), frag("D0120029/190/1/2/1"), frag("D0120029/190/1/3")]
+    monkeypatch.setattr(api, "_retrieve", lambda q, limit: [dict(r) for r in retrieved])
+    out = api._ask_sources("免設排煙條件")
+    assert [r["node_id"] for r in out][-1] == "D0120029/190" and out[-1]["routes"] == ["article_context"]
+    retrieved.pop()
+    assert "D0120029/190" not in [r["node_id"] for r in api._ask_sources("免設排煙條件")]   # 只有 2 個片段不補

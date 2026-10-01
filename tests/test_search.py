@@ -100,3 +100,32 @@ def test_occupancy_of_node():
     assert S.occupancy_of("…第十二條第一款…", ["D0120029/12/1/1"], occ_by_node, CODES) == ["甲-1", "甲-5"]
     assert S.occupancy_of("一、甲類場所、地下建築物、幼兒園。", [], occ_by_node, CODES) == ["甲-1", "甲-5"]
     assert S.occupancy_of("二、總樓地板面積在一百五十平方公尺以上之乙、丙、丁類場所。", [], {}, CODES) == ["乙-12"]
+
+
+# ---- 拿掉法規全文裡不存在的片段（2026-10-01 測試者實際提問）----
+
+KNOWN = None
+
+
+def _known():
+    global KNOWN
+    if KNOWN is None:
+        import json
+        from pathlib import Path
+        rows = [json.loads(l) for l in (Path(__file__).resolve().parents[1] / "data/lawdb/nodes.jsonl").open(encoding="utf-8")]
+        KNOWN = S.corpus_bigrams(r["text"] + " " + r["citation"] for r in rows)
+    return KNOWN
+
+
+def test_drop_unknown_removes_terms_absent_from_law():
+    assert S.drop_unknown("無塵室免設排煙條件", _known()) == "免設排煙條件"
+
+
+def test_drop_unknown_keeps_known_and_rewritten_terms():
+    for q in ["KTV 設置自動撒水", "偵煙探測器設置標準", "旅館 有手動報警設備", "三樓"]:
+        assert S.drop_unknown(q, _known()) == q
+
+
+def test_drop_unknown_keeps_query_when_everything_unknown():
+    assert S.drop_unknown("無塵室", _known()) == "無塵室"
+    assert S.drop_unknown("撒水", None) == "撒水"

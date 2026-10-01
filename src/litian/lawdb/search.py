@@ -161,15 +161,53 @@ def clean_query(q: str) -> str:
     return re.sub(r"\s+", " ", normalize_query(q)).strip()
 
 
+def corpus_bigrams(texts) -> set[str]:
+    """法規全文（含引用寫法、編章節、表格文字）裡出現過的所有相鄰兩字。"""
+    out: set[str] = set()
+    for t in texts:
+        out.update(t[i:i + 2] for i in range(len(t) - 1))
+    return out
+
+
+def drop_unknown(q: str, known: set[str] | None) -> str:
+    """拿掉查詢裡法規全文完全沒有的片段：連續兩字以上、其中任何相鄰兩字都沒在法規出現過（例：「無塵室」）。
+
+    原因（2026-10-01 測試者實際提問「無塵室免設排煙條件」）：Meilisearch 把不存在的詞拆成單字去比對，
+    「塵」對上「防塵」，撈出無關條文、擠掉真正的第 190 條。單一個對不上的字保留，避免誤刪。
+    全部都對不上時回傳原查詢。只用在關鍵詞路線；向量路線與 AI 仍看原始問題。
+    """
+    if not known:
+        return q
+    n = len(q)
+    cov = [False] * n
+    for i in range(n - 1):
+        if q[i:i + 2] in known:
+            cov[i] = cov[i + 1] = True
+    out, i = [], 0
+    while i < n:
+        if cov[i] or q[i].isspace():
+            out.append(q[i])
+            i += 1
+            continue
+        j = i
+        while j < n and not cov[j] and not q[j].isspace():
+            j += 1
+        out.append(" " if j - i >= 2 else q[i:j])
+        i = j
+    r = re.sub(r"\s+", " ", "".join(out)).strip()
+    return r or q
+
+
 def keyword(q: str, base: str, key: str, pcode: str | None, limit: int = 20,
-            filters: list[str] | None = None, legend: bool = False, strategy: str = "frequency") -> list[str]:
+            filters: list[str] | None = None, legend: bool = False, strategy: str = "frequency",
+            known: set[str] | None = None) -> list[str]:
     """Meilisearch 關鍵詞檢索。
 
     strategy＝frequency：詞不夠時先丟最常見的詞。弱點：法條裡完全不存在的詞「最罕見」，永遠不會被丟，
       整句就零結果（2026-10-01 評測 N02 實際發生）；或只剩罕見雜詞，結果被帶偏（N05）。
     strategy＝last：從句尾開始丟詞。弱點：句尾的關鍵詞可能先被丟掉。兩者並行再用 RRF 合併，互補盲點。
     """
-    cq = clean_query(LEGEND_INTENT.sub(" ", q) if legend else q)
+    cq = drop_unknown(clean_query(LEGEND_INTENT.sub(" ", q) if legend else q), known)
     if not cq:
         return []
     filters = (filters or []) + ['level = "legend"' if legend else 'level != "legend"']

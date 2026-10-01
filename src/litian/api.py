@@ -14,7 +14,7 @@ import logging
 import os
 import re
 import time
-from collections import deque
+from collections import Counter, deque
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from datetime import datetime, timedelta, timezone
@@ -47,6 +47,7 @@ LEGEND_FILE_RE = re.compile(r"[A-Za-z0-9_]+\.png")   # 只允許建置產生的�
 WEB_INDEX = Path(__file__).parent / "web" / "index.html"
 TW = timezone(timedelta(hours=8))
 ASK_SOURCES = 8          # 每題送給 AI 的條文數
+ARTICLE_CONTEXT_MIN = 3  # 同一條被檢索到幾個款目以上，就把整條原文也交給 AI（最多補 2 條）
 PLACE_PIN_MAX = 3        # 問題提到的場所代碼不超過此數時，自動帶入其第 12 條分類條文
 ACCESS_CODE_MIN = 12     # 存取碼最短長度（太短容易被猜中）
 CODE_FAIL_MAX = 10       # 同一來源一小時內存取碼錯誤上限，超過就暫停一小時
@@ -171,6 +172,18 @@ def _vector_route(q: str, pcode: str | None) -> list[str]:
         return []
 
 
+@lru_cache(maxsize=1)
+def _known_bigrams() -> frozenset[str]:
+    """法規全文字表（相鄰兩字），用來拿掉查詢裡法規沒有的詞。程式重啟才更新（法規庫更新會重建容器）。"""
+    try:
+        texts = [r["t"] for r in _all("SELECT text || ' ' || citation || ' ' || coalesce(chapter, '') AS t FROM law_node")]
+        texts += [T.rows_text(r["data"]) for r in _all("SELECT data FROM law_table")]
+        return frozenset(S.corpus_bigrams(texts))
+    except Exception as e:
+        log.warning("known bigrams failed: %s", type(e).__name__)
+        return frozenset()
+
+
 def _retrieve(q: str, limit: int, vector_weight: float | None = None) -> list[dict]:
     exists = lambda nid: _one("SELECT 1 AS x FROM law_node WHERE node_id = %s", nid) is not None
     occ_rows = _all("SELECT code, node_id, text FROM occupancy_code")
@@ -178,8 +191,9 @@ def _retrieve(q: str, limit: int, vector_weight: float | None = None) -> list[di
     base, key = os.environ["MEILI_URL"], os.environ["MEILI_MASTER_KEY"]
     pinned = S.structural(q, exists) + S.occupancy(q, occ)
     law = S.detect_law(q)
-    routes = {"keyword": S.keyword(q, base, key, law),
-              "keyword_last": S.keyword(q, base, key, law, strategy="last"),
+    known = _known_bigrams() or None
+    routes = {"keyword": S.keyword(q, base, key, law, known=known),
+              "keyword_last": S.keyword(q, base, key, law, strategy="last", known=known),
               "occupancy": S.occupancy_route(q, S.place_terms(occ_rows), list(occ), base, key),
               "legend": S.legend_route(q, base, key)}
     weights = None
@@ -395,24 +409,42 @@ def _ask_sources(q: str) -> list[dict]:
         if n:
             laws = laws or _law_names()
             pins.append({**_present(n, laws), "routes": ["place"], "score": None})
-    out = []
-    for r in pins + results:
-        n = _node(r["node_id"])
-        parents, pid = [], n["parent_id"] if n else None
-        while pid:
-            p = _node(pid)
-            if not p or p["level"] == "article":
-                break
-            parents.insert(0, A.clip(p["text"], 120))
-            pid = p["parent_id"]
-        r["parents"] = parents
-        tbl = r.get("table")
-        if tbl and r["node_id"] in (tbl["node_id"], tbl["node_id"] + "/1"):
-            row = _one("SELECT data FROM law_table WHERE node_id = %s", tbl["node_id"])
-            if row:
-                r["table_text"] = T.rows_text(row["data"])
-        out.append(r)
+    out = [_enrich(r) for r in pins + results]
+    # 同一條被抓到很多零碎款目時（例：「免設排煙條件」→ 第 190 條各款各目），補上整條原文，AI 才不會只看到片段
+    have = {r["node_id"] for r in out}
+    arts = Counter("/".join(r["node_id"].split("/")[:2]) for r in out
+                   if r.get("level") not in ("article", "legend", "attachment"))
+    added = 0
+    for art, c in arts.most_common():
+        if c < ARTICLE_CONTEXT_MIN or added >= 2:
+            break
+        if art in have:
+            continue
+        n = _node(art)
+        if n:
+            laws = laws or _law_names()
+            out.append(_enrich({**_present(n, laws), "routes": ["article_context"], "score": None}))
+            added += 1
     return out
+
+
+def _enrich(r: dict) -> dict:
+    """補上層條文（不含整條）與結構化表格文字。"""
+    n = _node(r["node_id"])
+    parents, pid = [], n["parent_id"] if n else None
+    while pid:
+        p = _node(pid)
+        if not p or p["level"] == "article":
+            break
+        parents.insert(0, A.clip(p["text"], 120))
+        pid = p["parent_id"]
+    r["parents"] = parents
+    tbl = r.get("table")
+    if tbl and r["node_id"] in (tbl["node_id"], tbl["node_id"] + "/1"):
+        row = _one("SELECT data FROM law_table WHERE node_id = %s", tbl["node_id"])
+        if row:
+            r["table_text"] = T.rows_text(row["data"])
+    return r
 
 
 @app.get("/api/law/ask/status")
