@@ -184,6 +184,18 @@ def _known_bigrams() -> frozenset[str]:
         return frozenset()
 
 
+@lru_cache(maxsize=1)
+def _table_index() -> tuple:
+    """結構化表格的檢索索引（程式重啟才更新；法規庫更新會重建容器）。"""
+    try:
+        tables = [r["data"] for r in _all("SELECT data FROM law_table")]
+        node_of = lambda art: art + "/1" if _node(art + "/1") else art
+        return tuple(S.table_index(tables, node_of))
+    except Exception as e:
+        log.warning("table index failed: %s", type(e).__name__)
+        return ()
+
+
 def _retrieve(q: str, limit: int, vector_weight: float | None = None) -> list[dict]:
     exists = lambda nid: _one("SELECT 1 AS x FROM law_node WHERE node_id = %s", nid) is not None
     occ_rows = _all("SELECT code, node_id, text FROM occupancy_code")
@@ -195,7 +207,8 @@ def _retrieve(q: str, limit: int, vector_weight: float | None = None) -> list[di
     routes = {"keyword": S.keyword(q, base, key, law, known=known),
               "keyword_last": S.keyword(q, base, key, law, strategy="last", known=known),
               "occupancy": S.occupancy_route(q, S.place_terms(occ_rows), list(occ), base, key),
-              "legend": S.legend_route(q, base, key)}
+              "legend": S.legend_route(q, base, key),
+              "table": S.table_route(q, list(_table_index()))}
     weights = None
     if vector_weight != 0:
         routes["vector"] = _vector_route(q, law)

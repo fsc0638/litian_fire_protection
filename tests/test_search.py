@@ -129,3 +129,14 @@ def test_drop_unknown_keeps_known_and_rewritten_terms():
 def test_drop_unknown_keeps_query_when_everything_unknown():
     assert S.drop_unknown("無塵室", _known()) == "無塵室"
     assert S.drop_unknown("撒水", None) == "撒水"
+
+
+# ---- 表格路線：列名＋表名主題同時對上才帶出（2026-10-01）----
+
+def test_table_route_needs_row_label_and_topic():
+    from litian.lawdb import tables as T
+    idx = S.table_index(T.load_tables(), lambda art: art + "/1")
+    assert S.table_route("第四類公共危險物品可以用哪些滅火設備", idx) == ["D0120029/198/1"]
+    assert S.table_route("第四類公共危險物品的儲存量", idx) == []          # 只對上列名、沒對上主題
+    for q in ["電氣設備要設什麼滅火器", "KTV要不要裝自動撒水", "偵煙探測器設置標準"]:
+        assert S.table_route(q, idx) == []

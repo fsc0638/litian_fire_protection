@@ -20,7 +20,7 @@ MEILI_INDEX = "law_nodes"
 RRF_K = 60
 # keyword 與 keyword_last 是同一份查詢的兩種比對方式（見 keyword() 說明），兩路互補
 # 兩種比對方式是同一份查詢的同一種訊號，各 0.5、合計 1，維持與場所展開路（2）的相對份量
-ROUTE_WEIGHT = {"keyword": 0.5, "keyword_last": 0.5, "occupancy": 2.0, "legend": 2.0, "vector": 0.25}  # 向量權重依 2026-10-01 評測選定（eval/vector_weight_2026-10-01.md）
+ROUTE_WEIGHT = {"keyword": 0.5, "keyword_last": 0.5, "occupancy": 2.0, "legend": 2.0, "vector": 0.25, "table": 1.0}  # 向量權重依 2026-10-01 評測選定（eval/vector_weight_2026-10-01.md）
 # 圖例（附件三消防圖說圖示範例）只在問到圖例時才進檢索：圖例名稱都是設備名，混進一般檢索會擠掉法條
 LEGEND_INTENT = re.compile(r"圖例|圖示|符號|標示記號|記號|怎麼畫|畫法")
 
@@ -196,6 +196,45 @@ def drop_unknown(q: str, known: set[str] | None) -> str:
         i = j
     r = re.sub(r"\s+", " ", "".join(out)).strip()
     return r or q
+
+
+TABLE_LABEL_MIN = 4
+_LABEL_SPLIT = re.compile(r"[／、，；：（）()\s]+")
+
+
+def table_index(tables: list[dict], node_of) -> list[dict]:
+    """結構化表格的檢索索引：列名片段（≥4 字）與表名的相鄰兩字。node_of(條) 回傳表格掛的節點。"""
+    from . import tables as T
+    out = []
+    for t in tables:
+        labels = set()
+        for p in T.parts_of(t):
+            for r in p.get("rows", []):
+                labels |= {x for x in _LABEL_SPLIT.split(str(r.get("place", ""))) if len(x) >= TABLE_LABEL_MIN}
+        titles = " ".join([t.get("title") or ""] + [p.get("title") or "" for p in T.parts_of(t)])
+        out.append({"node_id": node_of(t["node_id"]), "labels": labels,
+                    "title_bigrams": {titles[i:i + 2] for i in range(len(titles) - 1)}})
+    return out
+
+
+def table_route(q: str, index: list[dict]) -> list[str]:
+    """問題同時對上某張表的列名（例：「第四類公共危險物品」）與表名主題（例：「滅火設備」）時，帶出該表所屬條文。
+
+    原因（2026-10-01）：第 198 條條文只有一句「應依下表選擇」，表格文字掛在索引權重最低的欄位，
+    「第四類公共危險物品可以用哪些滅火設備」排不進前 8 名。只對上列名或只對上主題都不算，避免泛用詞誤觸。
+    """
+    scored = []
+    for t in index:
+        hit = [lb for lb in t["labels"] if lb in q]
+        if not hit:
+            continue
+        rest = q
+        for lb in hit:
+            rest = rest.replace(lb, " ")
+        topic = sum(1 for i in range(len(rest) - 1) if rest[i:i + 2] in t["title_bigrams"])
+        if topic >= 2:
+            scored.append((max(len(x) for x in hit) + topic, t["node_id"]))
+    return [nid for _, nid in sorted(scored, reverse=True)[:2]]
 
 
 def keyword(q: str, base: str, key: str, pcode: str | None, limit: int = 20,
