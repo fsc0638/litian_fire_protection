@@ -101,6 +101,12 @@ bash /opt/litian/repo/deploy/oracle/06_update_from_git.sh
 - 測試期提問紀錄：每次按「查詢」寫一筆到 `ask_log` 表（問題、檢索結果、AI 回答與查核結果、用量、耗時；來源只存 IP 的雜湊，無法還原）。頁尾已告知使用者。匯出 CSV：`bash /opt/litian/repo/deploy/oracle/08_export_ask_log.sh [起始日 YYYY-MM-DD]`。
 - LINE 版本目前不做（2026-10-01 決定）。
 
+## 圖面處理（第 1 期 M1）
+
+- 上傳的 DWG 交給 `converter` 容器轉 DXF（LibreDWG＋修補），該容器**無網路、唯讀、限資源、不碰資料庫**，只透過 `data/convert` 交接資料夾收件交件（協定見 `src/litian/drawing/convert_client.py`）。
+- `worker` 從 PostgreSQL 佇列取檔，在子行程（限時、限記憶體）用 ezdxf 抽出圖面中介資料：依圖框與「圖號」屬性把模型空間切成各張圖，收文字、圖塊（含屬性）、線段、封閉多邊形（`src/litian/drawing/ir.py`）。
+- 命令列（主機上）：`sudo docker compose exec worker python -m litian.drawing.cli ingest --name 名稱 /data/samples/*.dwg`，再用 `status 案件ID`、`sheets 案件ID` 看結果。
+
 ## 資料來源與授權
 
 - 法律、命令條文：法務部全國法規資料庫 Open API（https://law.moj.gov.tw/api），依「政府資料開放授權條款－第 1 版」使用，須標示出處。

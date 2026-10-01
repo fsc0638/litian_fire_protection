@@ -1,4 +1,6 @@
-# LibreDWG 0.14 轉檔容器（ARM64／x86 皆可建）
+# LibreDWG 0.14 轉檔容器（ARM64／x86 皆可建）。建置內容（context）＝ repo 根目錄：
+#   docker build -f deploy/oracle/libredwg/Dockerfile -t litian-libredwg:0.14 <repo>
+# 常駐服務＝converter.py（監看交接資料夾，見 docker-compose.yml 的 converter）；pipeline_check.py 為一次性實測。
 # 原始碼包的 SHA-256 取自 GitHub 官方 release 資產摘要（2026-09-30 讀取）。
 # 執行時一律：--network none、限記憶體、限 CPU、唯讀根目錄（見 03_libredwg_test.sh）。
 
@@ -28,6 +30,6 @@ COPY --from=build /opt/libredwg /opt/libredwg
 ENV PATH=/opt/libredwg/bin:$PATH \
     LD_LIBRARY_PATH=/opt/libredwg/lib
 RUN python3 -m venv /opt/venv && /opt/venv/bin/pip install --no-cache-dir ezdxf==1.4.4
-COPY repair_dxf.py pipeline_check.py /app/
+COPY tools/dwg2dxf/repair_dxf.py deploy/oracle/libredwg/pipeline_check.py deploy/oracle/libredwg/converter.py /app/
 USER 65534:65534
 ENTRYPOINT ["/opt/venv/bin/python", "/app/pipeline_check.py"]

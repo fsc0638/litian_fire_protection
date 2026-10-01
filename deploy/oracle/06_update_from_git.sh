@@ -24,8 +24,10 @@ for f in docker-compose.yml Caddyfile .env.example 02_up.sh 03_libredwg_test.sh 
 done
 
 cd "$RUN"
-nice -n 19 sudo docker compose build api >/tmp/litian-build.log 2>&1 || { tail -20 /tmp/litian-build.log; exit 1; }
-sudo docker compose up -d api
+# 圖面處理的資料夾（worker 與 converter 都以 65534 身分執行）
+sudo install -d -o 65534 -g 65534 "$RUN/data/cases" "$RUN/data/convert" "$RUN/data/convert/in" "$RUN/data/convert/out" "$RUN/data/convert/work"
+nice -n 19 sudo docker compose build api converter >/tmp/litian-build.log 2>&1 || { tail -20 /tmp/litian-build.log; exit 1; }
+sudo docker compose up -d api worker converter
 for i in $(seq 1 20); do curl -sf http://127.0.0.1:8100/api/health >/dev/null && break; sleep 2; done
 sudo docker compose exec -T api python -m litian.lawdb.store </dev/null
 # 向量索引：只補算有變動的節點（沒有 OPENAI_API_KEY 時自動略過）

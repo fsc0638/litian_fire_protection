@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # 在主機上建 LibreDWG 容器（從原始碼編譯、驗 SHA-256），並在沙箱條件下跑 19 個樣本。
-# 前置：樣本 DWG 已上傳到 /opt/litian/samples；本資料夾內容已上傳到 /opt/litian/libredwg（含 repair_dxf.py）。
+# 前置：樣本 DWG 已上傳到 /opt/litian/samples；/opt/litian/repo 為 GitHub clone（建置內容＝repo 根目錄）。
 set -euo pipefail
-cd /opt/litian/libredwg
 echo "[libredwg] 建置映像（ARM 上編譯約需數分鐘）"
-sudo docker build -t litian-libredwg:0.14 .
+sudo docker build -f /opt/litian/repo/deploy/oracle/libredwg/Dockerfile -t litian-libredwg:0.14 /opt/litian/repo
 rm -rf /opt/litian/out/* && chmod 777 /opt/litian/out
 echo "[libredwg] 沙箱執行：無網路、512 MB、1 核、唯讀根目錄"
 sudo docker run --rm \

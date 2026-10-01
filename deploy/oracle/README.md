@@ -59,7 +59,7 @@ curl https://<對外網址>/healthz    # 應回 "litian ok"
 | `docker-compose.yml` | 四個基礎服務，映像都已確認有 arm64 版 |
 | `Caddyfile` | 對外 HTTPS 與健康檢查；程式完成後改成反向代理 |
 | `.env.example` | 環境變數範本（不含真實金鑰） |
-| `libredwg/Dockerfile`、`libredwg/pipeline_check.py` | 轉檔容器與三步管線檢查 |
+| `libredwg/Dockerfile`、`libredwg/converter.py`、`libredwg/pipeline_check.py` | 轉檔容器（建置內容＝repo 根目錄）、常駐轉檔服務、一次性三步管線檢查 |
 | `04_host_caddy_site.sh` | 在主機層 Caddy 新增本系統網站區塊（主機層 Caddy 模式） |
 | `05_route_api.sh` | 更新本系統網站區塊，把 `/api/*` 轉送到 API 容器 |
 | `06_update_from_git.sh` | 從 GitHub 更新並重新部署 |

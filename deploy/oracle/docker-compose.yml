@@ -68,6 +68,47 @@ services:
     networks: [internal, edge]  # internal 連資料庫；edge 讓呼叫 OpenAI API 能出外網
     mem_limit: 768m
 
+  # 圖面處理：佇列在 PostgreSQL；DWG 交給 converter 轉檔，抽取在 worker 的子行程（限時、限記憶體）
+  worker:
+    image: litian-api:0.1          # 與 api 同一份程式（由 api 的 build 產生）
+    container_name: litian-worker
+    restart: unless-stopped
+    command: ["python", "-m", "litian.drawing.worker"]
+    environment:
+      DATABASE_URL: postgresql://litian:${POSTGRES_PASSWORD}@postgres:5432/litian
+      CASES_DIR: /data/cases
+      CONVERT_SPOOL: /data/convert
+    volumes:
+      - ./data/cases:/data/cases
+      - ./data/convert:/data/convert
+      - ./samples:/data/samples:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]          # 不出外網
+    mem_limit: 1536m
+
+  # DWG 轉檔：LibreDWG（beta，近期仍在修記憶體安全漏洞）只在這個隔離容器跑。
+  # 無網路、唯讀根目錄、限資源、不碰資料庫；只透過 data/convert 交接資料夾收件交件。
+  converter:
+    build:
+      context: ./repo
+      dockerfile: deploy/oracle/libredwg/Dockerfile
+    image: litian-libredwg:0.14
+    container_name: litian-converter
+    restart: unless-stopped
+    entrypoint: ["/opt/venv/bin/python", "/app/converter.py"]
+    network_mode: none
+    read_only: true
+    tmpfs: ["/tmp:size=64m"]
+    volumes:
+      - ./data/convert:/convert
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    pids_limit: 64
+    cpus: 1
+    mem_limit: 768m
+
   # 獨立主機才用自己的 Caddy（LITIAN_STANDALONE=1 時 02_up.sh 會帶 --profile standalone）。
   # 主機上已有 Caddy 時不啟用，改在主機層 Caddy 加網站區塊（04_host_caddy_site.sh）。
   caddy:
