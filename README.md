@@ -85,6 +85,17 @@ bash /opt/litian/repo/deploy/oracle/06_update_from_git.sh
 | GET | `/api/law/legend/image/{檔名}` | 圖例符號圖（PNG；只接受建置產生的檔名） |
 | GET | `/api/law/tables` | 已結構化的法定表格清單與校對狀態 |
 | GET | `/api/law/tables/{node_id}` | 單張表格（草稿會附警告） |
+| GET | `/` | 法規問答網頁 |
+| GET | `/api/law/ask/status` | AI 回答是否啟用、每日上限 |
+| POST | `/api/law/ask` | 法規問答（SSE 串流）：先回檢索到的條文，再串流 AI 回答與引用；需 `X-Access-Code` |
+
+## 法規問答網頁
+
+- 每題先檢索 8 條相關條文，每條當成一份文件送給 Claude（`claude-opus-5-5`）並開啟引用；回答的引用一定指回這些條文，前端以編號連到條文卡片。
+- 回答提到的條號若不在這次檢索的條文（含其內文）中，頁面會標示「未經檢索，請自行查證」。
+- 主機 `.env` 要同時填 `ANTHROPIC_API_KEY` 與 `ASK_ACCESS_CODE` 才會啟用 AI 回答；沒填時只列檢索結果，不花費用。
+- 費用防護：存取碼、同一來源每分鐘 6 次、每日總數 `ASK_DAILY_LIMIT`（預設 200）。用量記在 API 容器日誌。
+- LINE 版本目前不做（2026-10-01 決定）。
 
 ## 資料來源與授權
 

@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>消防法規問答</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%227%22 fill=%22%23c2410c%22/%3E%3Cpath d=%22M16 4c1.3 5 7.5 7.5 7.5 15a7.5 7.5 0 0 1-15 0c0-3.8 2.5-6.3 3.8-7.5 0 2.5 1.2 3.8 2.5 3.8 0-3.8-1.2-7.5 1.2-11.3z%22 fill=%22%23fff%22/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #f7f6f3; --surface: #ffffff; --surface-2: #f1efea; --text: #1c1b19; --muted: #6b675f;
+  --border: #e2ded5; --accent: #c2410c; --accent-soft: #fdecdf; --accent-text: #9a3412;
+  --warn-bg: #fff7e0; --warn-border: #f0cf73; --warn-text: #7a5300;
+  --err-bg: #fdeceb; --err-text: #9b1c1c; --focus: #2563eb;
+  --shadow: 0 1px 2px rgba(0,0,0,.05), 0 2px 8px rgba(0,0,0,.04);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #151412; --surface: #1e1d1a; --surface-2: #272521; --text: #ece9e2; --muted: #a39e93;
+    --border: #36332d; --accent: #f97316; --accent-soft: #3a2416; --accent-text: #fdba74;
+    --warn-bg: #2f2710; --warn-border: #6b5418; --warn-text: #f3d27a;
+    --err-bg: #3a1716; --err-text: #fca5a5; --focus: #60a5fa; --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #151412; --surface: #1e1d1a; --surface-2: #272521; --text: #ece9e2; --muted: #a39e93;
+  --border: #36332d; --accent: #f97316; --accent-soft: #3a2416; --accent-text: #fdba74;
+  --warn-bg: #2f2710; --warn-border: #6b5418; --warn-text: #f3d27a;
+  --err-bg: #3a1716; --err-text: #fca5a5; --focus: #60a5fa; --shadow: none;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 16px/1.7 system-ui, -apple-system, "Segoe UI", "Microsoft JhengHei", "PingFang TC", "Noto Sans TC", sans-serif;
+}
+a { color: var(--accent-text); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.wrap { max-width: 880px; margin: 0 auto; padding: 0 16px; }
+header.top { border-bottom: 1px solid var(--border); background: var(--surface); }
+header.top .wrap { display: flex; align-items: center; gap: 12px; padding-top: 14px; padding-bottom: 14px; }
+.logo { width: 34px; height: 34px; border-radius: 8px; background: var(--accent); display: grid; place-items: center; flex: none; }
+.logo svg { width: 20px; height: 20px; }
+h1 { font-size: 1.2rem; margin: 0; line-height: 1.3; }
+.sub { color: var(--muted); font-size: .85rem; margin: 0; }
+main { padding: 20px 0 40px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); }
+.ask { padding: 16px; }
+.ask label.q { display: block; font-weight: 600; margin-bottom: 8px; }
+textarea {
+  width: 100%; min-height: 76px; resize: vertical; padding: 10px 12px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit;
+}
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 10px; }
+.grow { flex: 1 1 auto; }
+button {
+  font: inherit; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--text); padding: 6px 12px; cursor: pointer;
+}
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; padding: 8px 18px; }
+button.primary:disabled { opacity: .55; cursor: progress; }
+button.chip { border-radius: 999px; font-size: .85rem; padding: 3px 12px; margin: 2px 0; }
+.examples { margin-top: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.examples .label { color: var(--muted); font-size: .85rem; }
+.code { display: none; align-items: center; gap: 6px; font-size: .9rem; }
+.code input { width: 9rem; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font: inherit; }
+.status { font-size: .85rem; color: var(--muted); margin-top: 10px; }
+.status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 6px; vertical-align: middle; }
+.status .dot.on { background: #16a34a; }
+section.result { margin-top: 18px; }
+h2 { font-size: 1rem; margin: 0 0 10px; }
+.answer { padding: 16px 18px; }
+.answer .body p { margin: 0 0 .7em; }
+.answer .body ul, .answer .body ol { margin: 0 0 .7em; padding-left: 1.4em; }
+.answer .body li { margin: .15em 0; }
+a.cite {
+  display: inline-block; min-width: 1.4em; padding: 0 .35em; margin: 0 1px; border-radius: 6px;
+  background: var(--accent-soft); color: var(--accent-text); font-size: .75em; font-weight: 700;
+  text-decoration: none; text-align: center; line-height: 1.6; vertical-align: .15em;
+}
+.loading { color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.spin { width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+.note { border-radius: 8px; padding: 10px 12px; margin: 10px 0 0; font-size: .92rem; }
+.note.warn { background: var(--warn-bg); border: 1px solid var(--warn-border); color: var(--warn-text); }
+.note.err { background: var(--err-bg); color: var(--err-text); }
+.note.info { background: var(--surface-2); color: var(--muted); }
+.sources { display: grid; gap: 10px; }
+article.src { padding: 14px 16px; scroll-margin-top: 12px; transition: border-color .3s; }
+article.src.flash { border-color: var(--accent); }
+article.src header { display: flex; gap: 10px; align-items: flex-start; }
+.num { flex: none; width: 1.8em; height: 1.8em; border-radius: 6px; display: grid; place-items: center; background: var(--surface-2); font-weight: 700; font-size: .85rem; }
+article.src.cited .num { background: var(--accent-soft); color: var(--accent-text); }
+article.src h3 { font-size: .98rem; margin: 0; line-height: 1.45; }
+.meta { color: var(--muted); font-size: .8rem; margin: 2px 0 0; overflow-wrap: anywhere; }
+.parents { color: var(--muted); font-size: .85rem; margin: 8px 0 0; }
+.text { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+pre.box { margin: 8px 0 0; padding: 10px; background: var(--surface-2); border-radius: 8px; overflow-x: auto; font-size: .8rem; line-height: 1.4; }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.actions button { font-size: .85rem; padding: 3px 10px; }
+.more { margin-top: 10px; padding: 10px 12px; background: var(--surface-2); border-radius: 8px; white-space: pre-wrap; font-size: .92rem; overflow-x: auto; }
+.more.scroll { white-space: normal; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.legend img { height: 56px; background: #fff; border: 1px solid var(--border); border-radius: 6px; padding: 4px; }
+table.law { border-collapse: collapse; font-size: .85rem; min-width: 520px; }
+table.law th, table.law td { border: 1px solid var(--border); padding: 4px 6px; vertical-align: top; text-align: left; }
+table.law th { background: var(--surface); }
+footer { color: var(--muted); font-size: .8rem; border-top: 1px solid var(--border); padding: 16px 0 28px; }
+footer p { margin: 0 0 .4em; }
+.hidden { display: none !important; }
+@media (max-width: 560px) { body { font-size: 15px; } .ask, .answer { padding: 14px; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="logo" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M16 4c1.3 5 7.5 7.5 7.5 15a7.5 7.5 0 0 1-15 0c0-3.8 2.5-6.3 3.8-7.5 0 2.5 1.2 3.8 2.5 3.8 0-3.8-1.2-7.5 1.2-11.3z" fill="#fff"/></svg></div>
+    <div>
+      <h1>消防法規問答</h1>
+      <p class="sub">消防圖審系統｜依消防法、各類場所消防安全設備設置標準與消防署作業基準回答</p>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <form class="card ask" id="ask-form">
+    <label class="q" for="q">想查什麼？</label>
+    <textarea id="q" maxlength="300" placeholder="例如：KTV 要不要裝自動撒水設備？" required></textarea>
+    <div class="row">
+      <div class="code" id="code-box">
+        <label for="code">存取碼</label>
+        <input id="code" type="password" autocomplete="off" spellcheck="false">
+      </div>
+      <span class="grow"></span>
+      <button class="primary" id="go" type="submit">查詢</button>
+    </div>
+    <div class="examples" id="examples"><span class="label">試試看：</span></div>
+    <div class="status" id="status"><span class="dot"></span>讀取系統狀態中…</div>
+  </form>
+
+  <section class="result hidden" id="answer-sec" aria-live="polite">
+    <h2>回答</h2>
+    <div class="card answer">
+      <div class="loading hidden" id="loading"><span class="spin"></span><span id="loading-text">查詢條文中…</span></div>
+      <div class="body" id="answer"></div>
+      <div id="answer-notes"></div>
+    </div>
+  </section>
+
+  <section class="result hidden" id="sources-sec">
+    <h2 id="sources-title">相關條文</h2>
+    <div class="sources" id="sources"></div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>本系統輸出為輔助資訊，法規內容以主管機關公布為準，設計簽證請依消防設備師判斷。</p>
+    <p>法規資料：法務部全國法規資料庫（依政府資料開放授權條款第 1 版使用）、內政部消防署消防法令查詢系統。<span id="version"></span></p>
+  </div>
+</footer>
+
+<script>
+(() => {
+  const EXAMPLES = ["KTV 要不要裝自動撒水設備？", "旅館屬於哪一類場所？", "第三層可以選設哪些避難器具？", "誰可以做消防安全設備的設計和監造？", "密閉式撒水頭向下型的圖例"];
+  const $ = (s) => document.querySelector(s);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const store = {
+    get(k) { try { return localStorage.getItem(k) || ""; } catch { return ""; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+  };
+  let status = { ai_enabled: false, message: "" };
+  let sources = [];
+  let blocks = new Map();
+  let busy = false;
+
+  // ---------- 初始化 ----------
+  for (const ex of EXAMPLES) {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "chip"; b.textContent = ex;
+    b.addEventListener("click", () => { $("#q").value = ex; submit(); });
+    $("#examples").appendChild(b);
+  }
+  $("#code").value = store.get("fire-review-access-code");
+  $("#q").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); }
+  });
+  $("#ask-form").addEventListener("submit", (e) => { e.preventDefault(); submit(); });
+
+  fetch("/api/law/ask/status").then((r) => r.json()).then((s) => {
+    status = s;
+    $("#code-box").style.display = s.ai_enabled ? "flex" : "none";
+    $("#status").innerHTML = s.ai_enabled
+      ? '<span class="dot on"></span>AI 回答已啟用：回答只引用檢索到的條文，每個論點附條文編號。'
+      : '<span class="dot"></span>' + esc(s.message || "AI 回答尚未啟用，先提供條文檢索。");
+  }).catch(() => { $("#status").textContent = "無法讀取系統狀態，請稍後重新整理。"; });
+
+  fetch("/api/law/laws").then((r) => r.json()).then((laws) => {
+    const d = laws.map((l) => l.source_update).filter(Boolean).sort().pop();
+    if (d) $("#version").textContent = "　資料版本：" + d + "。";
+  }).catch(() => {});
+
+  // ---------- 提問 ----------
+  async function submit() {
+    const q = $("#q").value.trim();
+    if (!q || busy) return;
+    busy = true; $("#go").disabled = true;
+    sources = []; blocks = new Map();
+    $("#answer").innerHTML = ""; $("#answer-notes").innerHTML = ""; $("#sources").innerHTML = "";
+    $("#answer-sec").classList.remove("hidden"); $("#sources-sec").classList.add("hidden");
+    setLoading("查詢條文中…");
+    const headers = { "Content-Type": "application/json" };
+    if (status.ai_enabled) {
+      const code = $("#code").value.trim();
+      store.set("fire-review-access-code", code);
+      headers["X-Access-Code"] = encodeURIComponent(code);
+    }
+    try {
+      const res = await fetch("/api/law/ask", { method: "POST", headers, body: JSON.stringify({ question: q }) });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        const msg = typeof j.detail === "string" ? j.detail : "查詢失敗（" + res.status + "）";
+        note("err", msg);
+        if (res.status === 401) $("#code").focus();
+        await fallbackSearch(q);
+        return;
+      }
+      await readStream(res);
+    } catch (e) {
+      note("err", "連線中斷，請再試一次。");
+    } finally {
+      setLoading(null); busy = false; $("#go").disabled = false;
+    }
+  }
+
+  async function readStream(res) {
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf("\n\n")) >= 0) {
+        const raw = buf.slice(0, i); buf = buf.slice(i + 2);
+        let ev = "message", data = "";
+        for (const line of raw.split("\n")) {
+          if (line.startsWith("event:")) ev = line.slice(6).trim();
+          else if (line.startsWith("data:")) data += line.slice(5).trim();
+        }
+        if (data) handle(ev, JSON.parse(data));
+      }
+    }
+  }
+
+  function handle(ev, d) {
+    if (ev === "sources") {
+      sources = d.sources || [];
+      renderSources();
+      if (status.ai_enabled && sources.length) setLoading("AI 撰寫回答中…");
+    } else if (ev === "block") {
+      if (!blocks.has(d.index)) blocks.set(d.index, { text: "", cites: [] });
+    } else if (ev === "text") {
+      setLoading(null);
+      const b = blocks.get(d.index) || { text: "", cites: [] };
+      b.text += d.text; blocks.set(d.index, b); renderAnswer();
+    } else if (ev === "cite") {
+      const b = blocks.get(d.index) || { text: "", cites: [] };
+      if (!b.cites.includes(d.n)) b.cites.push(d.n);
+      blocks.set(d.index, b); renderAnswer(); markCited(d.n);
+    } else if (ev === "notice") {
+      note("info", d.message);
+    } else if (ev === "error") {
+      note("err", d.message);
+    } else if (ev === "done") {
+      if (d.unverified && d.unverified.length) {
+        const names = d.unverified.map((a) => a.includes("-") ? "第" + a.replace("-", "條之") : "第" + a + "條");
+        note("warn", "回答提到" + names.join("、") + "，但這次沒有檢索到這些條文的原文，請自行查證。");
+      }
+      if (d.stop_reason === "max_tokens") note("warn", "回答太長被截斷，請把問題問得更具體。");
+      if (d.stop_reason === "refusal") note("warn", "AI 無法回答這個問題，請參考下方條文。");
+    }
+  }
+
+  // ---------- 回答：極簡 Markdown（段落、條列、粗體）＋引用標記 ----------
+  function renderAnswer() {
+    const OPEN = "", CLOSE = "";
+    let s = "";
+    for (const k of [...blocks.keys()].sort((a, b) => a - b)) {
+      const b = blocks.get(k);
+      s += b.text;
+      if (b.cites.length) s += OPEN + b.cites.join(",") + CLOSE;
+    }
+    let html = "", list = null, para = [];
+    const inline = (t) => esc(t)
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/([\d,]+)/g, (_, ns) => ns.split(",").map((n) => '<a class="cite" href="#src-' + n + '" data-n="' + n + '">' + n + "</a>").join(""));
+    const flushPara = () => { if (para.length) { html += "<p>" + para.map(inline).join("<br>") + "</p>"; para = []; } };
+    const flushList = () => { if (list) { html += "<" + list.tag + ">" + list.items.map((t) => "<li>" + inline(t) + "</li>").join("") + "</" + list.tag + ">"; list = null; } };
+    for (const line of s.split("\n")) {
+      const ul = line.match(/^\s*[-•*]\s+(.*)$/), ol = line.match(/^\s*\d+[.、)]\s*(.*)$/);
+      if (ul || ol) {
+        flushPara();
+        const tag = ul ? "ul" : "ol";
+        if (!list || list.tag !== tag) { flushList(); list = { tag, items: [] }; }
+        list.items.push((ul || ol)[1]);
+      } else if (!line.trim()) { flushPara(); flushList(); }
+      else if (list && /^\s{2,}/.test(line)) { list.items[list.items.length - 1] += " " + line.trim(); }
+      else { flushList(); para.push(line); }
+    }
+    flushPara(); flushList();
+    $("#answer").innerHTML = html;
+  }
+
+  document.addEventListener("click", (e) => {
+    const a = e.target.closest("a.cite");
+    if (!a) return;
+    e.preventDefault();
+    const card = document.getElementById("src-" + a.dataset.n);
+    if (!card) return;
+    card.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+    card.classList.add("flash"); setTimeout(() => card.classList.remove("flash"), 1500);
+  });
+
+  // ---------- 條文卡片 ----------
+  function renderSources() {
+    const box = $("#sources");
+    box.innerHTML = "";
+    $("#sources-sec").classList.toggle("hidden", !sources.length);
+    $("#sources-title").textContent = "相關條文（" + sources.length + " 條，依相關程度排序）";
+    sources.forEach((s, i) => box.appendChild(sourceCard(s, i + 1)));
+  }
+
+  function sourceCard(s, n) {
+    const el = document.createElement("article");
+    el.className = "card src"; el.id = "src-" + n;
+    const meta = [s.law_name, s.law_modified ? "修正 " + s.law_modified : "", s.chapter].filter(Boolean).join("｜");
+    const isBox = /[┌│└├]/.test(s.text || "");
+    let h = '<header><span class="num">' + n + '</span><div><h3>' + esc(s.citation) + '</h3><p class="meta">' + esc(meta) + "</p></div></header>";
+    if (s.parents && s.parents.length) h += '<p class="parents">' + esc(s.parents.join(" ＞ ")) + "</p>";
+    h += isBox ? '<pre class="box">' + esc(s.text) + "</pre>" : '<p class="text">' + esc(s.text) + "</p>";
+    if (s.legend && s.legend.symbol_urls && s.legend.symbol_urls.length) {
+      h += '<div class="legend">' + s.legend.symbol_urls.map((u) => '<img src="' + esc(u) + '" alt="' + esc(s.legend.name) + ' 圖例" loading="lazy">').join("") + "</div>";
+      if (s.legend.note) h += '<p class="meta">備註：' + esc(s.legend.note) + "</p>";
+    }
+    if (s.table_warning) h += '<p class="note warn">' + esc(s.table_warning) + "</p>";
+    if (s.warning) h += '<p class="note warn">' + esc(s.warning) + (s.pdf_table_url ? '　<a href="' + esc(s.pdf_table_url) + '" target="_blank" rel="noopener">開啟官方 PDF</a>' : "") + "</p>";
+    const acts = [];
+    if (s.article_text && s.article_text !== s.text) acts.push('<button type="button" data-act="article">看整條</button>');
+    if (s.table && s.table.url) acts.push('<button type="button" data-act="table">看表格</button>');
+    if (acts.length) h += '<div class="actions">' + acts.join("") + "</div>";
+    h += '<div class="more hidden" data-more="article"></div><div class="more scroll hidden" data-more="table"></div>';
+    el.innerHTML = h;
+    el.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-act]");
+      if (!b) return;
+      const panel = el.querySelector('[data-more="' + b.dataset.act + '"]');
+      if (!panel.classList.contains("hidden")) { panel.classList.add("hidden"); return; }
+      if (b.dataset.act === "article") {
+        panel.textContent = s.article_text;
+        panel.classList.remove("hidden");
+      } else {
+        panel.textContent = "載入中…"; panel.classList.remove("hidden");
+        fetch(s.table.url).then((r) => r.json()).then((t) => { panel.innerHTML = tableHtml(t); })
+          .catch(() => { panel.textContent = "表格載入失敗。"; });
+      }
+    });
+    return el;
+  }
+
+  function tableHtml(t) {
+    const cols = t.columns || [];
+    let h = "";
+    if (t.warning) h += '<p class="note warn" style="margin-top:0">' + esc(t.warning) + "</p>";
+    h += '<table class="law"><thead><tr><th>' + esc(t.title || "") + "</th>" + cols.map((c) => "<th>" + esc(c) + "</th>").join("") + "</tr></thead><tbody>";
+    for (const r of t.rows || []) {
+      h += "<tr><td>" + esc(r.place) + "</td>" + cols.map((c) => {
+        if (r.marks) return "<td>" + (r.marks.includes(c) ? "○" : "") + "</td>";
+        const cell = (r.cells || {})[c];
+        return "<td>" + esc(cell && cell.devices && cell.devices.length ? cell.devices.join("、") : "") + "</td>";
+      }).join("") + "</tr>";
+    }
+    h += "</tbody></table>";
+    if (t.notes && t.notes.length) h += t.notes.map((x) => '<p class="meta">' + esc(x) + "</p>").join("");
+    return h;
+  }
+
+  function markCited(n) { const c = document.getElementById("src-" + n); if (c) c.classList.add("cited"); }
+
+  async function fallbackSearch(q) {
+    try {
+      const r = await fetch("/api/law/search?limit=8&q=" + encodeURIComponent(q.slice(0, 200)));
+      if (!r.ok) return;
+      sources = (await r.json()).results || [];
+      renderSources();
+    } catch {}
+  }
+
+  function setLoading(text) {
+    $("#loading").classList.toggle("hidden", !text);
+    if (text) $("#loading-text").textContent = text;
+  }
+
+  function note(kind, msg) {
+    const p = document.createElement("p");
+    p.className = "note " + kind; p.textContent = msg;
+    $("#answer-notes").appendChild(p);
+  }
+})();
+</script>
+</body>
+</html>

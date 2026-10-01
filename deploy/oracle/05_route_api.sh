@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 把主機層 Caddy 裡本系統的網站區塊換成新版（含 /api/* 轉送到 127.0.0.1:8100）。
+# 把主機層 Caddy 裡本系統的網站區塊換成新版（整站轉送到 127.0.0.1:8100：法規問答網頁與 API）。
 # 只動本系統自己的區塊：舊版（04 新增、無結尾標記）或新版（BEGIN/END 標記之間）。
 # 先備份 → 換區塊 → 驗證通過才平滑重載 → 比對既有網址前後狀態 → 失敗就還原。
 set -euo pipefail
@@ -37,16 +37,12 @@ sudo tee -a "$NEW" >/dev/null <<BLOCK
 # ---- BEGIN litian ----
 # 消防圖審系統（由 deploy/oracle/05_route_api.sh 管理，只改這兩行標記之間）
 $SITE {
-	encode zstd gzip
+	# 不加 encode：問答以 SSE 逐字串流，壓縮可能造成緩衝
 	handle /healthz {
 		respond "litian ok" 200
 	}
-	handle /api/* {
-		reverse_proxy 127.0.0.1:8100
-	}
 	handle {
-		header Content-Type "text/plain; charset=utf-8"
-		respond "消防圖審系統：建置中。法規檢索 API：/api/law/search?q=…" 200
+		reverse_proxy 127.0.0.1:8100
 	}
 }
 # ---- END litian ----
