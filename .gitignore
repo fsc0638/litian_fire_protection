@@ -6,3 +6,4 @@ data/raw/
 .env
 *.egg-info/
 *.local.md
+data/lawdb/legend.tmp/

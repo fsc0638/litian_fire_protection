@@ -123,3 +123,20 @@ def test_build_report_exists():
     r = json.loads(p.read_text(encoding="utf-8"))
     assert r["warnings"] == []
     assert r["source_update"]
+
+
+def test_failed_build_keeps_previous_legend(tmp_path, monkeypatch):
+    """建置中途失敗時，不可先刪掉既有的圖例圖（2026-10-01 雲主機連不上消防署網站時發生）。"""
+    from litian.lawdb import build as B
+    out = tmp_path / "lawdb"
+    (out / "legend").mkdir(parents=True)
+    keep = out / "legend" / "FL019489_A3_001.png"
+    keep.write_bytes(b"png")
+    monkeypatch.setattr(B, "fetch_all", lambda raw, refresh: {"_update": {}})
+
+    def unreachable(*a, **k):
+        raise TimeoutError("連不上消防署網站")
+    monkeypatch.setattr(B.nfa, "fetch", unreachable)
+    with pytest.raises(Exception):
+        B.build(tmp_path / "raw", out)
+    assert keep.exists()

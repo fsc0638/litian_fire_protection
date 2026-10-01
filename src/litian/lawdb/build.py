@@ -40,14 +40,15 @@ def build(raw_dir: Path, out_dir: Path, refresh: bool = False, table_dir: Path =
 
     laws, nodes, warnings, legend = [], [], [], []
     legend_dir = out_dir / "legend"
-    if legend_dir.exists():
-        shutil.rmtree(legend_dir)
+    staging = out_dir / "legend.tmp"   # 圖例圖先產生在暫存資料夾，整個建置成功才替換；下載或解析失敗時保留舊圖
+    if staging.exists():
+        shutil.rmtree(staging)
     for src in LAWS:
         if src.kind == "nfa":
             paths = nfa.fetch(src.pcode, raw_dir, refresh)
             law, ns, w = nfa.parse_rule(paths["html"], src)
             for att in nfa.ATTACHMENTS.get(src.pcode, ()):
-                lnodes, entries, lw = nfa.parse_legend(paths[f"{att.key}.odt"], src, att, legend_dir)
+                lnodes, entries, lw = nfa.parse_legend(paths[f"{att.key}.odt"], src, att, staging)
                 ns += lnodes
                 legend += entries
                 w += lw
@@ -73,6 +74,10 @@ def build(raw_dir: Path, out_dir: Path, refresh: bool = False, table_dir: Path =
     xrefs = extract_xrefs(nodes)
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    if legend_dir.exists():
+        shutil.rmtree(legend_dir)
+    if staging.exists():
+        staging.rename(legend_dir)
     _dump(out_dir / "laws.json", [l.to_dict() for l in laws])
     with open(out_dir / "nodes.jsonl", "w", encoding="utf-8", newline="\n") as fh:
         for n in nodes:
