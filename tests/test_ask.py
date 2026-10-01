@@ -200,7 +200,8 @@ def test_status_reports_model(client, monkeypatch):
     assert st["ai_enabled"] is True and st["model"] == "gpt-5.6-sol" and st["access_code_required"] is True
 
 
-def test_ask_requires_access_code(client, monkeypatch):
+def test_ask_requires_access_code(client, monkeypatch, caplog):
+    caplog.set_level("INFO", logger="litian.ask")
     enable_ai(monkeypatch)
     assert client.post("/api/law/ask", json={"question": "KTV"}).status_code == 401
     assert client.post("/api/law/ask", json={"question": "KTV"}, headers={"X-Access-Code": "wrong"}).status_code == 401
@@ -210,6 +211,7 @@ def test_ask_requires_access_code(client, monkeypatch):
     assert [e for e, _ in evs] == ["sources", "block", "text", "text", "done"]
     assert "usage" not in evs[-1][1]                                   # 用量只記在主機日誌，不給前端
     assert evs[-1][1]["invalid_cites"] == [9]
+    assert "ask done" in caplog.text and "'input_tokens': 1200" in caplog.text
 
 
 def test_ask_rate_limits(client, monkeypatch):

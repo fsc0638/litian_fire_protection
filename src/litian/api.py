@@ -31,6 +31,11 @@ from .lawdb import search as S
 from .lawdb import tables as T
 
 log = logging.getLogger("litian.ask")
+if not log.handlers:   # uvicorn 不會替自訂 logger 設輸出；沒有這段，INFO 等級的用量紀錄會被丟掉
+    _h = logging.StreamHandler()
+    _h.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
+    log.addHandler(_h)
+log.setLevel(logging.INFO)
 
 pool: ConnectionPool | None = None
 LEGEND_DIR = Path("data/lawdb/legend")
