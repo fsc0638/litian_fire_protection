@@ -193,7 +193,7 @@ footer p { margin: 0 0 .4em; }
 
   const statusReady = fetch("/api/law/ask/status").then((r) => r.json()).then((s) => {
     status = s;
-    $("#code-box").style.display = s.ai_enabled ? "flex" : "none";
+    $("#code-box").style.display = s.access_code_required ? "flex" : "none";
     $("#status").innerHTML = s.ai_enabled
       ? '<span class="dot on"></span>AI 回答已啟用：回答只引用檢索到的條文，每個論點附條文編號。'
       : '<span class="dot"></span>' + esc(s.message || "AI 回答尚未啟用，先提供條文檢索。");
@@ -222,7 +222,7 @@ footer p { margin: 0 0 .4em; }
     $("#answer-sec").classList.remove("hidden"); $("#sources-sec").classList.add("hidden");
     setLoading("查詢條文中…");
     const headers = { "Content-Type": "application/json" };
-    if (status.ai_enabled) {
+    if (status.access_code_required) {
       const code = $("#code").value.trim();
       store.set("fire-review-access-code", code);
       headers["X-Access-Code"] = encodeURIComponent(code);

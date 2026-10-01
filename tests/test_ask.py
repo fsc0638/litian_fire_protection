@@ -174,10 +174,18 @@ def test_ask_without_ai_returns_sources_only(client):
     assert evs[0][1]["sources"][0]["node_id"] == "D0120029/17/1/1"
 
 
-def test_key_without_access_code_stays_disabled(client, monkeypatch):
+def test_key_only_enables_ai_without_access_code(client, monkeypatch):
+    """2026-10-01 使用者決定先不用存取碼：只有金鑰就啟用，不帶存取碼也能問，但每分鐘與每日上限照樣算。"""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     st = client.get("/api/law/ask/status").json()
-    assert st["ai_enabled"] is False and "存取碼" in st["message"]
+    assert st["ai_enabled"] is True and st["access_code_required"] is False
+    r = client.post("/api/law/ask", json={"question": "KTV要不要裝撒水"})
+    assert r.status_code == 200
+    assert [e for e, _ in parse_sse(r.text)] == ["sources", "block", "text", "text", "done"]
+    assert api._daily["count"] == 1
+    h = {"X-Forwarded-For": "203.0.113.77"}
+    codes = [client.post("/api/law/ask", json={"question": "KTV"}, headers=h).status_code for _ in range(api.ASK_PER_MINUTE + 1)]
+    assert codes[-1] == 429
 
 
 def test_short_access_code_keeps_ai_disabled(client, monkeypatch):
@@ -189,7 +197,7 @@ def test_short_access_code_keeps_ai_disabled(client, monkeypatch):
 def test_status_reports_model(client, monkeypatch):
     enable_ai(monkeypatch)
     st = client.get("/api/law/ask/status").json()
-    assert st["ai_enabled"] is True and st["model"] == "gpt-5.6-sol"
+    assert st["ai_enabled"] is True and st["model"] == "gpt-5.6-sol" and st["access_code_required"] is True
 
 
 def test_ask_requires_access_code(client, monkeypatch):

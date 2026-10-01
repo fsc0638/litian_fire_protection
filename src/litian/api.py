@@ -1,7 +1,7 @@
 """消防圖審系統 API（第 0 期：法規庫與法規問答網頁）。
 
 環境變數：DATABASE_URL、MEILI_URL、MEILI_MASTER_KEY
-  法規問答（選填）：OPENAI_API_KEY、ASK_ACCESS_CODE（兩者都有才啟用 AI 回答，模型 gpt-5.6-sol）、ASK_DAILY_LIMIT（每日 AI 問答上限，預設 200）
+  法規問答（選填）：OPENAI_API_KEY（有才啟用 AI 回答，模型 gpt-5.6-sol）、ASK_ACCESS_CODE（選填，設定後才要求存取碼）、ASK_DAILY_LIMIT（每日 AI 問答上限，預設 200）
 啟動：uvicorn litian.api:app --host 0.0.0.0 --port 8000
 """
 
@@ -206,13 +206,16 @@ _daily = {"day": "", "count": 0}       # 記在記憶體：容器重啟（重新
 _fails: dict[str, deque] = {}
 
 
+def _access_code() -> str:
+    """存取碼（選填）：空白＝不要求存取碼（2026-10-01 使用者決定先不用）。"""
+    return os.environ.get("ASK_ACCESS_CODE", "").strip()
+
+
 def _ai_state() -> tuple[bool, str]:
-    """兩樣都設定才啟用 AI 回答；缺任何一樣就只列檢索結果（不花錢、不擋人）。"""
+    """有 AI 金鑰才啟用 AI 回答；沒有就只列檢索結果（不花錢）。"""
     if not os.environ.get("OPENAI_API_KEY", "").strip():
         return False, "AI 回答尚未啟用：管理者還沒設定 AI 金鑰。先列出檢索到的相關條文。"
-    if not os.environ.get("ASK_ACCESS_CODE", "").strip():
-        return False, "AI 回答尚未啟用：管理者還沒設定存取碼。先列出檢索到的相關條文。"
-    if len(os.environ["ASK_ACCESS_CODE"].strip()) < ACCESS_CODE_MIN:
+    if _access_code() and len(_access_code()) < ACCESS_CODE_MIN:
         return False, f"AI 回答尚未啟用：存取碼太短，至少要 {ACCESS_CODE_MIN} 個字元。先列出檢索到的相關條文。"
     return True, ""
 
@@ -293,6 +296,7 @@ def _ask_sources(q: str) -> list[dict]:
 def ask_status():
     ai, message = _ai_state()
     return {"ai_enabled": ai, "message": message, "model": A.MODEL if ai else None,
+            "access_code_required": ai and bool(_access_code()),
             "daily_limit": _daily_limit(), "question_max": A.QUESTION_MAX}
 
 
@@ -309,7 +313,8 @@ async def ask(body: AskBody, request: Request, x_access_code: str = Header("")):
     ai, message = _ai_state()
     if ai:
         ip = _client_ip(request)
-        _check_code(ip, unquote(x_access_code), os.environ["ASK_ACCESS_CODE"].strip())
+        if _access_code():
+            _check_code(ip, unquote(x_access_code), _access_code())
         _take_quota(ip)
     sources = await run_in_threadpool(_ask_sources, q)
 
