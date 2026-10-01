@@ -1,7 +1,7 @@
 """消防圖審系統 API（第 0 期：法規庫與法規問答網頁）。
 
 環境變數：DATABASE_URL、MEILI_URL、MEILI_MASTER_KEY
-  法規問答（選填）：OPENAI_API_KEY（有才啟用 AI 回答，模型 gpt-5.6-sol）、ASK_ACCESS_CODE（選填，設定後才要求存取碼）、ASK_DAILY_LIMIT（每日 AI 問答上限，預設 200）
+  法規問答（選填）：OPENAI_API_KEY（有才啟用 AI 回答，模型 gpt-5.6-sol）、ASK_ACCESS_CODE（選填，設定後才要求存取碼）、ASK_DAILY_LIMIT（每日 AI 問答上限，預設 500；台北時間每天 23:59 重新計算，計數存在資料庫）
 啟動：uvicorn litian.api:app --host 0.0.0.0 --port 8000
 """
 
@@ -43,7 +43,7 @@ LEGEND_FILE_RE = re.compile(r"[A-Za-z0-9_]+\.png")   # 只允許建置產生的�
 WEB_INDEX = Path(__file__).parent / "web" / "index.html"
 TW = timezone(timedelta(hours=8))
 ASK_SOURCES = 8          # 每題送給 AI 的條文數
-ASK_PER_MINUTE = 6       # 同一來源每分鐘的 AI 問答上限
+PLACE_PIN_MAX = 3        # 問題提到的場所代碼不超過此數時，自動帶入其第 12 條分類條文
 ACCESS_CODE_MIN = 12     # 存取碼最短長度（太短容易被猜中）
 CODE_FAIL_MAX = 10       # 同一來源一小時內存取碼錯誤上限，超過就暫停一小時
 
@@ -54,6 +54,8 @@ NODE_COLS = "node_id, pcode, article, level, path, text, parent_id, citation, ch
 async def lifespan(_: FastAPI):
     global pool
     pool = ConnectionPool(os.environ["DATABASE_URL"], min_size=1, max_size=4, kwargs={"row_factory": dict_row}, open=True)
+    with pool.connection() as c:
+        c.execute(USAGE_SCHEMA)
     yield
     pool.close()
 
@@ -206,8 +208,10 @@ def table(node_id: str):
 # ---------------- 法規問答 ----------------
 
 _openai: openai.AsyncOpenAI | None = None
-_recent: dict[str, deque] = {}
-_daily = {"day": "", "count": 0}       # 記在記憶體：容器重啟（重新部署）當天會歸零
+USAGE_SCHEMA = "CREATE TABLE IF NOT EXISTS ask_usage (day text PRIMARY KEY, count integer NOT NULL)"
+# 原子地加一；已達上限時不加、不回傳列
+USAGE_BUMP = ("INSERT INTO ask_usage (day, count) VALUES (%s, 1) "
+              "ON CONFLICT (day) DO UPDATE SET count = ask_usage.count + 1 WHERE ask_usage.count < %s RETURNING count")
 _fails: dict[str, deque] = {}
 
 
@@ -227,9 +231,28 @@ def _ai_state() -> tuple[bool, str]:
 
 def _daily_limit() -> int:
     try:
-        return max(0, int(os.environ.get("ASK_DAILY_LIMIT") or 200))
+        return max(0, int(os.environ.get("ASK_DAILY_LIMIT") or 500))
     except ValueError:
-        return 200
+        return 500
+
+
+def _usage_day(now: datetime | None = None) -> str:
+    """用量計算日：台北時間每天 23:59 換日（使用者指定），所以 23:59 之後算到隔天。"""
+    now = now or datetime.now(TW)
+    return (now.astimezone(TW) + timedelta(minutes=1)).date().isoformat()
+
+
+def _bump_daily(day: str, limit: int) -> bool:
+    """當日用量加一；已達上限回傳 False。存在資料庫，重新部署也不會歸零。"""
+    if limit <= 0:
+        return False
+    with pool.connection() as c:
+        return c.execute(USAGE_BUMP, (day, limit)).fetchone() is not None
+
+
+def _used_today() -> int:
+    r = _one("SELECT count FROM ask_usage WHERE day = %s", _usage_day())
+    return r["count"] if r else 0
 
 
 def _client_ip(request: Request) -> str:
@@ -238,21 +261,11 @@ def _client_ip(request: Request) -> str:
     return xff.split(",")[-1].strip() or (request.client.host if request.client else "unknown")
 
 
-def _take_quota(ip: str) -> None:
-    today = datetime.now(TW).date().isoformat()
-    if _daily["day"] != today:
-        _daily.update(day=today, count=0)
-        _recent.clear()
-    if _daily["count"] >= _daily_limit():
-        raise HTTPException(429, "今天的 AI 問答次數已達上限，請明天再試。檢索條文仍可使用。")
-    now = time.monotonic()
-    q = _recent.setdefault(ip, deque())
-    while q and now - q[0] > 60:
-        q.popleft()
-    if len(q) >= ASK_PER_MINUTE:
-        raise HTTPException(429, "問得太快了，請過一分鐘再試。")
-    q.append(now)
-    _daily["count"] += 1
+def _take_quota() -> None:
+    """每日 AI 問答總數上限（不分來源；使用者決定不設每分鐘限制）。"""
+    limit = _daily_limit()
+    if not _bump_daily(_usage_day(), limit):
+        raise HTTPException(429, f"今天的 AI 問答次數已達上限（{limit} 次），每天 23:59 重新計算。檢索條文仍可使用。")
 
 
 def _check_code(ip: str, given: str, code: str) -> None:
@@ -275,10 +288,32 @@ def _client() -> openai.AsyncOpenAI:
     return _openai
 
 
+def _place_nodes(q: str) -> list[str]:
+    """問題提到的場所（例：KTV → 甲-1）對應的第 12 條分類條文節點。
+    只提到類別（例：「甲類場所」會展開成 7 個代碼）時不帶，避免條文數暴增。"""
+    occ_rows = _all("SELECT code, node_id, text FROM occupancy_code")
+    codes, _ = S.detect_places(q, S.place_terms(occ_rows), [r["code"] for r in occ_rows])
+    if not codes or len(codes) > PLACE_PIN_MAX:
+        return []
+    by_code = {r["code"]: r["node_id"] for r in occ_rows}
+    return [by_code[c] for c in sorted(codes) if c in by_code]
+
+
 def _ask_sources(q: str) -> list[dict]:
-    """檢索結果補上「上層條文」與結構化表格文字，讓 AI 看得懂第幾款第幾目在講什麼。"""
+    """檢索結果補上「上層條文」與結構化表格文字，讓 AI 看得懂第幾款第幾目在講什麼。
+    問題提到具體場所時，該場所的第 12 條分類條文排在最前面（檢索沒抓到時自動補上）。"""
+    results = _retrieve(q, ASK_SOURCES)
+    have = {r["node_id"] for r in results}
+    pins, laws = [], None
+    for nid in _place_nodes(q):
+        if nid in have:
+            continue
+        n = _node(nid)
+        if n:
+            laws = laws or _law_names()
+            pins.append({**_present(n, laws), "routes": ["place"], "score": None})
     out = []
-    for r in _retrieve(q, ASK_SOURCES):
+    for r in pins + results:
         n = _node(r["node_id"])
         parents, pid = [], n["parent_id"] if n else None
         while pid:
@@ -302,6 +337,7 @@ def ask_status():
     ai, message = _ai_state()
     return {"ai_enabled": ai, "message": message, "model": A.MODEL if ai else None,
             "access_code_required": ai and bool(_access_code()),
+            "used_today": _used_today() if ai else 0,
             "daily_limit": _daily_limit(), "question_max": A.QUESTION_MAX}
 
 
@@ -320,7 +356,7 @@ async def ask(body: AskBody, request: Request, x_access_code: str = Header("")):
         ip = _client_ip(request)
         if _access_code():
             _check_code(ip, unquote(x_access_code), _access_code())
-        _take_quota(ip)
+        _take_quota()
     sources = await run_in_threadpool(_ask_sources, q)
 
     async def events():

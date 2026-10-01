@@ -146,8 +146,15 @@ def parse_sse(text: str) -> list[tuple[str, dict]]:
 def client(monkeypatch):
     monkeypatch.setattr(api, "_ask_sources", lambda q: [dict(s) for s in SOURCES])
     monkeypatch.setattr(api, "_client", lambda: NS(responses=FakeResponses(fake_events())))
-    api._daily.update(day="", count=0)
-    api._recent.clear()
+    usage: dict[str, int] = {}
+
+    def fake_bump(day, limit):
+        if limit <= 0 or usage.get(day, 0) >= limit:
+            return False
+        usage[day] = usage.get(day, 0) + 1
+        return True
+    monkeypatch.setattr(api, "_bump_daily", fake_bump)
+    monkeypatch.setattr(api, "_used_today", lambda: usage.get(api._usage_day(), 0))
     api._fails.clear()
     for k in ("OPENAI_API_KEY", "ASK_ACCESS_CODE", "ASK_DAILY_LIMIT"):
         monkeypatch.delenv(k, raising=False)
@@ -175,17 +182,18 @@ def test_ask_without_ai_returns_sources_only(client):
 
 
 def test_key_only_enables_ai_without_access_code(client, monkeypatch):
-    """2026-10-01 使用者決定先不用存取碼：只有金鑰就啟用，不帶存取碼也能問，但每分鐘與每日上限照樣算。"""
+    """2026-10-01 使用者決定先不用存取碼、也不設每分鐘限制：只有金鑰就啟用，只受每日上限。"""
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     st = client.get("/api/law/ask/status").json()
     assert st["ai_enabled"] is True and st["access_code_required"] is False
     r = client.post("/api/law/ask", json={"question": "KTV要不要裝撒水"})
     assert r.status_code == 200
     assert [e for e, _ in parse_sse(r.text)] == ["sources", "block", "text", "text", "done"]
-    assert api._daily["count"] == 1
+    assert client.get("/api/law/ask/status").json()["used_today"] == 1
+    # 同一來源連問 10 次也不會被擋（沒有每分鐘限制）
     h = {"X-Forwarded-For": "203.0.113.77"}
-    codes = [client.post("/api/law/ask", json={"question": "KTV"}, headers=h).status_code for _ in range(api.ASK_PER_MINUTE + 1)]
-    assert codes[-1] == 429
+    assert {client.post("/api/law/ask", json={"question": "KTV"}, headers=h).status_code for _ in range(10)} == {200}
+    assert client.get("/api/law/ask/status").json()["used_today"] == 11
 
 
 def test_short_access_code_keeps_ai_disabled(client, monkeypatch):
@@ -214,15 +222,6 @@ def test_ask_requires_access_code(client, monkeypatch, caplog):
     assert "ask done" in caplog.text and "'input_tokens': 1200" in caplog.text
 
 
-def test_ask_rate_limits(client, monkeypatch):
-    enable_ai(monkeypatch)
-    h = {"X-Access-Code": CODE, "X-Forwarded-For": "203.0.113.5"}
-    codes = [client.post("/api/law/ask", json={"question": "KTV"}, headers=h).status_code for _ in range(api.ASK_PER_MINUTE + 1)]
-    assert codes[:-1] == [200] * api.ASK_PER_MINUTE and codes[-1] == 429
-    other = {"X-Access-Code": CODE, "X-Forwarded-For": "203.0.113.9"}
-    assert client.post("/api/law/ask", json={"question": "KTV"}, headers=other).status_code == 200
-
-
 def test_ask_daily_limit(client, monkeypatch):
     enable_ai(monkeypatch)
     monkeypatch.setenv("ASK_DAILY_LIMIT", "2")
@@ -230,6 +229,22 @@ def test_ask_daily_limit(client, monkeypatch):
                          headers={"X-Access-Code": CODE, "X-Forwarded-For": f"198.51.100.{i}"}).status_code
              for i in range(3)]
     assert codes == [200, 200, 429]
+    r = client.post("/api/law/ask", json={"question": "KTV"}, headers={"X-Access-Code": CODE})
+    assert "23:59" in r.json()["detail"]
+
+
+def test_daily_limit_default_500(monkeypatch):
+    monkeypatch.delenv("ASK_DAILY_LIMIT", raising=False)
+    assert api._daily_limit() == 500
+    monkeypatch.setenv("ASK_DAILY_LIMIT", "abc")
+    assert api._daily_limit() == 500
+
+
+def test_usage_day_rolls_over_at_2359_taipei():
+    from datetime import datetime
+    assert api._usage_day(datetime(2026, 10, 1, 23, 58, 59, tzinfo=api.TW)) == "2026-10-01"
+    assert api._usage_day(datetime(2026, 10, 1, 23, 59, 0, tzinfo=api.TW)) == "2026-10-02"
+    assert api._usage_day(datetime(2026, 10, 2, 0, 30, tzinfo=api.TW)) == "2026-10-02"
 
 
 def test_access_code_bruteforce_lockout(client, monkeypatch):
@@ -270,3 +285,61 @@ def test_response_failed_sends_error_event(client, monkeypatch):
     monkeypatch.setattr(api, "_client", lambda: NS(responses=FakeResponses(events)))
     evs = parse_sse(client.post("/api/law/ask", json={"question": "KTV"}, headers={"X-Access-Code": CODE}).text)
     assert [e for e, _ in evs] == ["sources", "block", "error"]
+
+
+# ---------------- 場所自動帶入第 12 條分類條文 ----------------
+
+OCC_ROWS = [
+    {"code": "甲-1", "node_id": "D0120029/12/1/1/1",
+     "text": "電影片映演場所（戲院、電影院）、歌廳、舞廳、夜總會、俱樂部、視聽歌唱場所（KTV等）、酒家、酒吧"},
+    {"code": "甲-3", "node_id": "D0120029/12/1/1/3", "text": "觀光旅館、飯店、旅館、招待所（限有寢室客房者）"},
+    {"code": "甲-5", "node_id": "D0120029/12/1/1/5", "text": "餐廳、飲食店、咖啡廳、茶藝館"},
+]
+NODES = {
+    "D0120029/12": {"node_id": "D0120029/12", "pcode": "D0120029", "article": "12", "level": "article", "path": [],
+                    "text": "各類場所按用途分類如下：……", "parent_id": None, "citation": "設置標準第12條", "chapter": "第二編",
+                    "has_table": False, "pdf_table_url": None, "deleted": False, "children": 1},
+    "D0120029/12/1": {"node_id": "D0120029/12/1", "pcode": "D0120029", "article": "12", "level": "paragraph", "path": [1],
+                      "text": "各類場所按用途分類如下：", "parent_id": "D0120029/12", "citation": "設置標準第12條",
+                      "chapter": "第二編", "has_table": False, "pdf_table_url": None, "deleted": False, "children": 1},
+    "D0120029/12/1/1": {"node_id": "D0120029/12/1/1", "pcode": "D0120029", "article": "12", "level": "item", "path": [1, 1],
+                        "text": "一、甲類場所：", "parent_id": "D0120029/12/1", "citation": "設置標準第12條第1款",
+                        "chapter": "第二編", "has_table": False, "pdf_table_url": None, "deleted": False, "children": 7},
+    "D0120029/12/1/1/1": {"node_id": "D0120029/12/1/1/1", "pcode": "D0120029", "article": "12", "level": "subitem",
+                          "path": [1, 1, 1], "text": OCC_ROWS[0]["text"], "parent_id": "D0120029/12/1/1",
+                          "citation": "設置標準第12條第1款第1目", "chapter": "第二編", "has_table": False,
+                          "pdf_table_url": None, "deleted": False, "children": 0},
+    "D0120029/17/1/1": {"node_id": "D0120029/17/1/1", "pcode": "D0120029", "article": "17", "level": "item",
+                        "path": [1, 1], "text": SOURCES[0]["text"], "parent_id": None,
+                        "citation": "設置標準第17條第1項第1款", "chapter": "第二編", "has_table": False,
+                        "pdf_table_url": None, "deleted": False, "children": 0},
+}
+
+
+@pytest.fixture
+def fake_db(monkeypatch):
+    monkeypatch.setattr(api, "_all", lambda sql, *a: OCC_ROWS if "occupancy_code" in sql else [])
+    monkeypatch.setattr(api, "_one", lambda sql, *a: None)
+    monkeypatch.setattr(api, "_node", lambda nid: NODES.get(nid))
+    monkeypatch.setattr(api, "_law_names", lambda: {"D0120029": {"name": "各類場所消防安全設備設置標準", "modified": "20240424"}})
+
+
+def test_place_nodes_detects_specific_places(fake_db):
+    assert api._place_nodes("KTV 要不要裝自動撒水設備？") == ["D0120029/12/1/1/1"]
+    assert api._place_nodes("旅館和餐廳要設什麼") == ["D0120029/12/1/1/3", "D0120029/12/1/1/5"]
+    assert api._place_nodes("撒水頭間距多少") == []
+
+
+def test_ask_sources_pins_classification_first(fake_db, monkeypatch):
+    retrieved = [{"node_id": "D0120029/17/1/1", "citation": "設置標準第17條第1項第1款", "text": SOURCES[0]["text"]}]
+    monkeypatch.setattr(api, "_retrieve", lambda q, limit: [dict(r) for r in retrieved])
+    out = api._ask_sources("KTV 要不要裝自動撒水設備？")
+    assert [r["node_id"] for r in out] == ["D0120029/12/1/1/1", "D0120029/17/1/1"]
+    assert out[0]["routes"] == ["place"]
+    assert out[0]["parents"] == ["各類場所按用途分類如下：", "一、甲類場所："]
+
+
+def test_ask_sources_no_duplicate_when_already_retrieved(fake_db, monkeypatch):
+    retrieved = [{"node_id": "D0120029/12/1/1/1", "citation": "設置標準第12條第1款第1目", "text": OCC_ROWS[0]["text"]}]
+    monkeypatch.setattr(api, "_retrieve", lambda q, limit: [dict(r) for r in retrieved])
+    assert [r["node_id"] for r in api._ask_sources("KTV 屬於哪一類")] == ["D0120029/12/1/1/1"]
