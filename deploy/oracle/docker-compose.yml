@@ -65,7 +65,7 @@ services:
         condition: service_started
     ports:
       - "127.0.0.1:8100:8000"   # 只綁主機本機，由主機層 Caddy 轉送 /api/*
-    networks: [internal, edge]  # internal 連資料庫；edge 讓之後呼叫 Claude／Voyage API 能出外網
+    networks: [internal, edge]  # internal 連資料庫；edge 讓呼叫 OpenAI API 能出外網
     mem_limit: 768m
 
   # 獨立主機才用自己的 Caddy（LITIAN_STANDALONE=1 時 02_up.sh 會帶 --profile standalone）。

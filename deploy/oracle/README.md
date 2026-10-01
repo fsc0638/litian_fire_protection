@@ -16,7 +16,7 @@
 | 2 | ~~第 1 步跑完後~~ | ~~Oracle 主控台開 80／443~~ **已完成**：2026-10-01 查主控台，安全清單已有這兩條規則 | — |
 | 3 | 正式給人用前 | 測試期可用 `litian.<主機IP以連字號>.sslip.io`。sslip.io 常被企業網路攔截，正式期請在你的網域 DNS 加一筆 A 記錄指向主機公開 IP，告訴我網域名稱，我改 Caddy 區塊 | 需要登入網域商後台 |
 | 3b | 第 1 期前 | 主控台擴大開機碟（免費額度共 200 GB） | 需要登入主控台 |
-| 4 | 寫程式後 | 登入主機，自行把 `OPENAI_API_KEY`、`ASK_ACCESS_CODE`、`VOYAGE_API_KEY`、`LINE_CHANNEL_SECRET`、`LINE_CHANNEL_ACCESS_TOKEN` 填進 `/opt/litian/.env` | API 金鑰由你本人處理，AI 不經手 |
+| 4 | 寫程式後 | 登入主機，自行把 `OPENAI_API_KEY`、`ASK_ACCESS_CODE`（選填）、`LINE_CHANNEL_SECRET`、`LINE_CHANNEL_ACCESS_TOKEN` 填進 `/opt/litian/.env` | API 金鑰由你本人處理，AI 不經手 |
 | 5 | 上線前 | 在 Oracle 物件儲存建一個備份用 bucket（免費 20 GB）並建立存取金鑰，放進主機 | 需要登入主控台、產生金鑰 |
 
 ## AI 自動執行的步驟（你給第 1 項資訊後）
