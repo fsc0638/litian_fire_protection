@@ -72,11 +72,12 @@ h2 { font-size: 1rem; margin: 0 0 10px; }
 .answer .body p { margin: 0 0 .7em; }
 .answer .body ul, .answer .body ol { margin: 0 0 .7em; padding-left: 1.4em; }
 .answer .body li { margin: .15em 0; }
-a.cite {
+.cite {
   display: inline-block; min-width: 1.4em; padding: 0 .35em; margin: 0 1px; border-radius: 6px;
   background: var(--accent-soft); color: var(--accent-text); font-size: .75em; font-weight: 700;
   text-decoration: none; text-align: center; line-height: 1.6; vertical-align: .15em;
 }
+.cite.bad { background: var(--err-bg); color: var(--err-text); cursor: help; }
 .loading { color: var(--muted); display: flex; align-items: center; gap: 8px; }
 .spin { width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -276,10 +277,6 @@ footer p { margin: 0 0 .4em; }
       setLoading(null);
       const b = blocks.get(d.index) || { text: "", cites: [] };
       b.text += d.text; blocks.set(d.index, b); renderAnswer();
-    } else if (ev === "cite") {
-      const b = blocks.get(d.index) || { text: "", cites: [] };
-      if (!b.cites.includes(d.n)) b.cites.push(d.n);
-      blocks.set(d.index, b); renderAnswer(); markCited(d.n);
     } else if (ev === "notice") {
       note("info", d.message);
     } else if (ev === "error") {
@@ -289,6 +286,9 @@ footer p { margin: 0 0 .4em; }
         const names = d.unverified.map((a) => a.includes("-") ? "第" + a.replace("-", "條之") : "第" + a + "條");
         note("warn", "回答提到" + names.join("、") + "，但這次沒有檢索到" + (names.length > 1 ? "這些條文" : "這一條") + "的原文，請自行查證。");
       }
+      if (d.invalid_cites && d.invalid_cites.length) {
+        note("warn", "回答引用了不存在的條文編號 " + d.invalid_cites.map((n) => "[" + n + "]").join("") + "，該處內容請自行查證。");
+      }
       if (d.stop_reason === "max_tokens") note("warn", "回答太長被截斷，請把問題問得更具體。");
       if (d.stop_reason === "refusal") note("warn", "AI 無法回答這個問題，請參考下方條文。");
     }
@@ -296,17 +296,18 @@ footer p { margin: 0 0 .4em; }
 
   // ---------- 回答：極簡 Markdown（段落、條列、粗體）＋引用標記 ----------
   function renderAnswer() {
-    const OPEN = "", CLOSE = "";
     let s = "";
-    for (const k of [...blocks.keys()].sort((a, b) => a - b)) {
-      const b = blocks.get(k);
-      s += b.text;
-      if (b.cites.length) s += OPEN + b.cites.join(",") + CLOSE;
-    }
+    for (const k of [...blocks.keys()].sort((a, b) => a - b)) s += blocks.get(k).text;
     let html = "", list = null, para = [];
+    // 回答裡的 [1]、[2,3] 轉成引用標記；不在這次條文範圍內的編號標成警示
+    const chip = (x) => {
+      const n = Number(x);
+      if (n >= 1 && n <= sources.length) { markCited(n); return '<a class="cite" href="#src-' + n + '" data-n="' + n + '">' + n + "</a>"; }
+      return '<span class="cite bad" title="不在這次檢索的條文中">' + n + "?</span>";
+    };
     const inline = (t) => esc(t)
       .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-      .replace(/([\d,]+)/g, (_, ns) => ns.split(",").map((n) => '<a class="cite" href="#src-' + n + '" data-n="' + n + '">' + n + "</a>").join(""));
+      .replace(/\[(\d+(?:\s*[,，、]\s*\d+)*)\]/g, (_, ns) => ns.split(/\s*[,，、]\s*/).map(chip).join(""));
     const flushPara = () => { if (para.length) { html += "<p>" + para.map(inline).join("<br>") + "</p>"; para = []; } };
     const flushList = () => { if (list) { html += "<" + list.tag + (list.tag === "ol" && list.start !== 1 ? ' start="' + list.start + '"' : "") + ">" + list.items.map((t) => "<li>" + inline(t) + "</li>").join("") + "</" + list.tag + ">"; list = null; } };
     for (const line of s.split("\n")) {

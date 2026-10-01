@@ -1,9 +1,9 @@
-"""法規問答：把檢索到的條文當成文件送給 Claude 並開啟引用，回答只能引用這些條文。
+"""法規問答：把檢索到的條文編號後交給 OpenAI GPT-5.6 Sol，回答只能引用這些條文。
 
 防幻覺做法（設計文件 §8.5）：
-- 每條檢索結果是一份 document，開 citations；API 保證引用只會指向送進去的文件，
-  document_index 再由程式對回 node_id。
-- 回答裡提到的條號若不在這次的條文（含條文內文提到的條號）中，程式另外標示「未經檢索」。
+- 條文以 [1]、[2]… 編號放進輸入，要求模型在每個論點後標註編號。
+- OpenAI 沒有 API 層級的引用保證，所以由程式檢查：編號超出範圍者列為「無效引用」；
+  回答提到的條號若不在這次的條文（含條文內文、上層條文）中，列為「未經檢索」。前端兩者都會警告。
 """
 
 from __future__ import annotations
@@ -14,53 +14,65 @@ from typing import Any, AsyncIterator
 
 from .lawdb.numerals import to_int
 
-MODEL = "claude-opus-5-5"
-MAX_TOKENS = 16000
+MODEL = "gpt-5.6-sol"
+REASONING_EFFORT = "medium"      # GPT-5.6 預設值；法規問答以檢索為主，不需更高
+MAX_OUTPUT_TOKENS = 16000        # 含推理 token
 MAX_DOC_CHARS = 3000
 QUESTION_MAX = 300
 
 SYSTEM_PROMPT = """你是台灣的消防法規查詢助理，使用者是消防設備師、消防設備士與繪圖人員。
+使用者訊息會附上這次檢索到的法規條文，每條以 [編號] 開頭。
 
 回答規則：
-1. 只能根據這次提供的法規文件回答，每個論點都要引用文件。文件沒有涵蓋的，直接說「這次查到的條文沒有涵蓋這一點」，建議換個問法或指明條號；不要用自己記得的法規補充。
-2. 條文怎麼寫就怎麼轉述，條件要完整（樓層、面積、場所類別、收容人數等）；不要自行推論、換算或補上門檻。
-3. 是否應設置、屬於哪一類場所，只轉述條文；若需要更多資訊才能判斷（用途、樓層、面積等），說出缺哪些資訊，並提醒最後由消防設備師判斷。
-4. 文件註明「草稿」「未經校對」或「以官方原文為準」時，回答要轉達這個提醒。
-5. 用繁體中文，精簡、白話：先給結論，再列依據。可用短段落與「- 」條列；不要用表格、不要用標題。
-6. 提到條文時，用文件標題的寫法，例如「設置標準第12條第1款第1目」。"""
+1. 只能根據這些條文回答。每個論點後面緊接著標註依據的條文編號，例如「……應設置自動撒水設備[1]」；多條時寫成 [1][3]。只能使用附上的編號，不可自行編造。
+2. 條文沒有涵蓋的，直接說「這次查到的條文沒有涵蓋這一點」，建議換個問法或指明條號；不要用自己記得的法規補充。
+3. 條文怎麼寫就怎麼轉述，條件要完整（樓層、面積、場所類別、收容人數等）；不要自行推論、換算或補上門檻。
+4. 是否應設置、屬於哪一類場所，只轉述條文；若需要更多資訊才能判斷（用途、樓層、面積等），說出缺哪些資訊，並提醒最後由消防設備師判斷。
+5. 條文註明「草稿」「未經校對」或「以官方原文為準」時，回答要轉達這個提醒。
+6. 用繁體中文，精簡、白話：先給結論，再列依據。可用短段落與「- 」條列；不要用表格、不要用標題。
+7. 提到條文時用條文標題的寫法，例如「設置標準第12條第1款第1目」。"""
 
 
 def clip(text: str, n: int = MAX_DOC_CHARS) -> str:
     return text if len(text) <= n else text[:n] + "……（以下略，請看原文）"
 
 
-def build_documents(sources: list[dict]) -> list[dict]:
-    """每條檢索結果一份 document（custom content：不再切句，引用以整條節點為單位）。"""
-    docs = []
-    for s in sources:
-        blocks = [{"type": "text", "text": clip(s["text"])}]
-        if s.get("table_text"):
-            status = (s.get("table") or {}).get("status")
-            label = "結構化表格" if status == "verified" else "結構化表格（開發者轉錄草稿，未經消防設備師校對，判定以官方原文為準）"
-            blocks.append({"type": "text", "text": f"【{label}】\n{clip(s['table_text'])}"})
-        ctx = [f"法規：{s['law_name']}（修正日 {s.get('law_modified') or '未知'}）", f"節點編號：{s['node_id']}"]
-        if s.get("chapter"):
-            ctx.append(f"位置：{s['chapter']}")
-        if s.get("parents"):
-            ctx.append("上層條文：" + " ＞ ".join(s["parents"]))
-        for w in ("table_warning", "warning"):
-            if s.get(w):
-                ctx.append("注意：" + s[w])
-        docs.append({"type": "document",
-                     "source": {"type": "content", "content": blocks},
-                     "title": s["citation"][:200],
-                     "context": "\n".join(ctx),
-                     "citations": {"enabled": True}})
-    return docs
+def source_block(n: int, s: dict) -> str:
+    """一條檢索結果的文字：編號與標題、出處、上層條文、注意事項、內文、結構化表格。"""
+    lines = [f"[{n}] {s['citation']}",
+             f"出處：{s['law_name']}（修正日 {s.get('law_modified') or '未知'}）；節點編號 {s['node_id']}"]
+    if s.get("chapter"):
+        lines.append(f"位置：{s['chapter']}")
+    if s.get("parents"):
+        lines.append("上層條文：" + " ＞ ".join(s["parents"]))
+    for w in ("table_warning", "warning"):
+        if s.get(w):
+            lines.append("注意：" + s[w])
+    lines.append("內文：" + clip(s["text"]))
+    if s.get("table_text"):
+        status = (s.get("table") or {}).get("status")
+        label = "結構化表格" if status == "verified" else "結構化表格（開發者轉錄草稿，未經消防設備師校對，判定以官方原文為準）"
+        lines.append(f"{label}：\n{clip(s['table_text'])}")
+    return "\n".join(lines)
 
 
-def build_messages(question: str, sources: list[dict]) -> list[dict]:
-    return [{"role": "user", "content": build_documents(sources) + [{"type": "text", "text": "問題：" + question}]}]
+def build_input(question: str, sources: list[dict]) -> list[dict]:
+    body = "以下是這次檢索到的法規條文：\n\n" + "\n\n".join(source_block(i + 1, s) for i, s in enumerate(sources))
+    return [{"role": "user", "content": [{"type": "input_text", "text": f"{body}\n\n問題：{question}"}]}]
+
+
+CITE_RE = re.compile(r"\[(\d+(?:\s*[,，、]\s*\d+)*)\]")
+
+
+def cite_numbers(text: str) -> list[int]:
+    """回答裡的 [1]、[2,3] 引用編號（依出現順序、不重複）。"""
+    out: list[int] = []
+    for m in CITE_RE.finditer(text):
+        for x in re.split(r"\s*[,，、]\s*", m.group(1)):
+            n = int(x)
+            if n not in out:
+                out.append(n)
+    return out
 
 
 ARTICLE_RE = re.compile(r"第\s*([0-9０-９]+|[零〇一二三四五六七八九十百千]+)\s*條(?:\s*之\s*([0-9０-９]+|[零〇一二三四五六七八九十]+))?")
@@ -94,35 +106,56 @@ def sse(event: str, data: Any) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+class AnswerFailed(Exception):
+    """OpenAI 回報回應失敗（response.failed 或 error 事件）。"""
+
+
 async def stream_answer(client, question: str, sources: list[dict]) -> AsyncIterator[tuple[str, dict]]:
-    """呼叫 Claude（串流），產生 (事件名, 資料)：block／text／cite／done。cite 的 n 是來源編號（從 1 起）。"""
-    stream = await client.messages.create(
+    """呼叫 OpenAI Responses API（串流），產生 (事件名, 資料)：block／text／done。"""
+    stream = await client.responses.create(
         model=MODEL,
-        max_tokens=MAX_TOKENS,
-        system=SYSTEM_PROMPT,
-        messages=build_messages(question, sources),
+        instructions=SYSTEM_PROMPT,
+        input=build_input(question, sources),
+        reasoning={"effort": REASONING_EFFORT},
+        max_output_tokens=MAX_OUTPUT_TOKENS,
+        store=False,            # 不在 OpenAI 端保存這次對話
         stream=True,
     )
     parts: list[str] = []
-    stop_reason = None
+    refusal: list[str] = []
+    status, reason = None, None
     usage = {"input_tokens": None, "output_tokens": None}
+    yield "block", {"index": 0}
     async for ev in stream:
-        if ev.type == "message_start":
-            usage["input_tokens"] = ev.message.usage.input_tokens
-        elif ev.type == "content_block_start" and ev.content_block.type == "text":
-            yield "block", {"index": ev.index}
-        elif ev.type == "content_block_delta":
-            d = ev.delta
-            if d.type == "text_delta":
-                parts.append(d.text)
-                yield "text", {"index": ev.index, "text": d.text}
-            elif d.type == "citations_delta":
-                c = d.citation
-                i = getattr(c, "document_index", None)
-                if isinstance(i, int) and 0 <= i < len(sources):
-                    yield "cite", {"index": ev.index, "n": i + 1, "node_id": sources[i]["node_id"],
-                                   "cited_text": getattr(c, "cited_text", "")}
-        elif ev.type == "message_delta":
-            stop_reason = ev.delta.stop_reason
-            usage["output_tokens"] = ev.usage.output_tokens
-    yield "done", {"stop_reason": stop_reason, "unverified": unverified_mentions("".join(parts), sources), "usage": usage}
+        t = ev.type
+        if t == "response.output_text.delta":
+            parts.append(ev.delta)
+            yield "text", {"index": 0, "text": ev.delta}
+        elif t == "response.refusal.delta":
+            refusal.append(ev.delta)
+        elif t in ("response.completed", "response.incomplete"):
+            r = ev.response
+            status = r.status
+            reason = r.incomplete_details.reason if r.incomplete_details else None
+            if r.usage:
+                usage = {"input_tokens": r.usage.input_tokens, "output_tokens": r.usage.output_tokens}
+        elif t == "response.failed":
+            err = ev.response.error
+            raise AnswerFailed(err.message if err else "response.failed")
+        elif t == "error":
+            raise AnswerFailed(ev.message)
+    answer = "".join(parts)
+    cited = cite_numbers(answer)
+    if refusal and not parts:
+        stop = "refusal"
+    elif reason == "max_output_tokens":
+        stop = "max_tokens"
+    elif reason == "content_filter":
+        stop = "refusal"
+    else:
+        stop = "end_turn" if status == "completed" else (status or "unknown")
+    yield "done", {"stop_reason": stop,
+                   "cited": [n for n in cited if 1 <= n <= len(sources)],
+                   "invalid_cites": [n for n in cited if not 1 <= n <= len(sources)],
+                   "unverified": unverified_mentions(answer, sources),
+                   "usage": usage}

@@ -55,7 +55,7 @@ services:
       MEILI_URL: http://meilisearch:7700
       MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
       # 法規問答：金鑰與存取碼都填了才啟用 AI 回答（由使用者本人填在 .env）
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ASK_ACCESS_CODE: ${ASK_ACCESS_CODE:-}
       ASK_DAILY_LIMIT: ${ASK_DAILY_LIMIT:-200}
     depends_on:

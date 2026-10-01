@@ -1,7 +1,7 @@
 """消防圖審系統 API（第 0 期：法規庫與法規問答網頁）。
 
 環境變數：DATABASE_URL、MEILI_URL、MEILI_MASTER_KEY
-  法規問答（選填）：ANTHROPIC_API_KEY、ASK_ACCESS_CODE（兩者都有才啟用 AI 回答）、ASK_DAILY_LIMIT（每日 AI 問答上限，預設 200）
+  法規問答（選填）：OPENAI_API_KEY、ASK_ACCESS_CODE（兩者都有才啟用 AI 回答，模型 gpt-5.6-sol）、ASK_DAILY_LIMIT（每日 AI 問答上限，預設 200）
 啟動：uvicorn litian.api:app --host 0.0.0.0 --port 8000
 """
 
@@ -18,7 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import unquote
 
-import anthropic
+import openai
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
@@ -200,7 +200,7 @@ def table(node_id: str):
 
 # ---------------- 法規問答 ----------------
 
-_anthropic: anthropic.AsyncAnthropic | None = None
+_openai: openai.AsyncOpenAI | None = None
 _recent: dict[str, deque] = {}
 _daily = {"day": "", "count": 0}       # 記在記憶體：容器重啟（重新部署）當天會歸零
 _fails: dict[str, deque] = {}
@@ -208,7 +208,7 @@ _fails: dict[str, deque] = {}
 
 def _ai_state() -> tuple[bool, str]:
     """兩樣都設定才啟用 AI 回答；缺任何一樣就只列檢索結果（不花錢、不擋人）。"""
-    if not os.environ.get("ANTHROPIC_API_KEY", "").strip():
+    if not os.environ.get("OPENAI_API_KEY", "").strip():
         return False, "AI 回答尚未啟用：管理者還沒設定 AI 金鑰。先列出檢索到的相關條文。"
     if not os.environ.get("ASK_ACCESS_CODE", "").strip():
         return False, "AI 回答尚未啟用：管理者還沒設定存取碼。先列出檢索到的相關條文。"
@@ -260,11 +260,11 @@ def _check_code(ip: str, given: str, code: str) -> None:
         raise HTTPException(401, "存取碼不正確")
 
 
-def _client() -> anthropic.AsyncAnthropic:
-    global _anthropic
-    if _anthropic is None:
-        _anthropic = anthropic.AsyncAnthropic()   # 讀 ANTHROPIC_API_KEY
-    return _anthropic
+def _client() -> openai.AsyncOpenAI:
+    global _openai
+    if _openai is None:
+        _openai = openai.AsyncOpenAI()   # 讀 OPENAI_API_KEY
+    return _openai
 
 
 def _ask_sources(q: str) -> list[dict]:
