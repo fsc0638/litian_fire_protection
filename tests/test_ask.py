@@ -163,10 +163,10 @@ def test_key_without_access_code_stays_disabled(client, monkeypatch):
 
 def test_ask_requires_access_code(client, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setenv("ASK_ACCESS_CODE", "fire2026")
+    monkeypatch.setenv("ASK_ACCESS_CODE", "fire-code-2026")
     assert client.post("/api/law/ask", json={"question": "KTV"}).status_code == 401
     assert client.post("/api/law/ask", json={"question": "KTV"}, headers={"X-Access-Code": "wrong"}).status_code == 401
-    r = client.post("/api/law/ask", json={"question": "KTV要不要裝撒水"}, headers={"X-Access-Code": "fire2026"})
+    r = client.post("/api/law/ask", json={"question": "KTV要不要裝撒水"}, headers={"X-Access-Code": "fire-code-2026"})
     assert r.status_code == 200
     evs = parse_sse(r.text)
     assert [e for e, _ in evs] == ["sources", "block", "text", "cite", "block", "text", "done"]
@@ -175,20 +175,20 @@ def test_ask_requires_access_code(client, monkeypatch):
 
 def test_ask_rate_limits(client, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setenv("ASK_ACCESS_CODE", "fire2026")
-    h = {"X-Access-Code": "fire2026", "X-Forwarded-For": "203.0.113.5"}
+    monkeypatch.setenv("ASK_ACCESS_CODE", "fire-code-2026")
+    h = {"X-Access-Code": "fire-code-2026", "X-Forwarded-For": "203.0.113.5"}
     codes = [client.post("/api/law/ask", json={"question": "KTV"}, headers=h).status_code for _ in range(api.ASK_PER_MINUTE + 1)]
     assert codes[:-1] == [200] * api.ASK_PER_MINUTE and codes[-1] == 429
-    other = {"X-Access-Code": "fire2026", "X-Forwarded-For": "203.0.113.9"}
+    other = {"X-Access-Code": "fire-code-2026", "X-Forwarded-For": "203.0.113.9"}
     assert client.post("/api/law/ask", json={"question": "KTV"}, headers=other).status_code == 200
 
 
 def test_ask_daily_limit(client, monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setenv("ASK_ACCESS_CODE", "fire2026")
+    monkeypatch.setenv("ASK_ACCESS_CODE", "fire-code-2026")
     monkeypatch.setenv("ASK_DAILY_LIMIT", "2")
     codes = [client.post("/api/law/ask", json={"question": "KTV"},
-                         headers={"X-Access-Code": "fire2026", "X-Forwarded-For": f"198.51.100.{i}"}).status_code
+                         headers={"X-Access-Code": "fire-code-2026", "X-Forwarded-For": f"198.51.100.{i}"}).status_code
              for i in range(3)]
     assert codes == [200, 200, 429]
 
@@ -196,3 +196,42 @@ def test_ask_daily_limit(client, monkeypatch):
 def test_question_length_limit(client):
     assert client.post("/api/law/ask", json={"question": "字" * (A.QUESTION_MAX + 1)}).status_code == 422
     assert client.post("/api/law/ask", json={"question": "   "}).status_code == 422
+
+
+def test_short_access_code_keeps_ai_disabled(client, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("ASK_ACCESS_CODE", "short")
+    st = client.get("/api/law/ask/status").json()
+    assert st["ai_enabled"] is False and "太短" in st["message"]
+
+
+def test_access_code_bruteforce_lockout(client, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("ASK_ACCESS_CODE", "fire-code-2026")
+    api._fails.clear()
+    h = {"X-Forwarded-For": "192.0.2.7"}
+    codes = [client.post("/api/law/ask", json={"question": "KTV"}, headers={**h, "X-Access-Code": f"guess{i}"}).status_code
+             for i in range(api.CODE_FAIL_MAX)]
+    assert codes == [401] * api.CODE_FAIL_MAX
+    # 鎖定後，連正確的存取碼也先擋下
+    r = client.post("/api/law/ask", json={"question": "KTV"}, headers={**h, "X-Access-Code": "fire-code-2026"})
+    assert r.status_code == 429
+    api._fails.clear()
+
+
+def test_midstream_disconnect_sends_error_event(client, monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setenv("ASK_ACCESS_CODE", "fire-code-2026")
+
+    class Broken(FakeMessages):
+        async def create(self, **kwargs):
+            async def gen():
+                for e in fake_events()[:5]:
+                    yield e
+                raise ConnectionResetError("上游中途斷線")   # SDK 1.x 串流中斷時丟的是底層連線錯誤，不是 APIError
+            return gen()
+
+    monkeypatch.setattr(api, "_client", lambda: NS(messages=Broken([])))
+    r = client.post("/api/law/ask", json={"question": "KTV"}, headers={"X-Access-Code": "fire-code-2026"})
+    evs = parse_sse(r.text)
+    assert [e for e, _ in evs] == ["sources", "block", "text", "error"]

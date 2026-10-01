@@ -190,7 +190,7 @@ footer p { margin: 0 0 .4em; }
   });
   $("#ask-form").addEventListener("submit", (e) => { e.preventDefault(); submit(); });
 
-  fetch("/api/law/ask/status").then((r) => r.json()).then((s) => {
+  const statusReady = fetch("/api/law/ask/status").then((r) => r.json()).then((s) => {
     status = s;
     $("#code-box").style.display = s.ai_enabled ? "flex" : "none";
     $("#status").innerHTML = s.ai_enabled
@@ -215,6 +215,7 @@ footer p { margin: 0 0 .4em; }
     const q = $("#q").value.trim();
     if (!q || busy) return;
     busy = true; $("#go").disabled = true;
+    await statusReady;
     sources = []; blocks = new Map();
     $("#answer").innerHTML = ""; $("#answer-notes").innerHTML = ""; $("#sources").innerHTML = "";
     $("#answer-sec").classList.remove("hidden"); $("#sources-sec").classList.add("hidden");
@@ -231,7 +232,7 @@ footer p { margin: 0 0 .4em; }
         const j = await res.json().catch(() => ({}));
         const msg = typeof j.detail === "string" ? j.detail : "查詢失敗（" + res.status + "）";
         note("err", msg);
-        if (res.status === 401) $("#code").focus();
+        if (res.status === 401) { $("#code-box").style.display = "flex"; $("#code").focus(); }
         await fallbackSearch(q);
         return;
       }
@@ -286,7 +287,7 @@ footer p { margin: 0 0 .4em; }
     } else if (ev === "done") {
       if (d.unverified && d.unverified.length) {
         const names = d.unverified.map((a) => a.includes("-") ? "第" + a.replace("-", "條之") : "第" + a + "條");
-        note("warn", "回答提到" + names.join("、") + "，但這次沒有檢索到這些條文的原文，請自行查證。");
+        note("warn", "回答提到" + names.join("、") + "，但這次沒有檢索到" + (names.length > 1 ? "這些條文" : "這一條") + "的原文，請自行查證。");
       }
       if (d.stop_reason === "max_tokens") note("warn", "回答太長被截斷，請把問題問得更具體。");
       if (d.stop_reason === "refusal") note("warn", "AI 無法回答這個問題，請參考下方條文。");
@@ -307,14 +308,15 @@ footer p { margin: 0 0 .4em; }
       .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
       .replace(/([\d,]+)/g, (_, ns) => ns.split(",").map((n) => '<a class="cite" href="#src-' + n + '" data-n="' + n + '">' + n + "</a>").join(""));
     const flushPara = () => { if (para.length) { html += "<p>" + para.map(inline).join("<br>") + "</p>"; para = []; } };
-    const flushList = () => { if (list) { html += "<" + list.tag + ">" + list.items.map((t) => "<li>" + inline(t) + "</li>").join("") + "</" + list.tag + ">"; list = null; } };
+    const flushList = () => { if (list) { html += "<" + list.tag + (list.tag === "ol" && list.start !== 1 ? ' start="' + list.start + '"' : "") + ">" + list.items.map((t) => "<li>" + inline(t) + "</li>").join("") + "</" + list.tag + ">"; list = null; } };
     for (const line of s.split("\n")) {
-      const ul = line.match(/^\s*[-•*]\s+(.*)$/), ol = line.match(/^\s*\d+[.、)]\s*(.*)$/);
+      // 編號清單必須是「1. 」「1) 」（後面有空白）或「1、」，避免把「2.5 公尺」這類小數當成編號而改掉數字
+      const ul = line.match(/^\s*[-•*]\s+(.*)$/), ol = line.match(/^\s*(\d+)(?:[.)]\s+|、\s*)(.*)$/);
       if (ul || ol) {
         flushPara();
         const tag = ul ? "ul" : "ol";
-        if (!list || list.tag !== tag) { flushList(); list = { tag, items: [] }; }
-        list.items.push((ul || ol)[1]);
+        if (!list || list.tag !== tag) { flushList(); list = { tag, items: [], start: ol ? Number(ol[1]) : 1 }; }
+        list.items.push(ul ? ul[1] : ol[2]);
       } else if (!line.trim()) { flushPara(); flushList(); }
       else if (list && /^\s{2,}/.test(line)) { list.items[list.items.length - 1] += " " + line.trim(); }
       else { flushList(); para.push(line); }
@@ -355,7 +357,7 @@ footer p { margin: 0 0 .4em; }
       if (s.legend.note) h += '<p class="meta">備註：' + esc(s.legend.note) + "</p>";
     }
     if (s.table_warning) h += '<p class="note warn">' + esc(s.table_warning) + "</p>";
-    if (s.warning) h += '<p class="note warn">' + esc(s.warning) + (s.pdf_table_url ? '　<a href="' + esc(s.pdf_table_url) + '" target="_blank" rel="noopener">開啟官方 PDF</a>' : "") + "</p>";
+    if (s.warning) h += '<p class="note warn">' + esc(s.warning) + (/^https?:\/\//.test(s.pdf_table_url || "") ? '　<a href="' + esc(s.pdf_table_url) + '" target="_blank" rel="noopener">開啟官方 PDF</a>' : "") + "</p>";
     const acts = [];
     if (s.article_text && s.article_text !== s.text) acts.push('<button type="button" data-act="article">看整條</button>');
     if (s.table && s.table.url) acts.push('<button type="button" data-act="table">看表格</button>');

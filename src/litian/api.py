@@ -39,6 +39,8 @@ WEB_INDEX = Path(__file__).parent / "web" / "index.html"
 TW = timezone(timedelta(hours=8))
 ASK_SOURCES = 8          # 每題送給 AI 的條文數
 ASK_PER_MINUTE = 6       # 同一來源每分鐘的 AI 問答上限
+ACCESS_CODE_MIN = 12     # 存取碼最短長度（太短容易被猜中）
+CODE_FAIL_MAX = 10       # 同一來源一小時內存取碼錯誤上限，超過就暫停一小時
 
 NODE_COLS = "node_id, pcode, article, level, path, text, parent_id, citation, chapter, has_table, pdf_table_url, deleted, children"
 
@@ -200,7 +202,8 @@ def table(node_id: str):
 
 _anthropic: anthropic.AsyncAnthropic | None = None
 _recent: dict[str, deque] = {}
-_daily = {"day": "", "count": 0}
+_daily = {"day": "", "count": 0}       # 記在記憶體：容器重啟（重新部署）當天會歸零
+_fails: dict[str, deque] = {}
 
 
 def _ai_state() -> tuple[bool, str]:
@@ -209,6 +212,8 @@ def _ai_state() -> tuple[bool, str]:
         return False, "AI 回答尚未啟用：管理者還沒設定 AI 金鑰。先列出檢索到的相關條文。"
     if not os.environ.get("ASK_ACCESS_CODE", "").strip():
         return False, "AI 回答尚未啟用：管理者還沒設定存取碼。先列出檢索到的相關條文。"
+    if len(os.environ["ASK_ACCESS_CODE"].strip()) < ACCESS_CODE_MIN:
+        return False, f"AI 回答尚未啟用：存取碼太短，至少要 {ACCESS_CODE_MIN} 個字元。先列出檢索到的相關條文。"
     return True, ""
 
 
@@ -240,6 +245,19 @@ def _take_quota(ip: str) -> None:
         raise HTTPException(429, "問得太快了，請過一分鐘再試。")
     q.append(now)
     _daily["count"] += 1
+
+
+def _check_code(ip: str, given: str, code: str) -> None:
+    """存取碼比對；同一來源一小時內錯太多次就暫停，防止暴力猜碼。"""
+    now = time.monotonic()
+    f = _fails.setdefault(ip, deque())
+    while f and now - f[0] > 3600:
+        f.popleft()
+    if len(f) >= CODE_FAIL_MAX:
+        raise HTTPException(429, "存取碼錯誤次數太多，請一小時後再試。")
+    if not hmac.compare_digest(given.encode("utf-8"), code.encode("utf-8")):
+        f.append(now)
+        raise HTTPException(401, "存取碼不正確")
 
 
 def _client() -> anthropic.AsyncAnthropic:
@@ -290,10 +308,9 @@ async def ask(body: AskBody, request: Request, x_access_code: str = Header("")):
         raise HTTPException(422, "請輸入問題")
     ai, message = _ai_state()
     if ai:
-        code = os.environ["ASK_ACCESS_CODE"].strip()
-        if not hmac.compare_digest(unquote(x_access_code).encode("utf-8"), code.encode("utf-8")):
-            raise HTTPException(401, "存取碼不正確")
-        _take_quota(_client_ip(request))
+        ip = _client_ip(request)
+        _check_code(ip, unquote(x_access_code), os.environ["ASK_ACCESS_CODE"].strip())
+        _take_quota(ip)
     sources = await run_in_threadpool(_ask_sources, q)
 
     async def events():
@@ -312,9 +329,10 @@ async def ask(body: AskBody, request: Request, x_access_code: str = Header("")):
                     log.info("ask done stop=%s usage=%s qlen=%d", data.get("stop_reason"), data.get("usage"), len(q))
                     data = {k: v for k, v in data.items() if k != "usage"}
                 yield A.sse(name, data)
-        except anthropic.APIError as e:
-            log.warning("ask failed: %s", type(e).__name__)
-            yield A.sse("error", {"message": "AI 服務暫時無法回應，請稍後再試。下面的條文仍可參考。"})
+        except Exception as e:   # API 錯誤，或串流途中連線中斷（SDK 會直接丟出底層連線錯誤）
+            log.warning("ask failed: %s status=%s request_id=%s", type(e).__name__,
+                        getattr(e, "status_code", None), getattr(e, "request_id", None))
+            yield A.sse("error", {"message": "AI 服務暫時無法回應或連線中斷，請稍後再試。下面的條文仍可參考。"})
 
     return StreamingResponse(events(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
