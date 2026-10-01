@@ -85,13 +85,14 @@ a.cite {
 .note.warn { background: var(--warn-bg); border: 1px solid var(--warn-border); color: var(--warn-text); }
 .note.err { background: var(--err-bg); color: var(--err-text); }
 .note.info { background: var(--surface-2); color: var(--muted); }
-.sources { display: grid; gap: 10px; }
+.sources { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
 article.src { padding: 14px 16px; scroll-margin-top: 12px; transition: border-color .3s; }
 article.src.flash { border-color: var(--accent); }
 article.src header { display: flex; gap: 10px; align-items: flex-start; }
+article.src header > div { min-width: 0; }
 .num { flex: none; width: 1.8em; height: 1.8em; border-radius: 6px; display: grid; place-items: center; background: var(--surface-2); font-weight: 700; font-size: .85rem; }
 article.src.cited .num { background: var(--accent-soft); color: var(--accent-text); }
-article.src h3 { font-size: .98rem; margin: 0; line-height: 1.45; }
+article.src h3 { font-size: .98rem; margin: 0; line-height: 1.45; overflow-wrap: anywhere; }
 .meta { color: var(--muted); font-size: .8rem; margin: 2px 0 0; overflow-wrap: anywhere; }
 .parents { color: var(--muted); font-size: .85rem; margin: 8px 0 0; }
 .text { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -105,6 +106,8 @@ pre.box { margin: 8px 0 0; padding: 10px; background: var(--surface-2); border-r
 table.law { border-collapse: collapse; font-size: .85rem; min-width: 520px; }
 table.law th, table.law td { border: 1px solid var(--border); padding: 4px 6px; vertical-align: top; text-align: left; }
 table.law th { background: var(--surface); }
+table.law td:first-child, table.law th:first-child { min-width: 15em; }
+table.law td:not(:first-child) { min-width: 6em; }
 footer { color: var(--muted); font-size: .8rem; border-top: 1px solid var(--border); padding: 16px 0 28px; }
 footer p { margin: 0 0 .4em; }
 .hidden { display: none !important; }
@@ -196,8 +199,15 @@ footer p { margin: 0 0 .4em; }
   }).catch(() => { $("#status").textContent = "無法讀取系統狀態，請稍後重新整理。"; });
 
   fetch("/api/law/laws").then((r) => r.json()).then((laws) => {
-    const d = laws.map((l) => l.source_update).filter(Boolean).sort().pop();
-    if (d) $("#version").textContent = "　資料版本：" + d + "。";
+    // source_update 是官方資料包的更新時間，例：{"law": "2026/9/18 上午 12:00:00", "order": "…"}
+    const dates = new Set();
+    for (const l of laws) {
+      let u = l.source_update;
+      if (!u) continue;
+      if (typeof u === "string") { try { u = JSON.parse(u); } catch { /* 純文字日期 */ } }
+      for (const v of (u && typeof u === "object" ? Object.values(u) : [u])) dates.add(String(v).split(" ")[0]);
+    }
+    if (dates.size) $("#version").textContent = "　資料版本：" + [...dates].join("、") + "。";
   }).catch(() => {});
 
   // ---------- 提問 ----------
@@ -336,10 +346,10 @@ footer p { margin: 0 0 .4em; }
     const el = document.createElement("article");
     el.className = "card src"; el.id = "src-" + n;
     const meta = [s.law_name, s.law_modified ? "修正 " + s.law_modified : "", s.chapter].filter(Boolean).join("｜");
-    const isBox = /[┌│└├]/.test(s.text || "");
+    const boxAt = (s.text || "").search(/[┌│└├]/);   // 方框字元排版的表格：原文預設收起
     let h = '<header><span class="num">' + n + '</span><div><h3>' + esc(s.citation) + '</h3><p class="meta">' + esc(meta) + "</p></div></header>";
     if (s.parents && s.parents.length) h += '<p class="parents">' + esc(s.parents.join(" ＞ ")) + "</p>";
-    h += isBox ? '<pre class="box">' + esc(s.text) + "</pre>" : '<p class="text">' + esc(s.text) + "</p>";
+    h += '<p class="text">' + esc(boxAt >= 0 ? (s.text.slice(0, boxAt).trim() || "（本條為表格）") : s.text) + "</p>";
     if (s.legend && s.legend.symbol_urls && s.legend.symbol_urls.length) {
       h += '<div class="legend">' + s.legend.symbol_urls.map((u) => '<img src="' + esc(u) + '" alt="' + esc(s.legend.name) + ' 圖例" loading="lazy">').join("") + "</div>";
       if (s.legend.note) h += '<p class="meta">備註：' + esc(s.legend.note) + "</p>";
@@ -349,16 +359,17 @@ footer p { margin: 0 0 .4em; }
     const acts = [];
     if (s.article_text && s.article_text !== s.text) acts.push('<button type="button" data-act="article">看整條</button>');
     if (s.table && s.table.url) acts.push('<button type="button" data-act="table">看表格</button>');
+    if (boxAt >= 0) acts.push('<button type="button" data-act="raw">看原文排版</button>');
     if (acts.length) h += '<div class="actions">' + acts.join("") + "</div>";
-    h += '<div class="more hidden" data-more="article"></div><div class="more scroll hidden" data-more="table"></div>';
+    h += '<div class="more hidden" data-more="article"></div><div class="more scroll hidden" data-more="table"></div><pre class="box hidden" data-more="raw"></pre>';
     el.innerHTML = h;
     el.addEventListener("click", (e) => {
       const b = e.target.closest("button[data-act]");
       if (!b) return;
       const panel = el.querySelector('[data-more="' + b.dataset.act + '"]');
       if (!panel.classList.contains("hidden")) { panel.classList.add("hidden"); return; }
-      if (b.dataset.act === "article") {
-        panel.textContent = s.article_text;
+      if (b.dataset.act === "article" || b.dataset.act === "raw") {
+        panel.textContent = b.dataset.act === "article" ? s.article_text : s.text;
         panel.classList.remove("hidden");
       } else {
         panel.textContent = "載入中…"; panel.classList.remove("hidden");
