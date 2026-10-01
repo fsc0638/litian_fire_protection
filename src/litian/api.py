@@ -422,7 +422,7 @@ def _ask_sources(q: str) -> list[dict]:
         if n:
             laws = laws or _law_names()
             pins.append({**_present(n, laws), "routes": ["place"], "score": None})
-    out = [_enrich(r) for r in pins + results]
+    out = [_enrich(r, q) for r in pins + results]
     # 同一條被抓到很多零碎款目時（例：「免設排煙條件」→ 第 190 條各款各目），補上整條原文，AI 才不會只看到片段
     have = {r["node_id"] for r in out}
     arts = Counter("/".join(r["node_id"].split("/")[:2]) for r in out
@@ -436,13 +436,13 @@ def _ask_sources(q: str) -> list[dict]:
         n = _node(art)
         if n:
             laws = laws or _law_names()
-            out.append(_enrich({**_present(n, laws), "routes": ["article_context"], "score": None}))
+            out.append(_enrich({**_present(n, laws), "routes": ["article_context"], "score": None}, q))
             added += 1
     return out
 
 
-def _enrich(r: dict) -> dict:
-    """補上層條文（不含整條）與結構化表格文字。"""
+def _enrich(r: dict, q: str | None = None) -> dict:
+    """補上層條文（不含整條）與結構化表格文字（大表只留和問題相關的列）。"""
     n = _node(r["node_id"])
     parents, pid = [], n["parent_id"] if n else None
     while pid:
@@ -456,7 +456,7 @@ def _enrich(r: dict) -> dict:
     if tbl and r["node_id"] in (tbl["node_id"], tbl["node_id"] + "/1"):
         row = _one("SELECT data FROM law_table WHERE node_id = %s", tbl["node_id"])
         if row:
-            r["table_text"] = T.rows_text(row["data"])
+            r["table_text"] = T.rows_text(row["data"], focus=q, limit=A.MAX_DOC_CHARS)
     return r
 
 

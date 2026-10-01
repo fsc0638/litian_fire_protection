@@ -149,10 +149,32 @@ def cell_text(v: dict) -> str:
     return str(v.get("raw", ""))
 
 
-def rows_text(t: dict) -> str:
-    """供檢索與 AI 問答用的表格文字（每列一行；公式寫出變數定義）。"""
+ROW_FOCUS_MIN = 4
+_FOCUS_SPLIT = re.compile(r"[／、，；：（）()\s]+")
+
+
+def _row_matches(place: str, focus: str) -> bool:
+    return any(len(x) >= ROW_FOCUS_MIN and x in focus for x in _FOCUS_SPLIT.split(str(place)))
+
+
+def rows_text(t: dict, focus: str | None = None, limit: int | None = None) -> str:
+    """供檢索與 AI 問答用的表格文字（每列一行；公式寫出變數定義）。
+
+    給 focus（使用者問題）與 limit 時：全文超過 limit 字，就只留列名對上問題的列（表名、公式、備註全留），
+    避免大表（例：第 198 條 5 千字）被截斷、剛好切掉問題要的那一列與說明符號的備註（2026-10-01 實際發生）。
+    沒有任何列對上時用全文。
+    """
+    full = _rows_text(t, None)
+    if not focus or limit is None or len(full) <= limit:
+        return full
+    focused, kept = _rows_text(t, focus, count=True)
+    return focused if kept else full
+
+
+def _rows_text(t: dict, focus: str | None, count: bool = False):
     multi = "parts" in t
     lines: list[str] = []
+    skipped = kept = 0
     for p in parts_of(t):
         if multi and p.get("title"):
             lines.append(f"【{p['title']}】")
@@ -161,6 +183,10 @@ def rows_text(t: dict) -> str:
             lines += [f"{k}：{v}" for k, v in (p.get("variables") or {}).items()]
         else:
             for r in p["rows"]:
+                if focus is not None and not _row_matches(r.get("place", ""), focus):
+                    skipped += 1
+                    continue
+                kept += 1
                 if "marks" in r:
                     lines.append(f"{r['place']} 可選設：{'、'.join(r['marks'])}")
                 else:
@@ -168,4 +194,7 @@ def rows_text(t: dict) -> str:
                     lines.append(f"{r['place']} " + "；".join(cells))
         if multi:
             lines += p.get("notes", [])
-    return "\n".join(lines + t.get("notes", []))
+    if skipped:
+        lines.append(f"（本表另有 {skipped} 列與本題無關，未列出；完整表格請看官方原文）")
+    text = "\n".join(lines + t.get("notes", []))
+    return (text, kept) if count else text

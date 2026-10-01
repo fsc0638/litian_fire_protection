@@ -158,3 +158,13 @@ def test_formulas_transcribed_without_added_multiplication():
     f = lambda nid: [p["formula"] for p in ts[nid]["parts"] if p.get("kind") == "formula"]
     assert f("D0120029/83-2") == ["W = (V / S) ln(100 / (100 − C))"]
     assert f("D0120029/97-3") == ["W = (V / S)(C / (100 − C))"]
+
+
+def test_rows_text_focus_keeps_relevant_row_and_notes():
+    """大表只留和問題相關的列，備註（含符號意義）一定保留（2026-10-01：第 198 條被截斷、漏掉乾粉滅火器與Δ說明）。"""
+    t = {x["node_id"]: x for x in T.load_tables()}["D0120029/198"]
+    s = T.rows_text(t, focus="第四類公共危險物品可以用哪些滅火設備？", limit=3000)
+    assert len(s) < 3000 and "第四類公共危險物品 第二種／自動撒水設備：Δ" in s
+    assert "第五種／滅火器／乾粉滅火器／碳酸鹽類等：○" in s and "「Δ」標示代表電子工業" in s
+    assert "本表另有 12 列與本題無關" in s and "建築物及附屬設施" not in s.split("一、本表")[0]
+    assert T.rows_text(t, focus="撒水頭", limit=3000) == T.rows_text(t)      # 沒對上任何列用全文
