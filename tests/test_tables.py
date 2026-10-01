@@ -125,3 +125,36 @@ def test_rows_text_multi_part():
         "【比容積公式】", "IG-100 比容積公式：s=0.7997+0.00293t", "本表為示意",
         "【配線】", "7.緊急廣播設備 耐燃保護：緊急電源—擴音機",
         "整條備註"]
+
+
+# ---- 2026-10-01 第二批：其餘 PDF 表格（兩輪獨立轉錄＋裁決）----
+
+NEW = ["47", "57", "83", "83-2", "84", "97-2", "97-3", "97-5", "117", "133", "163", "164", "165", "183",
+       "198", "201", "222", "236"]
+
+
+def test_all_tables_load_and_are_drafts():
+    ts = {t["node_id"]: t for t in T.load_tables()}
+    assert len(ts) == 20
+    for art in NEW:
+        t = ts[f"D0120029/{art}"]
+        assert t["status"] == "draft" and t["verified_by"] is None
+        assert len(t["transcription"]) >= 3 and t["cross_check"].startswith("2026-10-01")
+        assert t["source"]["kind"] == "pdf" and len(t["source"]["sha256"]) == 64
+        assert T.rows_text(t).strip()
+
+
+def test_article_198_symbols():
+    t = {x["node_id"]: x for x in T.load_tables()}["D0120029/198"]
+    part = t["parts"][0]
+    cells = [(r["place"], c, v["raw"]) for r in part["rows"] for c, v in r["cells"].items()]
+    assert len(part["rows"]) == 13 and len(part["columns"]) == 31
+    assert sum(1 for *_, v in cells if v == "○") == 216
+    assert [(p, c) for p, c, v in cells if v == "Δ"] == [("第四類公共危險物品", "第二種／自動撒水設備")]
+
+
+def test_formulas_transcribed_without_added_multiplication():
+    ts = {t["node_id"]: t for t in T.load_tables()}
+    f = lambda nid: [p["formula"] for p in ts[nid]["parts"] if p.get("kind") == "formula"]
+    assert f("D0120029/83-2") == ["W = (V / S) ln(100 / (100 − C))"]
+    assert f("D0120029/97-3") == ["W = (V / S)(C / (100 − C))"]

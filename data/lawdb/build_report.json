@@ -1,5 +1,5 @@
 {
- "built_at": "2026-10-01T06:32:07+00:00",
+ "built_at": "2026-10-01T09:26:23+00:00",
  "source": "全國法規資料庫 Open API（law.moj.gov.tw/api）；消防署法令查詢系統行動版（law.nfa.gov.tw/MOBILE）",
  "source_update": {
   "law": "2026/9/18 上午 12:00:00",
@@ -65,14 +65,124 @@
  "legend_categories": 17,
  "tables": [
   {
+   "node_id": "D0120029/117",
+   "status": "draft",
+   "parts": 1,
+   "rows": 9
+  },
+  {
+   "node_id": "D0120029/133",
+   "status": "draft",
+   "parts": 3,
+   "rows": 3
+  },
+  {
    "node_id": "D0120029/157",
    "status": "draft",
+   "parts": 1,
    "rows": 5
+  },
+  {
+   "node_id": "D0120029/163",
+   "status": "draft",
+   "parts": 1,
+   "rows": 3
+  },
+  {
+   "node_id": "D0120029/164",
+   "status": "draft",
+   "parts": 1,
+   "rows": 7
+  },
+  {
+   "node_id": "D0120029/165",
+   "status": "draft",
+   "parts": 1,
+   "rows": 7
   },
   {
    "node_id": "D0120029/18",
    "status": "draft",
+   "parts": 1,
    "rows": 7
+  },
+  {
+   "node_id": "D0120029/183",
+   "status": "draft",
+   "parts": 3,
+   "rows": 4
+  },
+  {
+   "node_id": "D0120029/198",
+   "status": "draft",
+   "parts": 1,
+   "rows": 13
+  },
+  {
+   "node_id": "D0120029/201",
+   "status": "draft",
+   "parts": 1,
+   "rows": 11
+  },
+  {
+   "node_id": "D0120029/222",
+   "status": "draft",
+   "parts": 2,
+   "rows": 59
+  },
+  {
+   "node_id": "D0120029/236",
+   "status": "draft",
+   "parts": 1,
+   "rows": 13
+  },
+  {
+   "node_id": "D0120029/47",
+   "status": "draft",
+   "parts": 1,
+   "rows": 1
+  },
+  {
+   "node_id": "D0120029/57",
+   "status": "draft",
+   "parts": 1,
+   "rows": 7
+  },
+  {
+   "node_id": "D0120029/83-2",
+   "status": "draft",
+   "parts": 2,
+   "rows": 4
+  },
+  {
+   "node_id": "D0120029/83",
+   "status": "draft",
+   "parts": 2,
+   "rows": 3
+  },
+  {
+   "node_id": "D0120029/84",
+   "status": "draft",
+   "parts": 1,
+   "rows": 1
+  },
+  {
+   "node_id": "D0120029/97-2",
+   "status": "draft",
+   "parts": 1,
+   "rows": 3
+  },
+  {
+   "node_id": "D0120029/97-3",
+   "status": "draft",
+   "parts": 2,
+   "rows": 3
+  },
+  {
+   "node_id": "D0120029/97-5",
+   "status": "draft",
+   "parts": 1,
+   "rows": 3
   }
  ],
  "xrefs": {

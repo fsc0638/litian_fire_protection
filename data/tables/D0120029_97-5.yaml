@@ -1,0 +1,53 @@
+node_id: D0120029/97-5
+citation: 設置標準第97條之5附表
+title: 鹵化烴滅火設備儲存容器之充填比
+law_version: '20240424'
+source:
+  kind: pdf
+  url: https://law.moj.gov.tw/LawClass/LawGetFile.ashx?FileId=0000366996
+  sha256: 5fd196514509c33d820ad2ab6ca044e7080239baff67a8106d7b13e4fac471c6
+  pages:
+  - 1
+  why: 網頁與 API 條文文字沒有這張表，只在官方「完整條文」PDF 中
+status: draft
+verified_by: null
+verified_at: null
+transcription:
+- by: 第一輪轉錄者（Sonnet）
+  date: '2026-10-01'
+  method: 150dpi 目視判讀表格；列名、欄名、儲存格以 PDF 文字層逐字核對。表頭左欄「滅火藥劑種類」為列頭欄，記於部分 title，不列入 columns。
+- by: 第二輪獨立轉錄者（Opus）
+  date: '2026-10-01'
+  method: 150dpi 全頁圖與 300/600dpi 局部放大圖目視判讀表格結構、公式排版與符號；列名、欄名、儲存格內容、註與數字以 PDF 文字層（pymupdf rawdict，含 Unicode 碼位與座標）逐字核對
+- by: 裁決者（主對話 Claude Opus 5.5）
+  date: '2026-10-01'
+  method: 以程式逐格比對兩輪（全半形與空白不計；轉錄者自加說明不計），內容不同處與所有公式對照 PDF 原圖裁決
+meaning: 原表符號，意義依條文（本表無特殊符號；「充填比」之定義見本條第二項）
+parts:
+- title: 第一項第一款 儲存容器之充填比表
+  kind: table
+  columns:
+  - 充填比
+  rows:
+  - 'no': 1
+    place: HFC-23
+    cells:
+      充填比:
+        raw: 零點五以上一點五以下
+  - 'no': 2
+    place: HFC-227ea
+    cells:
+      充填比:
+        raw: 零點五以上一點六以下
+  - 'no': 3
+    place: FK-5-1-12
+    cells:
+      充填比:
+        raw: 零點五以上一點六以下
+  notes:
+  - （轉錄說明）列名欄之欄頭為「滅火藥劑種類」，未列入 columns。
+notes: []
+source_quirks:
+- PDF 第1頁文字層另含頁面上被遮蔽不顯示的前文（第九十七條之三後段、第九十七條之四全文），第2頁文字層另含第九十七條之六至之十全文；頁面可見部分只有第九十七條之五，本檔只依可見部分轉錄（表格在第1頁，第2頁無表格）。
+uncertain: []
+cross_check: 2026-10-01 兩輪獨立轉錄（第一輪 Sonnet、第二輪 Opus）逐格比對：非空格 3 格；內容或寫法不同 0 處。

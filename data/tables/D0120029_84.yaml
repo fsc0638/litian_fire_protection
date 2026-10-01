@@ -1,0 +1,50 @@
+node_id: D0120029/84
+citation: 設置標準第84條附表
+title: 二氧化碳滅火設備全區放射方式之滅火藥劑放射時間
+law_version: '20240424'
+source:
+  kind: pdf
+  url: https://law.moj.gov.tw/LawClass/LawGetFile.ashx?FileId=0000366993
+  sha256: 1bde8a817fce32fe17be4e9df7f959ca62e7a4344c46e4786e75ea2c086a0461
+  pages:
+  - 2
+  why: 網頁與 API 條文文字沒有這張表，只在官方「完整條文」PDF 中
+status: draft
+verified_by: null
+verified_at: null
+transcription:
+- by: 第一輪轉錄者（Sonnet）
+  date: '2026-10-01'
+  method: 150dpi 全頁圖目視判讀，表格／公式另以 pymupdf 220–300dpi 裁切放大判讀結構與合併儲存格；列名、欄名、數值、註與變數定義以 PDF 文字層（pymupdf get_text，去除空白與換行後）逐字比對
+- by: 第二輪獨立轉錄者（Opus）
+  date: '2026-10-01'
+  method: 150dpi 頁圖與 pymupdf 另轉 250/300dpi 裁切圖目視判讀表格結構；以 PDF 向量框線座標判定合併儲存格與欄列界線；列名、欄名、數字、單位以 PDF 文字層逐字核對（含非漢字字元之 Unicode 碼點與字級檢查）
+- by: 裁決者（主對話 Claude Opus 5.5）
+  date: '2026-10-01'
+  method: 以程式逐格比對兩輪（全半形與空白不計；轉錄者自加說明不計），內容不同處與所有公式對照 PDF 原圖裁決
+meaning: 原表符號，意義依條文
+parts:
+- title: 第一項第三款第一目 二氧化碳滅火設備滅火藥劑之放射時間
+  kind: table
+  columns:
+  - 乾式電器設備室（油浸機器除外）
+  - 電信機械室、總機室
+  - 其他
+  rows:
+  - 'no': 1
+    place: 時間（分）
+    cells:
+      乾式電器設備室（油浸機器除外）:
+        raw: 七
+      電信機械室、總機室:
+        raw: 三點五
+      其他:
+        raw: 一
+  notes:
+  - 轉錄說明：原表為橫向二列四欄表：最左欄上格「設置場所」是表頭列的標題，下格「時間（分）」是資料列的列名；此處欄名取自表頭列，未加「設置場所」前綴。原表無合併儲存格。
+  - 轉錄說明：表頭格內換行僅因欄寬，此處相連書寫。
+notes: []
+source_quirks:
+- PDF 文字層含圖面上被白色遮蔽、看不見的鄰條文字（第1頁上半為第八十三條之一末段及第八十三條之二全文含其比容積表，第2頁下半為第八十六條開頭），以文字層取字時會混入，非本表內容。
+uncertain: []
+cross_check: 2026-10-01 兩輪獨立轉錄（第一輪 Sonnet、第二輪 Opus）逐格比對：非空格 3 格；內容或寫法不同 0 處。
