@@ -550,8 +550,26 @@ CASES_DIR = Path(os.environ.get("CASES_DIR", "/data/cases"))
 UPLOAD_MAX = 200 * 1024 * 1024        # 單檔上限
 NO_STORE = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
 LOGIN_ERROR_RE = re.compile(r"[A-Za-z_]{1,40}")
-# 不用來源 IP 封鎖登入：state、邀請權杖都是 256 位元亂數，沒有猜測空間；而整間辦公室共用一個對外 IP，
-# IP 封鎖反而會讓一個網頁（偷放 20 張圖片打回呼網址）就把全部同仁鎖在外面。灌資料表由全站暫存上限擋。
+# 不因登入失敗封鎖來源 IP：state、邀請權杖都是 256 位元亂數，沒有猜測空間；而整間辦公室共用一個對外 IP，
+# 失敗封鎖反而會讓一個網頁（偷放 20 張圖片打回呼網址）就把全部同仁鎖在外面。
+# 發起登入（每次存一筆暫存）只接受使用者真的點進來的頁面導覽，別的網站用圖片觸發不算；另有每個來源的寬鬆上限與全站上限。
+LOGIN_START_MAX = 60                  # 同一來源 10 分鐘內發起登入的上限（正常使用遠低於此）
+_login_starts: dict[str, deque] = {}
+
+
+def _start_allowed(request: Request) -> str | None:
+    """發起登入的請求檢查；不行時回錯誤代碼。"""
+    site = request.headers.get("sec-fetch-site")
+    dest = request.headers.get("sec-fetch-dest")
+    if (site and site not in ("same-origin", "none")) or (dest and dest != "document"):
+        return "expired"                                     # 別的網站觸發（圖片、iframe、跨站導覽）：不建立暫存
+    now, f = time.monotonic(), _login_starts.setdefault(_client_ip(request), deque())
+    while f and now - f[0] > 600:
+        f.popleft()
+    if len(f) >= LOGIN_START_MAX:
+        return "slow_down"
+    f.append(now)
+    return None
 
 
 def _line_cfg() -> LL.Config | None:
@@ -590,6 +608,9 @@ def _line_start(request: Request, invite: str | None, no_auto: bool, browser: st
         # 從別的網址（舊網域、IP）進來：登入暫存 Cookie 會留在那個網址，LINE 卻回到登記的網址 → 必定失敗。先轉到正式網址
         log.warning("line login started from host %s, callback host is %s", host[:80], urlsplit(cfg.callback_url).netloc)
         return RedirectResponse(cfg.base_url + "/workbench", status_code=303, headers=NO_STORE)
+    if (refused := _start_allowed(request)):
+        log.info("line login start refused: %s client=%s", refused, _ip_tag(request))
+        return _to_workbench(refused)
     invite_id = None
     # 同一瀏覽器已有登入暫存 Cookie 就沿用（兩個分頁同時登入時，兩個都能完成）
     browser = browser if browser and 20 <= len(browser) <= 100 else secrets.token_urlsafe(32)
@@ -621,11 +642,12 @@ def auth_line_start(request: Request, noauto: str | None = None,
 
 
 @app.post("/api/auth/line/start")
-def auth_line_start_invite(request: Request, invite: str = Form(..., max_length=200),
+def auth_line_start_invite(request: Request, invite: str = Form(..., max_length=200), noauto: str | None = Form(None),
                            login_cookie: str | None = Cookie(None, alias=AU.LOGIN_COOKIE)):
-    """邀請頁的「用 LINE 登入並開通」：權杖放表單內容。開通一律不自動登入：
-    手機自動登入失敗（無痕視窗、App 連結失效）會讓開通卡住，共用電腦也可能自動用到別人的 LINE。"""
-    return _line_start(request, invite, True, login_cookie)
+    """邀請頁的「用 LINE 登入並開通」：權杖放表單內容，不放網址。
+    第一次照常（手機上 LINE 一鍵自動登入）；自動登入失敗回來時頁面改送 noauto=1（LINE 官方建議的重試方式）。
+    不一律關掉自動登入：手機上沒有 LINE 網頁登入紀錄的人會被要求輸入 LINE 的 email 密碼，多數人沒設定。"""
+    return _line_start(request, invite, noauto == "1", login_cookie)
 
 
 def _ip_tag(request: Request) -> str:

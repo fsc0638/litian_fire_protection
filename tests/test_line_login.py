@@ -183,6 +183,7 @@ def flow(monkeypatch):
         return {"sub": SUB, "name": "王小明"}
     monkeypatch.setattr(api.LL, "exchange_code", exchange)
     monkeypatch.setattr(api.LL, "verify_id_token", verify)
+    api._login_starts.clear()
     c = TestClient(api.app, base_url="https://review.example.test")
     return NS(client=c, fa=fa, calls=calls)
 
@@ -289,15 +290,40 @@ def test_start_refuses_when_too_many_logins_pending(flow, monkeypatch):
     assert _start(flow)[0].headers["location"] == "/workbench?login_error=busy"
 
 
-def test_invite_start_never_auto_logs_in_and_binds_on_callback(flow):
+def test_invite_start_auto_login_first_then_no_auto_retry(flow):
     r = flow.client.post("/api/auth/line/start", data={"invite": "nope-nope-nope"}, follow_redirects=False)
     assert r.headers["location"] == "/workbench?login_error=invite_invalid"
     r = flow.client.post("/api/auth/line/start", data={"invite": "good-invite-token"}, follow_redirects=False)
     q = _query(r)
-    assert q["disable_auto_login"] == "true"                                  # 開通一律不自動登入
+    assert "disable_auto_login" not in q                                      # 第一次：手機上一鍵自動登入
     assert flow.fa.states[q["state"]]["invite_id"] == 5 and "good-invite-token" not in r.headers["location"]
+    r2 = flow.client.post("/api/auth/line/start", data={"invite": "good-invite-token", "noauto": "1"}, follow_redirects=False)
+    assert _query(r2)["disable_auto_login"] == "true"                        # 失敗後重試：不自動登入
     r = flow.client.get("/api/auth/line/callback", params={"code": "c", "state": q["state"]}, follow_redirects=False)
     assert r.headers["location"] == "/workbench" and flow.fa.users[SUB]["username"] == "amy"
+
+
+@pytest.mark.parametrize("headers", [{"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Dest": "document"},
+                                     {"Sec-Fetch-Site": "same-site", "Sec-Fetch-Dest": "document"},
+                                     {"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Dest": "image"}])
+def test_start_only_from_real_page_navigation(flow, headers):
+    """別的網站用圖片、iframe 或連結觸發「發起登入」：不建立暫存（灌不爆全站上限），也不算任何人的次數。"""
+    r = flow.client.get("/api/auth/line/start", headers=headers, follow_redirects=False)
+    assert r.headers["location"] == "/workbench?login_error=expired" and not flow.fa.states
+    ok = flow.client.get("/api/auth/line/start", headers={"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Dest": "document"},
+                         follow_redirects=False)
+    assert ok.headers["location"].startswith(LL.AUTHORIZE_URL)
+
+
+def test_start_rate_limit_per_source(flow, monkeypatch):
+    monkeypatch.setattr(api, "LOGIN_START_MAX", 3)
+    api._login_starts.clear()
+    h = {"X-Forwarded-For": "198.51.100.9"}
+    locs = [flow.client.get("/api/auth/line/start", headers=h, follow_redirects=False).headers["location"] for _ in range(4)]
+    assert all(x.startswith(LL.AUTHORIZE_URL) for x in locs[:3]) and locs[3] == "/workbench?login_error=slow_down"
+    assert flow.client.get("/api/auth/line/start", headers={"X-Forwarded-For": "198.51.100.10"},
+                           follow_redirects=False).headers["location"].startswith(LL.AUTHORIZE_URL)   # 別的來源不受影響
+    api._login_starts.clear()
 
 
 def test_invite_lookup(flow):
@@ -318,6 +344,7 @@ def test_workbench_page_headers_and_no_password_form(flow):
     assert r.headers["referrer-policy"] == "no-referrer" and "frame-ancestors 'none'" in r.headers["content-security-policy"]
     assert 'type="password"' not in r.text and 'action="/api/auth/line/start"' in r.text
     assert "#invite=" in r.text and "?invite=" not in r.text                  # 邀請權杖在 # 片段
+    assert 'name="noauto" value="1"' in r.text                               # 開通失敗後可改用不自動登入
 
 
 # ── 帳號管理權限 ─────────────────────────────────────────────────────

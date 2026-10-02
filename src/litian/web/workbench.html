@@ -61,6 +61,7 @@ button:disabled { opacity: .55; cursor: progress; }
 .btn-line:hover { background: linear-gradient(rgba(0,0,0,.1), rgba(0,0,0,.1)), #06C755; }
 .btn-line:active { background: linear-gradient(rgba(0,0,0,.3), rgba(0,0,0,.3)), #06C755; }
 .btn-line[aria-disabled="true"] { opacity: .5; pointer-events: none; }
+.linkbtn { background: none; border: 0; padding: 0; color: var(--accent-text); text-decoration: underline; font-size: .85rem; text-align: left; }
 .linkbox { font-family: ui-monospace, Consolas, monospace; font-size: .8rem; word-break: break-all; background: var(--surface-2);
   border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
 select { font: inherit; padding: 7px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
@@ -137,7 +138,9 @@ ol.findings li.rejected { opacity: .55; }
     <h2>開通審核工作台</h2>
     <p id="invite-desc"></p>
     <input type="hidden" name="invite" id="invite-token">
+    <input type="hidden" name="noauto" value="1" id="invite-noauto" disabled>
     <button class="btn-line" type="submit" id="invite-go">用 LINE 登入並開通</button>
+    <button class="linkbtn" type="submit" name="noauto" value="1" id="invite-manual">LINE 沒有正常回到這裡？改用不自動登入的方式開通</button>
     <a id="invite-login" class="small hidden" href="/api/auth/line/start">已開通過？直接用 LINE 登入</a>
     <p id="invite-msg" class="note err hidden" role="alert"></p>
     <p class="muted small">按下後會轉到 LINE 確認身分。這個連結只能用一次；用哪個 LINE 帳號登入，之後就固定用那個 LINE 帳號登入。</p>
@@ -289,7 +292,8 @@ ol.findings li.rejected { opacity: .55; }
     line_unavailable: "LINE 暫時無法使用，請稍等幾分鐘再試。",
     busy: "目前登入的人太多，請稍等幾分鐘再試。",
     denied: "已取消 LINE 授權，沒有登入。",
-    expired: "登入逾時或已失效（例如在不同瀏覽器完成、或開了無痕視窗），請重新登入。",
+    expired: "登入逾時或已失效（例如在不同瀏覽器完成、開了無痕視窗，或 LINE 自動登入沒有成功），請重新登入。用邀請連結開通的同仁，請重新點邀請連結，改按「改用不自動登入的方式開通」。",
+    slow_down: "登入嘗試太頻繁，請稍等 10 分鐘再試。",
     line_error: "LINE 驗證失敗，請稍後再試。",
     invite_invalid: "邀請連結無效、已使用或已過期，請向管理者索取新的連結。",
     line_taken: "這個 LINE 帳號已經綁定其他工作台帳號。請改用原本的帳號登入，或請管理者處理。",
@@ -297,9 +301,13 @@ ol.findings li.rejected { opacity: .55; }
     disabled: "這個帳號已停用，請聯絡管理者。",
   };
   const errText = (code) => (Object.prototype.hasOwnProperty.call(LOGIN_ERRORS, code) ? LOGIN_ERRORS[code] : "登入失敗，請重新登入。");
-  const PENDING = "pending_invite";                       // 開通中途失敗（取消、逾時）時，讓邀請卡回來重試
-  const pending = { get() { try { return sessionStorage.getItem(PENDING); } catch { return null; } },
-                    set(v) { try { v ? sessionStorage.setItem(PENDING, v) : sessionStorage.removeItem(PENDING); } catch {} } };
+  // 開通中途失敗（取消、LINE 自動登入沒成功）回來時，讓邀請卡回來、改用不自動登入重試。
+  // 用 localStorage：從 LINE App 回來常是新分頁；30 分鐘後自動作廢，成功或邀請無效時清掉。
+  const PENDING = "pending_invite";
+  const pending = {
+    get() { try { const v = JSON.parse(localStorage.getItem(PENDING) || "null"); return v && Date.now() - v.t < 1800e3 ? v.token : null; } catch { return null; } },
+    set(token) { try { token ? localStorage.setItem(PENDING, JSON.stringify({ token, t: Date.now() })) : localStorage.removeItem(PENDING); } catch {} },
+  };
   let me = null;
   function showLogin(err) {
     me = null; clearInterval(timer);
@@ -321,7 +329,10 @@ ol.findings li.rejected { opacity: .55; }
   async function showInvite(token, err) {
     $("#app").classList.add("hidden"); $("#login").classList.add("hidden"); $("#invite").classList.remove("hidden");
     $("#invite-token").value = token; $("#invite-go").disabled = true; $("#invite-desc").textContent = "確認邀請中…";
-    $("#invite-msg").classList.toggle("hidden", !err); $("#invite-msg").textContent = err ? errText(err) + "可以再按一次下面的按鈕。" : "";
+    $("#invite-msg").classList.toggle("hidden", !err);
+    $("#invite-msg").textContent = err ? errText(err).split("。")[0] + "。這次會改用不自動登入的方式，請再按一次下面的按鈕。" : "";
+    $("#invite-noauto").disabled = !err;                      // 失敗後重試：不自動登入（LINE 官方建議）
+    $("#invite-manual").classList.toggle("hidden", !!err);
     $("#invite-login").classList.add("hidden");
     try {
       const r = await api("/api/auth/invite", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) });
@@ -337,10 +348,11 @@ ol.findings li.rejected { opacity: .55; }
       if (r && r.ok) { showApp(await r.json()); return; }
       $("#invite-desc").textContent = "";
       $("#invite-msg").textContent = e.message; $("#invite-msg").classList.remove("hidden");
-      $("#invite-login").classList.remove("hidden");
+      $("#invite-login").classList.remove("hidden"); $("#invite-manual").classList.add("hidden");
     }
   }
   $("#invite").addEventListener("submit", () => { pending.set($("#invite-token").value); });
+  $("#invite-manual").addEventListener("click", () => { pending.set($("#invite-token").value); });
   function fmtTime(t) {
     const d = new Date(t);
     return isNaN(d) ? String(t || "") : d.toLocaleString("zh-TW", { hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
