@@ -195,6 +195,106 @@ def test_non_habitable_rooms():
     room = lambda labels, kind: F.Room(1, box(0, 0, 1, 1), labels, kind, False)  # noqa: E731
     assert K._non_habitable(room(["儲藏室"], "room")) and K._non_habitable(room(["女廁"], "toilet"))
     assert not K._non_habitable(room(["倉庫"], "room")) and not K._non_habitable(room(["機械室"], "machine"))
+    assert K._non_habitable(room(["儲藏室", "儲藏櫃", "儲藏室"], "room"))
+    for labels in (["辦公室", "儲藏室"], ["辦公室", "儲藏櫃"], ["倉庫", "儲藏室"], ["生產區", "成品儲藏區"], ["儲藏櫃"]):
+        assert not K._non_habitable(room(labels, F.room_kind(labels)[0])), labels
+
+
+def floor_named(rooms, label="1F"):
+    """同 floor_of，但種類與名稱衝突由房名判讀（F.room_kind）。rooms：[(多邊形, [房名])]。"""
+    rs = [F.Room(i, p, labels, *F.room_kind(labels)) for i, (p, labels) in enumerate(rooms, 1)]
+    region = unary_union([r.polygon for r in rs])
+    return F.Floor(label, "", 1.0, region.envelope, rs, region, box(0, 0, 0, 0), region, True)
+
+
+@pytest.mark.parametrize("labels, size", [
+    (["辦公室", "儲藏室"], (40, 5)),                       # 門沒畫、兩間連成一間
+    (["辦公室", "儲藏櫃"], (40, 5)),                       # 家具註記
+    (["倉庫", "儲藏室"], (40, 5)),
+    (["生產區", "成品儲藏區", "包裝區"], (60, 20)),         # 大廠房裡的分區標示
+])
+def test_room_with_storage_among_several_labels_is_still_habitable(labels, size):
+    """房間有多個標示、只有其中一個是儲藏：不能當儲藏室把步行距離的不符藏成說明。"""
+    fl = floor_named([(box(0, 0, *size), labels)], label="2F")
+    f, notes = K.extinguisher_walk(fl, [eq("乾粉滅火器", 0.5, 0.5)], K.Context())
+    assert K.RED in {x.severity for x in f} and not notes_of(notes, "EXT-31-3")
+    assert max(x.metrics["max_walk"] for x in f) > 40
+
+
+def test_speaker_proviso_not_for_multi_label_or_conflicting_rooms():
+    """但書面積上限：多標示的居室仍是 6 ㎡；名稱衝突的房間（男廁＋辦公室）以 6 ㎡ 計，照列缺失（需確認）。"""
+    office = floor_named([(box(0, 0, 4, 5), ["辦公室", "儲藏櫃"])])               # 20 ㎡、揚聲器在 8 m 處
+    f, notes = K.speaker_distance(office, [eq(SPKR, 12, 2.5)], K.Context())
+    assert [x.severity for x in f] == [K.RED] and not notes
+    mixed = floor_named([(box(0, 0, 5, 5), ["男廁", "辦公室"])])                  # 25 ㎡、kind toilet、衝突
+    assert mixed.rooms[0].kind == "toilet" and mixed.rooms[0].conflict
+    f, notes = K.speaker_distance(mixed, [eq(SPKR, 13, 2.5)], K.Context())
+    assert [x.severity for x in f] == [K.ORANGE] and not notes
+    store = floor_named([(box(0, 0, 4, 5), ["儲藏室", "儲藏櫃"])])                 # 真的儲藏室：30 ㎡ 上限、但書成立
+    f, notes = K.speaker_distance(store, [eq(SPKR, 12, 2.5)], K.Context())
+    assert f == [] and "但書" in notes_of(notes, "SPKR-133")
+
+
+# ── 電梯廳、電梯前室、電梯機房：房名分類歸為 elevator，但不是昇降機道 ─────────────────
+
+def test_hoistway_vs_elevator_lobby():
+    room = lambda labels: F.Room(1, box(0, 0, 1, 1), labels, *F.room_kind(labels))  # noqa: E731
+    for labels in (["客梯"], ["3T客貨梯", "(無障礙電梯)"], ["昇降機道"], ["管道間"], ["管道間(水)", "人孔"]):
+        assert K._hoistway(room(labels)), labels
+    for labels in (["電梯廳"], ["電梯前室"], ["電梯間"], ["電梯機房"], ["辦公室"], ["管道間", "辦公室"]):
+        assert not K._hoistway(room(labels)), labels
+    assert K._sprinkler_exempt(room(["客梯"]), True) == "D0120029/49/1/3"
+    assert K._sprinkler_exempt(room(["電梯機房"]), True) == "D0120029/49/1/4"
+    assert K._sprinkler_exempt(room(["電梯廳"]), True) is None
+
+
+@pytest.mark.parametrize("name", ["電梯廳", "電梯前室"])
+def test_elevator_lobby_beyond_reach_is_reported_not_noted(name):
+    """電梯廳是有人停留的樓地板：超出消防栓 25 m、揚聲器 10 m 仍列不符，不能當昇降機道改成說明。"""
+    fl = long_plan(name)
+    assert next(r for r in fl.rooms if r.name == name).kind == "elevator"
+    f, notes = K.hydrant_distance(fl, [eq(HYD, 24, 5)], K.Context())
+    assert [(x.severity, x.rooms) for x in f] == [(K.RED, [name])] and not notes_of(notes, "HYD-34")
+    f, notes = K.speaker_distance(fl, [eq(SPKR, x, 5) for x in (5, 15, 25, 35, 40)], K.Context())
+    assert [(x.severity, x.rooms) for x in f] == [(K.RED, [name])] and not notes_of(notes, "SPKR-133")
+    ext = [eq("乾粉滅火器", 12, 5), eq("乾粉滅火器", 36, 5)]
+    f, _ = K.extinguisher_walk(fl, ext, K.Context())                           # 門沒畫：走不進去照列
+    assert [(x.severity, x.rooms) for x in f] == [(K.YELLOW, [name])]
+    hoist = long_plan("客梯")                                                   # 對照：昇降機道仍是說明、不檢核步行距離
+    f, notes = K.hydrant_distance(hoist, [eq(HYD, 24, 5)], K.Context())
+    assert f == [] and "昇降機道" in notes_of(notes, "HYD-34")
+    assert K.extinguisher_walk(hoist, ext, K.Context()) == ([], [])
+
+
+# ── 滅火器步行距離：逐房子遮罩（記憶體）──────────────────────────────────────
+
+def test_sub_mask_polygons_match_whole_grid_version():
+    grid = C.WalkGrid(box(0, 0, 12, 8))
+    rng = __import__("numpy").random.default_rng(7)
+    full = grid.free & (rng.random(grid.free.shape) < 0.5)
+    sl = (slice(5, 31), slice(9, 47))
+    full[:5], full[31:], full[:, :9], full[:, 47:] = False, False, False, False
+    got = unary_union(K._sub_polygons(grid, sl, full[sl]))
+    want = unary_union(grid.cells_to_polygons(full))
+    assert got.symmetric_difference(want).area < 1e-9 and want.area > 1
+
+
+def test_extinguisher_walk_memory_does_not_scale_with_room_count():
+    """384 間房、24 萬格：逐房只存外接矩形那塊遮罩，規則本身的記憶體峰值在數十 MB 內（原本每間房一張整層遮罩約 180 MB）。"""
+    import tracemalloc
+    rooms = [(box(i * 5, j * 5, i * 5 + 5, j * 5 + 5), ["辦公室"], "room") for i in range(24) for j in range(16)]
+    fl = floor_of(rooms, label="2F")
+    grid = C.WalkGrid(fl.walkable)
+    ext = [eq("乾粉滅火器", x + 0.5, y + 0.5) for x in range(0, 120, 32) for y in range(0, 80, 32)]
+    tracemalloc.start()
+    try:
+        base = tracemalloc.get_traced_memory()[0]
+        f, _ = K.extinguisher_walk(fl, ext, K.Context(), grid=grid)
+        peak = tracemalloc.get_traced_memory()[1] - base
+    finally:
+        tracemalloc.stop()
+    assert peak < 60 * 2**20
+    assert K.RED in {x.severity for x in f} and all(len(x.rooms) == 1 for x in f)
 
 
 def test_warehouse_is_habitable_and_storage_within_tolerance_is_note():
@@ -257,3 +357,10 @@ def test_projected_detectors_count_and_are_named():
     assert f == [] and "F-301" in notes_of(notes, "DET-120")
     f, _ = K.detector_count(fl, [eq(HEAT, 4, 5), eq(HEAT, 10, 5), up(20, 5)], CTX)
     assert [x.rooms for x in f] == [["會議室"]] and "含上層挑空範圍內的探測器，圖號 F-301" in f[0].why
+
+
+def test_elevator_lobby_without_detector_is_reported():
+    left = [eq(HEAT, 4, 5), eq(HEAT, 10, 5)]
+    f, _ = K.detector_count(two_rooms(right="電梯廳"), left, CTX)
+    assert [(x.severity, x.category, x.rooms) for x in f] == [(K.RED, "未設置", ["電梯廳"])]
+    assert K.detector_count(two_rooms(right="客梯"), left, CTX) == ([], [])    # 昇降機道依第 122 條第 7 款另計

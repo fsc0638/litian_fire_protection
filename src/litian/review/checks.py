@@ -20,7 +20,7 @@ import shapely
 from shapely.geometry import Point, Polygon
 from shapely.ops import unary_union
 
-from litian.plan.floor import Floor, Room, _parts
+from litian.plan.floor import ROOM_KINDS, Floor, Room, _parts
 from litian.review import coverage as C
 from litian.review.equipment import Equipment
 
@@ -128,6 +128,24 @@ def _sev_for(rooms: list[Room], base: str) -> str:
     return base
 
 
+# 房名分類的「電梯」樣式排在走廊、機房前面，電梯廳、電梯前室、電梯間、電梯機房也會判成 elevator；這些是有人停留的樓地板
+NOT_HOISTWAY = re.compile(r"廳|前室|機房|機械|間|室")
+
+
+def _hoistway(r: Room) -> bool:
+    """昇降機道、管道間（無樓地板、無人員停留）。標示含廳、前室、間、室、機房的電梯類房間不算；名稱衝突的不算。"""
+    if r.conflict:
+        return False
+    return r.kind == "shaft" or (r.kind == "elevator" and not any(NOT_HOISTWAY.search(s) for s in r.labels))
+
+
+def _storage(r: Room) -> bool:
+    """儲藏室：房名標示（能判斷種類的標示，去重）全部含「儲藏」才算。辦公室＋儲藏室連成一間、廠房裡「成品儲藏區」
+    之類的分區標示都不算；「儲藏櫃」等家具註記不是房名，不列入判斷。倉庫是居室，不算。名稱衝突的不算。"""
+    named = [s for s in dict.fromkeys(r.labels) if any(re.search(p, s) for _, p in ROOM_KINDS)]
+    return not r.conflict and bool(named) and all("儲藏" in s for s in named)
+
+
 # ── 撒水頭：第 46 條水平距離；第 49 條免設處所 ─────────────────────────────
 
 def _sprinkler_radius(room: Room, response: str | None, fireproof: bool | None, lenient: bool) -> tuple[float, str]:
@@ -152,10 +170,12 @@ def _sprinkler_exempt(room: Room, fireproof: bool | None) -> str | None:
         return "D0120029/49/1/1"
     if room.kind == "stair" and re.search(r"安全梯|排煙室", names):
         return "D0120029/49/1/2"                 # 只限室內安全梯間、特別安全梯間（一般樓梯不免設）
-    if room.kind in ("elevator", "shaft") and fireproof:
+    if _hoistway(room) and fireproof:
         return "D0120029/49/1/3"
     if room.kind == "machine" and re.search(r"昇降機|升降機|電梯|通風|換氣|空調", names):
         return "D0120029/49/1/4"
+    if room.kind == "elevator" and re.search(r"機房|機械", names):
+        return "D0120029/49/1/4"                 # 電梯機房（房名分類歸在 elevator）
     if room.kind == "electrical":
         return "D0120029/49/1/5" if re.search(r"電信|電腦", names) else "D0120029/49/1/6"
     return None
@@ -247,9 +267,9 @@ OPEN_MIN = 5.0         # 開放樓地板最小面積（㎡）；更小的多半�
 MARGIN = 0.3           # 邊際超出：最遠點只超出半徑這麼多以內、且面積不到 1 ㎡（圖面誤差等級）
 
 
-def _floor_rooms(floor: Floor, skip: tuple[str, ...] = ()) -> list[Room]:
-    """逐房檢核的房間：算樓地板的（屋突層屋頂碎塊不算）、不是挑空或室外、不在 skip 種類內。"""
-    return [r for r in floor.rooms if r.kind not in ("void", "outdoor", *skip) and floor.in_region(r)]
+def _floor_rooms(floor: Floor) -> list[Room]:
+    """逐房檢核的房間：算樓地板的（屋突層屋頂碎塊不算）、不是挑空或室外。"""
+    return [r for r in floor.rooms if r.kind not in ("void", "outdoor") and floor.in_region(r)]
 
 
 def _open_floor(floor: Floor) -> list:
@@ -278,10 +298,13 @@ def _sev_at(rooms: list[Room], base: str) -> str:
 # ── 水平距離（消防栓 25 m、揚聲器 10 m）──────────────────────────────────
 
 def _proviso_limit(r: Room) -> float:
-    """第 133 條第 2 款第 4 目但書的面積上限：居室、主要走廊通道 6 ㎡，其他非居室 30 ㎡。"""
-    if r.kind in ("room", "corridor", "kitchen", "unknown", "mixed") and not any("儲藏" in s for s in r.labels):
+    """第 133 條第 2 款第 4 目但書的面積上限：居室、主要走廊通道 6 ㎡，其他非居室 30 ㎡。
+    名稱衝突的房間（例：男廁＋辦公室連成一間）可能是居室，以 6 ㎡ 計。"""
+    if r.conflict:
         return 6.0
-    return 30.0
+    if r.kind in ("stair", "toilet", "shaft", "electrical", "machine") or _hoistway(r) or _storage(r):
+        return 30.0
+    return 6.0
 
 
 def _stair_core(rooms: list[Room], stairs: list[Room]) -> bool:
@@ -307,7 +330,7 @@ def _horizontal(rule: str, label: str, kind: str, radius: float, law: list[str],
     for p, rooms in pieces:
         far = _farthest(p, items)
         desc = f"{'、'.join(_room_names(rooms)[:3])} {_fmt(p.area)} ㎡（最遠 {_fmt(far)} m）"
-        if plain(rooms, ("shaft", "elevator")) and not ctx.rule("shaft_in_coverage"):
+        if rooms and all(_hoistway(r) for r in rooms) and not ctx.rule("shaft_in_coverage"):
             shafts.append(desc)
             continue
         if speaker and plain(rooms, ("stair",)) and ctx.rule("stair_speaker_vertical"):
@@ -374,22 +397,36 @@ OUTSIDE_RING = 5.0     # 避難層、屋突層：外框外這個寬度的屋外�
 
 
 def _non_habitable(r: Room) -> bool:
-    """第 31 條第 3 款「樓面居室」以外的房間：樓梯間、廁所、管道間、儲藏室（倉庫是居室，不算）。名稱衝突的不算。"""
-    return not r.conflict and (r.kind in ("stair", "toilet", "shaft") or any("儲藏" in s for s in r.labels))
+    """第 31 條第 3 款「樓面居室」以外的房間：樓梯間、廁所、管道間、儲藏室（房名全是儲藏；倉庫是居室，不算）。名稱衝突的不算。"""
+    return not r.conflict and (r.kind in ("stair", "toilet", "shaft") or _storage(r))
 
 
-def _cells_in(grid: C.WalkGrid, g) -> np.ndarray:
-    """可走格中、中心點落在 g 內的遮罩（只算 g 外接矩形內的格子，逐房計算才不會每次掃整張圖）。"""
-    m = np.zeros_like(grid.free)
+def _cells_in(grid: C.WalkGrid, g) -> tuple[tuple[slice, slice], np.ndarray] | None:
+    """可走格中、中心點落在 g 內的格子，只取 g 外接矩形那一塊：回傳（切片, 子遮罩）；沒有格子回 None。
+    逐房只存子遮罩：記憶體與房間外接矩形的總面積成正比，不是「房間數 × 整層格點數」。"""
     if g.is_empty:
-        return m
+        return None
     x0, y0, x1, y1 = g.bounds
     c0, c1 = max(0, int((x0 - grid.x0) / grid.cell)), min(grid.nx, int((x1 - grid.x0) / grid.cell) + 1)
     r0, r1 = max(0, int((y0 - grid.y0) / grid.cell)), min(grid.ny, int((y1 - grid.y0) / grid.cell) + 1)
-    if c0 < c1 and r0 < r1:
-        shapely.prepare(g)
-        m[r0:r1, c0:c1] = grid.free[r0:r1, c0:c1] & shapely.contains_xy(g, grid.gx[r0:r1, c0:c1], grid.gy[r0:r1, c0:c1])
-    return m
+    if c0 >= c1 or r0 >= r1:
+        return None
+    shapely.prepare(g)
+    sub = grid.free[r0:r1, c0:c1] & shapely.contains_xy(g, grid.gx[r0:r1, c0:c1], grid.gy[r0:r1, c0:c1])
+    return ((slice(r0, r1), slice(c0, c1)), sub) if sub.any() else None
+
+
+def _sub_polygons(grid: C.WalkGrid, sl: tuple[slice, slice], sub: np.ndarray) -> list[Polygon]:
+    """子遮罩轉回多邊形（與 WalkGrid.cells_to_polygons 相同：逐列合併成長條再聯集），只處理外接矩形那一塊。"""
+    if not sub.any():
+        return []
+    edge = np.diff(np.pad(sub, ((0, 0), (1, 1))).astype(np.int8), axis=1)
+    rows, starts = np.nonzero(edge == 1)                  # 每列的長條起點、終點（不含）依列、行排序，一一對應
+    _, ends = np.nonzero(edge == -1)
+    r0, c0, s = sl[0].start, sl[1].start, grid.cell
+    boxes = shapely.box(grid.x0 + (c0 + starts) * s, grid.y0 + (r0 + rows) * s,
+                        grid.x0 + (c0 + ends) * s, grid.y0 + (r0 + rows + 1) * s)
+    return C.pieces(shapely.union_all(boxes))
 
 
 def _outdoor_link(floor: Floor) -> bool:
@@ -436,39 +473,43 @@ def _unreachable_why(floor: Floor, room: Room | None) -> tuple[str, str]:
 def extinguisher_walk(floor: Floor, eq: list[Equipment], ctx: Context, grid: C.WalkGrid | None = None):
     """樓地板上的房間逐房檢核（昇降機道、管道間不檢核）＋開放樓地板；每個房間各列一條。
     走不進去的範圍寬度不到 0.6 m 或不到 1 ㎡ 的是牆縫，不列。避難層、屋突層室內走不到的範圍改算經屋外、屋頂的距離。
-    解讀設定 habitable_only_extinguisher：樓梯間、廁所、儲藏室等非居室只列說明，不列缺失。"""
+    解讀設定 habitable_only_extinguisher：樓梯間、廁所、儲藏室等非居室只列說明，不列缺失。
+    逐房的格子只存外接矩形那一塊（大樓層、數百間房時，整層遮罩逐房各存一張會吃掉數 GB 記憶體）。"""
     ext = _of(eq, "extinguisher")
     if not ext:
         return [], []
     pts = [(e.x, e.y) for e in ext]
     grid = grid or C.WalkGrid(floor.walkable)
     d = grid.distances(pts)
-    zones = [(r, r.polygon.intersection(floor.region)) for r in _floor_rooms(floor, skip=("elevator", "shaft"))]
-    zones = [(r, _cells_in(grid, z)) for r, z in zones + [(None, p) for p in _open_floor(floor)]]
-    todo = np.isinf(d) & np.logical_or.reduce([c for _, c in zones] + [np.zeros_like(grid.free)])
-    via_out = np.zeros_like(grid.free)
+    zones = [(r, r.polygon.intersection(floor.region)) for r in _floor_rooms(floor) if not _hoistway(r)]
+    zones = [(r, z) for r, g in zones + [(None, p) for p in _open_floor(floor)] if (z := _cells_in(grid, g))]
+    todo = np.zeros_like(grid.free)
+    for _, (sl, sub) in zones:
+        todo[sl] |= sub
+    todo &= np.isinf(d)
+    via_out = None
     if _outdoor_link(floor) and todo.any():
         d = _outdoor_distances(floor, grid, pts, d, todo)
         via_out = todo & np.isfinite(d)
+    del todo
     hard_lim = EXT_LIMIT * (1 + C.WALK_TOL)
     habitable_only = ctx.rule("habitable_only_extinguisher")
     findings, skipped = [], []
-    for room, cells in zones:
-        if not cells.any():
-            continue
+    for room, (sl, cells) in zones:
+        ds = d[sl]
         rooms = [room] if room else []
         where = room.name if room else "未圍成房間的樓地板"
         reference = habitable_only and room is not None and _non_habitable(room)
         for sev, mask, desc in (
-            (RED, cells & (d > hard_lim) & ~np.isinf(d), "超過"),
-            (ORANGE, cells & (d > EXT_LIMIT) & (d <= hard_lim), "略超過（在計算誤差範圍內）"),
+            (RED, cells & (ds > hard_lim) & ~np.isinf(ds), "超過"),
+            (ORANGE, cells & (ds > EXT_LIMIT) & (ds <= hard_lim), "略超過（在計算誤差範圍內）"),
         ):
-            polys = grid.cells_to_polygons(mask)
+            polys = _sub_polygons(grid, sl, mask)
             if not polys:
                 continue
             g = unary_union(polys)
-            dmax = float(d[mask].max())
-            outside = bool((mask & via_out).any())
+            dmax = float(ds[mask].max())
+            outside = via_out is not None and bool((mask & via_out[sl]).any())
             if reference:
                 skipped.append(f"{where} {_fmt(g.area)} ㎡ 步行約 {_fmt(dmax)} m" + ("（經屋外）" if outside else "")
                                + ("（誤差內）" if sev == ORANGE else ""))
@@ -483,7 +524,7 @@ def extinguisher_walk(floor: Floor, eq: list[Equipment], ctx: Context, grid: C.W
                 ["D0120029/31/1/3"], rooms=_room_names(rooms), area=g.area, geom=g,
                 metrics={"max_walk": round(dmax, 2), **({"via_outdoor": True} if outside else {})}))
         # 走不進去：寬度不到 0.6 m 或不到 1 ㎡ 的是牆縫、窗邊縫，不列
-        polys = [p for p in grid.cells_to_polygons(cells & np.isinf(d)) if p.area >= 1.0 and not p.buffer(-0.3).is_empty]
+        polys = [p for p in _sub_polygons(grid, sl, cells & np.isinf(ds)) if p.area >= 1.0 and not p.buffer(-0.3).is_empty]
         if not polys:
             continue
         g = unary_union(polys)
@@ -607,8 +648,8 @@ def detector_count(floor: Floor, eq: list[Equipment], ctx: Context, grid=None):
     for room in floor.rooms:
         if not floor.in_region(room):
             continue                                   # 屋突層屋頂碎塊、天溝等不算樓地板
-        if room.kind in ("void", "outdoor", "elevator", "shaft", "stair"):
-            continue                                   # 樓梯、昇降路、管道間依第 122 條第 6、7 款另計
+        if room.kind in ("void", "outdoor", "stair") or _hoistway(room):
+            continue                                   # 樓梯、昇降路、管道間依第 122 條第 6、7 款另計（電梯廳、電梯機房照常檢核）
         mine = by_room.get(room.id, [])
         local = [d for d in mine if id(d) in local_ids]
         flame = [d for d in mine if "flame_detector" in d.kinds]
