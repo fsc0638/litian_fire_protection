@@ -92,7 +92,7 @@ def direction_lights(floor: Floor, eq: list[Equipment], ctx: Context, grid=None)
             findings.append(Finding(
                 "DIR-146-3", _sev_for(rooms, sev), "距離超過" if sev != YELLOW else "資料不足", floor.label or "",
                 f"{'、'.join(_room_names(rooms)[:2]) or '走廊'}有 {_fmt(p.area)} ㎡ 不在避難方向指示燈有效範圍內",
-                why, "在此段走廊（優先轉彎處）增設避難方向指示燈，或改用較高等級", ["D0120029/146-3/2/3", "D0120029/146-2"],
+                why, "在此段走廊（優先轉彎處）增設避難方向指示燈，或改用較高等級", ["D0120029/146-3/2/3", "D0120029/146-2/1/1"],
                 missing=missing, rooms=_room_names(rooms), area=p.area, geom=p))
     return findings, []
 
@@ -111,7 +111,7 @@ def emergency_lights(floor: Floor, eq: list[Equipment], ctx: Context, grid=None)
     if refuge and ext:
         grid = grid or C.WalkGrid(floor.walkable)
         d_ext = grid.distances(ext)
-    findings, exempt, refuge_ok = [], [], []
+    findings, exempt, refuge_ok, housing = [], [], [], []
     for room in floor.rooms:
         if room.kind in ("void", "outdoor", "shaft", "elevator") or room.area < 2:
             continue
@@ -129,8 +129,14 @@ def emergency_lights(floor: Floor, eq: list[Equipment], ctx: Context, grid=None)
                 refuge_ok.append(room)
                 continue
         what = {"corridor": "走廊／通道", "stair": "樓梯間"}.get(room.kind, "居室")
+        if what == "居室" and ctx.occupancy == "乙-7":
+            housing.append(room)                       # 集合住宅之居室得免設（第 179 條第 1 項第 3 款）
+            continue
+        sev = _sev_for([room], RED)
+        if what == "居室" and ctx.occupancy in ("戊-1", "戊-2") and sev == RED:
+            sev = ORANGE                               # 複合用途：住宅部分之居室得免設，需確認用途
         findings.append(Finding(
-            "EML-24", _sev_for([room], RED), "未設置", floor.label or "", f"{room.name}（{what}，{_fmt(room.area)} ㎡）未設緊急照明燈",
+            "EML-24", sev, "未設置", floor.label or "", f"{room.name}（{what}，{_fmt(room.area)} ㎡）未設緊急照明燈",
             f"本層設有緊急照明設備，{what}應設置（自居室通達避難層之走廊、樓梯間亦同）；此範圍內沒有緊急照明燈",
             f"在 {room.name} 設置緊急照明燈，並以照度計算確認地面水平照度達 2 lx 以上；"
             "若屬第 179 條得免設處所（設有固定機械之工作場所部分等），請在圖上註明",
@@ -141,6 +147,8 @@ def emergency_lights(floor: Floor, eq: list[Equipment], ctx: Context, grid=None)
     if exempt:
         notes.append(Note("EML-179", "免設緊急照明處所（洗手間、儲藏室、機械室等）：" + "、".join(r.name for r in exempt[:12]),
                           ["D0120029/179/1/6"]))
+    if housing:
+        notes.append(Note("EML-179", "集合住宅之居室得免設緊急照明：" + "、".join(r.name for r in housing[:12]), ["D0120029/179/1/3"]))
     if refuge_ok:
         notes.append(Note("EML-179", "避難層居室任一點 30 m 內可達屋外出口，得免設：" + "、".join(r.name for r in refuge_ok[:12]),
                           ["D0120029/179/1/1"]))

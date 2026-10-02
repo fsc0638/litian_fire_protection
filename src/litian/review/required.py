@@ -61,8 +61,8 @@ class Profile:
         """高層建築物（建築技術規則）：高度 50 m 以上或 16 層以上。"""
         if (self.height is not None and self.height >= 50) or (self.stories or 0) >= 16:
             return True
-        if self.height is None and (self.stories or 0) >= 13:
-            return None                  # 層數接近、高度未知
+        if self.height is None and (self.stories or 0) >= 11:
+            return None                  # 11～15 層、高度未知：層高大時可能已達 50 m
         return False
 
     def is_(self, *codes: str) -> bool:
@@ -104,20 +104,25 @@ def _composite_note() -> str:
 
 def extinguisher(p: Profile) -> Requirement:
     name, kinds = "滅火器", ("extinguisher",)
-    hits = []
-    if p.is_("甲", "戊-3", "乙-12"):
-        hits.append(("甲類場所、地下建築物或幼兒園", L + "14/1/1"))
+    hits, whole = [], False
+    if p.is_("甲", "戊-3", "乙-12", "戊-1"):
+        hits.append(("甲類場所（含戊-1 中之甲類用途）、地下建築物或幼兒園", L + "14/1/1"))
+        whole = True
     if p.is_("乙", "丙", "丁") and p.total_area >= 150:
         hits.append((f"乙、丙、丁類場所，總樓地板面積 {_fmt(p.total_area)} ㎡ ≥ 150 ㎡", L + "14/1/2"))
+        whole = True
     sp = [f for f in p.special() if f.area >= 50]
     if sp:
         hits.append(("地下層或無開口樓層樓地板面積 ≥ 50 ㎡：" + "、".join(f.label for f in sp), L + "14/1/3"))
     if p.has_electrical:
         hits.append(("設有變壓器、配電盤等電氣設備（圖上有電氣室）", L + "14/1/4"))
+        whole = True
     if p.has_kitchen:
         hits.append(("設有鍋爐房、廚房等大量使用火源處所", L + "14/1/5"))
+        whole = True
     if hits:
-        return Requirement("14", name, kinds, REQUIRED, "；".join(h for h, _ in hits), [l for _, l in hits])
+        return Requirement("14", name, kinds, REQUIRED, "；".join(h for h, _ in hits), [l for _, l in hits],
+                           floors=None if whole else [f.label for f in sp])
     if not p.occupancy:
         return _unknown_occ("14", name, kinds, [L + "14/1"])
     if p.is_("戊"):
@@ -131,23 +136,33 @@ def indoor_hydrant(p: Profile) -> Requirement:
         return _unknown_occ("15", name, kinds, [L + "15/1"])
     if p.is_("戊-1", "戊-2"):
         return Requirement("15", name, kinds, UNKNOWN, _composite_note(), [L + "15/1"], missing=["各層各用途樓地板面積"])
-    hits, mx = [], p.max_floor([f for f in p.floors if f.level > 0])
+    hits, mx, whole = [], p.max_floor([f for f in p.floors if f.level > 0]), False
     st = p.stories or 0
+    classroom_unknown = False
     if st and st <= 5:
-        th = 300 if p.is_("甲-1") else (1400 if p.is_("乙-3") else 500)
-        if p.is_("甲", "乙", "丙", "丁") and mx >= th:
-            hits.append((f"五層以下建築物，最大一層樓地板面積 {_fmt(mx)} ㎡ ≥ {th} ㎡", L + "15/1/1"))
+        th = 300 if p.is_("甲-1") else 500
+        if p.is_("乙-3") and th <= mx < 1400:
+            classroom_unknown = True      # 學校教室 1,400 ㎡、同目其他用途（補習班等）500 ㎡
+        elif p.is_("甲", "乙", "丙", "丁") and mx >= th:
+            hits.append((f"五層以下建築物，最大一層樓地板面積 {_fmt(mx)} ㎡ ≥ {1400 if p.is_('乙-3') else th} ㎡", L + "15/1/1"))
+            whole = True
     if st >= 6 and p.is_("甲", "乙", "丙", "丁") and mx >= 150:
         hits.append((f"六層以上建築物，最大一層樓地板面積 {_fmt(mx)} ㎡ ≥ 150 ㎡", L + "15/1/2"))
+        whole = True
     if p.is_("戊-3") and p.total_area >= 150:
         hits.append((f"地下建築物總樓地板面積 {_fmt(p.total_area)} ㎡ ≥ 150 ㎡", L + "15/1/3"))
+        whole = True
     th = 100 if p.is_("甲-1") else 150
     sp = [f for f in p.special() if f.area >= th]
     if sp and p.is_("甲", "乙", "丙", "丁"):
         hits.append((f"地下層或無開口樓層樓地板面積 ≥ {th} ㎡：" + "、".join(f.label for f in sp), L + "15/1/4"))
     if hits:
         return Requirement("15", name, kinds, REQUIRED, "；".join(h for h, _ in hits), [l for _, l in hits],
+                           floors=None if whole else [f.label for f in sp],
                            notes=["設有自動撒水等滅火設備者，在其有效範圍內得免設（第 15 條第 2 項）"])
+    if classroom_unknown:
+        return Requirement("15", name, kinds, UNKNOWN, f"最大一層 {_fmt(mx)} ㎡：學校教室門檻 1,400 ㎡，補習班等其他乙-3 用途 500 ㎡",
+                           [L + "15/1/1"], missing=["是否為學校教室"])
     if not st:
         return Requirement("15", name, kinds, UNKNOWN, "地上層數未知", [L + "15/1"], missing=["地上層數"])
     return Requirement("15", name, kinds, NOT_REQUIRED, "未達第 15 條各款門檻", [L + "15/1"])
@@ -204,11 +219,12 @@ def sprinkler(p: Profile) -> Requirement:
     if p.is_("戊-1"):
         notes.append("戊-1 中甲類場所面積合計達 3,000 ㎡ 時，供甲類之樓層應設（第 17 條第 1 項第 5 款），需各用途面積")
     if p.is_("乙-11"):
-        tall = [f for f in above if f.area >= 700 and p.ceiling_height.get(f.label, 0) > 10]
+        big = [f for f in above if f.area >= 700]
+        tall = [f for f in big if p.ceiling_height.get(f.label, 0) > 10]      # 天花板已超過 10 m，樓層高度必然超過
         if tall:
             add(tall, "高架儲存倉庫：樓層高度超過 10 m 且樓地板面積 ≥ 700 ㎡", "17/1/6")
-        elif any(f.area >= 700 and f.label not in p.ceiling_height for f in above):
-            missing.append("倉庫各層樓層高度（是否超過 10 m）")
+        if len(tall) < len(big):
+            missing.append("倉庫各層樓層高度（樓板至上層樓板，是否超過 10 m）")
     if p.is_("戊-3") and p.total_area >= 1000:
         add(p.floors, f"地下建築物總樓地板面積 {_fmt(p.total_area)} ㎡ ≥ 1,000 ㎡", "17/1/7")
     hr = p.high_rise
@@ -252,9 +268,12 @@ def fire_alarm(p: Profile) -> Requirement:
     if p.is_("甲-6"):
         notes.append("甲-6 中長照、老福、護理等特定機構應設（第 19 條第 1 項第 7 款），請確認是否屬之")
     if hits:
-        if not p.is_("甲", "戊-3") and not p.high_rise:
-            notes.append("已設密閉型撒水頭（標示溫度 75 °C 以下、動作 60 秒內）之自動撒水等設備者，在其有效範圍內得免設（第 19 條第 2 項）")
-        return Requirement("19", name, kinds, REQUIRED, "；".join(h for h, _ in hits), sorted({L + n for _, n in hits}), notes=notes)
+        if not p.is_("甲", "戊-3") and p.high_rise is False:
+            notes.append("已設密閉型撒水頭（標示溫度 75 °C 以下、動作 60 秒內）之自動撒水等設備者，在其有效範圍內得免設；"
+                         "但應設置偵煙式探測器之場所不適用（第 19 條第 2 項）")
+        whole = any(n != "19/1/4" for _, n in hits)
+        return Requirement("19", name, kinds, REQUIRED, "；".join(h for h, _ in hits), sorted({L + n for _, n in hits}),
+                           floors=None if whole else [f.label for f in sp], notes=notes)
     if p.is_("戊-1", "戊-2"):
         return Requirement("19", name, kinds, UNKNOWN, _composite_note(), [L + "19/1"], missing=["各層各用途樓地板面積"], notes=notes)
     if not st:
@@ -277,10 +296,12 @@ def manual_alarm(p: Profile) -> Requirement:
     return Requirement("20", name, kinds, NOT_REQUIRED, "未達第 20 條門檻", [L + "20/1"])
 
 
-def emergency_broadcast(alarm: Requirement) -> Requirement:
+def emergency_broadcast(alarm: Requirement, gas: Requirement | None = None) -> Requirement:
     name, kinds = "緊急廣播設備", ("speaker",)
     if alarm.status == REQUIRED:
         return Requirement("22", name, kinds, REQUIRED, "依第 19 條應設火警自動警報設備", [L + "22/1"])
+    if gas is not None and gas.status == REQUIRED:
+        return Requirement("22", name, kinds, REQUIRED, "依第 21 條應設瓦斯漏氣火警自動警報設備", [L + "22/1"])
     if alarm.status == UNKNOWN:
         return Requirement("22", name, kinds, UNKNOWN, "火警自動警報設備是否應設尚無法判定", [L + "22/1"], missing=alarm.missing)
     return Requirement("22", name, kinds, NOT_REQUIRED, "火警自動警報設備未達應設門檻（地下層瓦斯漏氣警報另依第 21 條）", [L + "22/1"])
@@ -312,10 +333,16 @@ def emergency_lighting(p: Profile) -> Requirement:
     hits = []
     if p.is_("甲", "丙", "戊"):
         hits.append(("甲、丙、戊類場所之居室", "24/1/1"))
-    elif p.is_("乙-1", "乙-2", "乙-3", "乙-4", "乙-5", "乙-6", "乙-8", "乙-9", "乙-12"):
-        hits.append(("第 24 條第 2 款所列乙類場所之居室" + ("（學校教室除外）" if p.is_("乙-3") else ""), "24/1/2"))
+    elif p.is_("乙-1", "乙-2", "乙-4", "乙-5", "乙-6", "乙-8", "乙-9", "乙-12"):
+        hits.append(("第 24 條第 2 款所列乙類場所之居室", "24/1/2"))
     if p.total_area >= 1000 and not p.is_("乙-3"):
         hits.append((f"總樓地板面積 {_fmt(p.total_area)} ㎡ ≥ 1,000 ㎡ 建築物之居室", "24/1/3"))
+    if not hits and p.is_("乙-3"):
+        return Requirement("24", name, kinds, UNKNOWN, "乙-3 中學校教室除外（第 24 條第 2、3 款），補習班、訓練班等仍應設",
+                           [L + "24/1/2", L + "24/1/3"], missing=["是否為學校教室"])
+    if not hits and p.is_("乙-7"):
+        return Requirement("24", name, kinds, UNKNOWN, "乙-7 中僅住宿型精神復健機構列入第 24 條第 2 款；集合住宅之居室得免設（第 179 條）",
+                           [L + "24/1/2", L + "179/1/3"], missing=["是否為住宿型精神復健機構"])
     if hits:
         return Requirement("24", name, kinds, REQUIRED, "；".join(h for h, _ in hits) + "，及自居室通達避難層之走廊、樓梯間、通道",
                            sorted({L + n for _, n in hits} | {L + "24/1/5"}),
@@ -384,12 +411,43 @@ def smoke_control(p: Profile) -> Requirement:
 
 def emergency_outlet(p: Profile) -> Requirement:
     name, kinds = "緊急電源插座", ("emergency_outlet",)
-    hi = [f.label for f in p.floors if f.level >= 11]
     if (p.stories or 0) >= 11:
-        return Requirement("29", name, kinds, REQUIRED, "十一層以上建築物之各樓層", [L + "29/1/1"], floors=hi or None)
+        return Requirement("29", name, kinds, REQUIRED, "十一層以上建築物之各樓層（每層任一處至插座水平距離 50 m 以下，第 191 條）",
+                           [L + "29/1/1"])
     if p.is_("戊-3") and p.total_area >= 1000:
         return Requirement("29", name, kinds, REQUIRED, "地下建築物總樓地板面積 ≥ 1,000 ㎡", [L + "29/1/2"])
     return Requirement("29", name, kinds, NOT_REQUIRED, "未達第 29 條第 1、2 款（緊急昇降機間另依建築技術規則，第 3 款）", [L + "29/1"])
+
+
+def gas_leak(p: Profile) -> Requirement:
+    name, kinds = "瓦斯漏氣火警自動警報設備", ("gas_detector",)
+    base = [f for f in p.floors if f.level < 0]
+    ba = sum(f.area for f in base)
+    if p.is_("甲") and ba >= 1000:
+        return Requirement("21", name, kinds, REQUIRED, f"地下層供甲類使用，樓地板面積合計 {_fmt(ba)} ㎡ ≥ 1,000 ㎡",
+                           [L + "21/1/1"], floors=[f.label for f in base], notes=["限使用瓦斯之場所"])
+    if p.is_("戊-3") and p.total_area >= 1000:
+        return Requirement("21", name, kinds, REQUIRED, "地下建築物總樓地板面積 ≥ 1,000 ㎡", [L + "21/1/3"], notes=["限使用瓦斯之場所"])
+    if p.is_("戊-1") and ba >= 1000:
+        return Requirement("21", name, kinds, UNKNOWN, "戊-1 地下層合計 ≥ 1,000 ㎡，需甲類用途面積是否 ≥ 500 ㎡",
+                           [L + "21/1/2"], missing=["地下層甲類用途樓地板面積"])
+    return Requirement("21", name, kinds, NOT_REQUIRED, "未達第 21 條門檻", [L + "21/1"])
+
+
+def radio_aux(p: Profile) -> Requirement:
+    name = "無線電通信輔助設備"
+    base = [f for f in p.floors if f.level < 0]
+    ba = sum(f.area for f in base)
+    if base and p.height is not None and p.height >= 100:
+        return Requirement("30", name, (), REQUIRED, f"樓高 {p.height} m ≥ 100 m 建築物之地下層", [L + "30/1/1"], floors=[f.label for f in base])
+    if p.is_("戊-3") and p.total_area >= 1000:
+        return Requirement("30", name, (), REQUIRED, "地下建築物總樓地板面積 ≥ 1,000 ㎡", [L + "30/1/2"])
+    if len(base) >= 4 and ba >= 3000:
+        return Requirement("30", name, (), REQUIRED, f"地下層 {len(base)} 層、合計 {_fmt(ba)} ㎡ ≥ 3,000 ㎡", [L + "30/1/3"],
+                           floors=[f.label for f in base])
+    if base and p.height is None:
+        return Requirement("30", name, (), UNKNOWN, "有地下層，需建築物高度判定第 30 條第 1 款", [L + "30/1/1"], missing=["建築物高度"])
+    return Requirement("30", name, (), NOT_REQUIRED, "未達第 30 條門檻", [L + "30/1"])
 
 
 def evacuation_tools(p: Profile) -> Requirement:
@@ -408,11 +466,18 @@ def disaster_control(p: Profile) -> Requirement:
 
 
 def evaluate(p: Profile) -> list[Requirement]:
-    alarm = fire_alarm(p)
-    out = [extinguisher(p), indoor_hydrant(p), outdoor_hydrant(p), sprinkler(p), alarm, manual_alarm(p),
-           emergency_broadcast(alarm), *signs(p), emergency_lighting(p), standpipe(p), water_tank(p), smoke_control(p),
-           emergency_outlet(p), evacuation_tools(p), disaster_control(p)]
+    alarm, gas = fire_alarm(p), gas_leak(p)
+    out = [extinguisher(p), indoor_hydrant(p), outdoor_hydrant(p), sprinkler(p), special_suppression_note(), alarm, manual_alarm(p),
+           gas, emergency_broadcast(alarm, gas), *signs(p), emergency_lighting(p), standpipe(p), water_tank(p), smoke_control(p),
+           emergency_outlet(p), radio_aux(p), evacuation_tools(p), disaster_control(p)]
     return out
+
+
+def special_suppression_note() -> Requirement:
+    """第 18 條按房間判定（發電機室、廚房、電腦室、停車空間等達面積者），由逐層規則 special_suppression 檢查。"""
+    return Requirement("18", "水霧、泡沫、二氧化碳、鹵化烴或乾粉滅火設備", (), UNKNOWN,
+                       "依第 18 條附表按房間用途與面積判定，逐層列在各樓層缺失中", [L + "18/1"],
+                       notes=["樓地板面積 300 ㎡ 以上之餐廳等，其廚房排油煙管及煙罩應設簡易自動滅火設備（第 18 條第 2 項）"])
 
 
 # ── 由檢核結果組出建物資料 ─────────────────────────────────────────────

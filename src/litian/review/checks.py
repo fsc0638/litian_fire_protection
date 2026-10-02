@@ -134,8 +134,8 @@ def _sprinkler_exempt(room: Room, fireproof: bool | None) -> str | None:
     names = " ".join(room.labels)
     if room.kind == "toilet":
         return "D0120029/49/1/1"
-    if room.kind == "stair":
-        return "D0120029/49/1/2"
+    if room.kind == "stair" and re.search(r"安全梯|排煙室", names):
+        return "D0120029/49/1/2"                 # 只限室內安全梯間、特別安全梯間（一般樓梯不免設）
     if room.kind in ("elevator", "shaft") and fireproof:
         return "D0120029/49/1/3"
     if room.kind == "machine" and re.search(r"昇降機|升降機|電梯|通風|換氣|空調", names):
@@ -236,7 +236,7 @@ def _horizontal(rule: str, label: str, kind: str, radius: float, law: list[str],
         rooms = _rooms_touching(floor, p)
         sev = _sev_for(rooms, RED)
         note = ""
-        if small_room_rule and rooms and all(r.area <= (6 if r.kind == "room" else 30) for r in rooms):
+        if small_room_rule and rooms and all(r.area <= (6 if r.kind in ("room", "corridor", "unknown", "mixed") else 30) for r in rooms):
             sev, note = ORANGE, "；此範圍屬小面積房間，若相鄰區域揚聲器在 8 m 內得免設（第 133 條第 2 款第 4 目但書），請確認"
         c = p.representative_point()
         near = floor.room_at(c.x, c.y)
@@ -359,7 +359,8 @@ def extinguisher_electrical(floor: Floor, eq: list[Equipment], ctx: Context, gri
 
 # ── 探測器：第 120 條（熱式局限型）、第 122 條（偵煙式局限型）；第 116 條免設 ───
 
-# (種類, 種別) → {高度區間: (防火構造, 其他構造)}；None＝該高度不得使用
+# (種類, 種別) → {高度區間: (防火構造, 其他構造)}；None＝該高度不得使用。
+# 第 114 條選用表：熱式局限型只能用在未滿 8 m（定溫式 4～8 m 限特種、一種）；偵煙式局限型 4 m 以上限一、二種，15～20 m 限一種
 HEAT_TABLE = {
     ("差動式", "1"): {"lt4": (90, 50), "4to8": (45, 30)},
     ("差動式", "2"): {"lt4": (70, 40), "4to8": (35, 25)},
@@ -369,17 +370,22 @@ HEAT_TABLE = {
     ("定溫式", "1"): {"lt4": (60, 30), "4to8": (30, 15)},
     ("定溫式", "2"): {"lt4": (20, 15), "4to8": None},
 }
-SMOKE_TABLE = {"1": {"lt4": 150, "4to20": 75}, "2": {"lt4": 150, "4to20": 75}, "3": {"lt4": 50, "4to20": None}}
+SMOKE_TABLE = {"1": {"lt4": 150, "4to15": 75, "15to20": 75}, "2": {"lt4": 150, "4to15": 75, "15to20": None},
+               "3": {"lt4": 50, "4to15": None, "15to20": None}}
+
+
+def height_band(h: float) -> str:
+    return "lt4" if h < 4 else ("4to8" if h < 8 else ("8to15" if h < 15 else ("15to20" if h < 20 else "ge20")))
 
 
 def _eff_area(dtype: str, dclass: str, band: str, fp: bool) -> float | None:
     if dtype == "偵煙式":
-        b = "lt4" if band == "lt4" else "4to20"
+        b = {"4to8": "4to15", "8to15": "4to15"}.get(band, band)
         return SMOKE_TABLE.get(dclass, {}).get(b)
     row = HEAT_TABLE.get((dtype, dclass))
     if not row:
         return None
-    v = row.get(band)
+    v = row.get(band)                             # 8 m 以上不在表內 → None（第 114 條不得使用）
     return None if v is None else v[0 if fp else 1]
 
 
@@ -391,8 +397,12 @@ def detector_count(floor: Floor, eq: list[Equipment], ctx: Context, grid=None):
     h = ctx.ceiling_height.get(floor.label or "")
     findings, exempt = [], []
     for room in floor.rooms:
-        if room.kind in ("void", "outdoor", "elevator", "shaft", "stair", "corridor"):
-            continue                                   # 走廊、樓梯、管道間依第 122 條另計，下一批
+        if room.kind in ("void", "outdoor", "elevator", "shaft", "stair"):
+            continue                                   # 樓梯、昇降路、管道間依第 122 條第 6、7 款另計
+        if room.kind == "corridor" and re.search(r"走廊|通道|走道", " ".join(room.labels)):
+            inside_heat = [d for d in dets if d.spec["detector_type"] != "偵煙式" and room.polygon.covers(Point(d.x, d.y))]
+            if not inside_heat:
+                continue                               # 走廊、通道的偵煙式依第 122 條第 5 款步行距離另計
         if room.kind == "toilet" and not room.conflict:
             exempt.append(room)
             continue
@@ -413,15 +423,18 @@ def detector_count(floor: Floor, eq: list[Equipment], ctx: Context, grid=None):
             kinds[k] = kinds.get(k, 0) + 1
         (dtype, dclass), _ = max(kinds.items(), key=lambda kv: kv[1])
         law = "D0120029/122/1/4" if dtype == "偵煙式" else "D0120029/120/1/2"
-        bands = ["lt4"] if (h is not None and h < 4) else (["4to8"] if h is not None else ["lt4", "4to8"])
+        if h is not None and h >= 20 and dtype != "火焰式":
+            continue                                   # 裝置面高度超過 20 m 得免設（第 116 條第 1 款）
+        bands = [height_band(h)] if h is not None else ["lt4", "4to8"]
         fps = [fp] if fp is not None else [True, False]
         effs = [e for b in bands for f in fps if (e := _eff_area(dtype, dclass, b, f))]
         invalid = any(_eff_area(dtype, dclass, b, f) is None for b in bands for f in fps)
         if not effs:
             findings.append(Finding(
                 "DET-120", RED, "規格不符", floor.label or "", f"{room.name} 的{dtype}{dclass}種探測器不適用此裝置面高度",
-                f"裝置面高度 {h} m 時，{dtype}局限型{dclass}種不得使用（表列為「–」）", "改用適用該高度的探測器種類",
-                [law], rooms=[room.name], area=room.area, geom=room.polygon))
+                f"裝置面高度 {h} m 時，{dtype}局限型{dclass}種不得使用（第 114 條選用表）",
+                "改用適用該高度的探測器種類（8 m 以上用差動式分布型、光電式等；15 m 以上限偵煙式一種、光電式分離型或火焰式）",
+                [law, "D0120029/114/1"], rooms=[room.name], area=room.area, geom=room.polygon))
             continue
         need_l, need_s = math.ceil(room.area / max(effs)), math.ceil(room.area / min(effs))
         have = len(inside)
@@ -453,6 +466,61 @@ def detector_count(floor: Floor, eq: list[Equipment], ctx: Context, grid=None):
     return findings, notes
 
 
+# ── 第 18 條附表：特定房間應選設水霧、泡沫、二氧化碳等滅火設備 ─────────────────
+S18 = [   # (房名, 門檻 ㎡ 或依樓層, 附表項次, 可選設備, 得替代說明)
+    (r"發電機|變壓器|變電|配電室|電氣室|受電", 200, 5, "水霧、二氧化碳或惰性氣體、鹵化烴或乾粉", None),
+    (r"鍋爐|廚房", 200, 6, "二氧化碳或惰性氣體、鹵化烴或乾粉", "設有自動撒水設備且排油煙管及煙罩設簡易自動滅火裝置者不受限（附表註二）"),
+    (r"電信機|電腦室|總機室|伺服器", 200, 7, "二氧化碳或惰性氣體、鹵化烴或乾粉", "得設置預動式自動撒水設備（附表註四）"),
+    (r"停車|汽車修", "parking", 3, "水霧、泡沫、二氧化碳或惰性氣體、鹵化烴或乾粉", "得設置自動撒水設備（附表註四）"),
+    (r"飛機修理|機庫", 200, 2, "泡沫或乾粉", None),
+]
+
+
+def special_suppression(floor: Floor, eq: list[Equipment], ctx: Context, grid=None):
+    if not eq:
+        return [], []                                  # 本層沒有任何消防設備（多半不是消防設備圖）
+    from litian.review.required import _level
+    kind, lv = _level(floor.label or "")
+    findings = []
+    for room in floor.rooms:
+        names = " ".join(room.labels)
+        for pat, th, item, systems, alt in S18:
+            if not re.search(pat, names):
+                continue
+            if th == "parking":
+                th = 500 if lv == 1 else (300 if kind == "roof" else 200)
+            if room.area < th:
+                break
+            zone = room.polygon.buffer(0.3)
+            inside = [e for e in eq if zone.covers(Point(e.x, e.y))]
+            if any("special_suppression" in e.kinds for e in inside):
+                break
+            has_spk = any("sprinkler" in e.kinds for e in inside)
+            has_simple = any("simple_suppression" in e.kinds for e in inside)
+            if (item == 3 and has_spk) or (item == 6 and has_spk and has_simple):
+                break
+            sev = ORANGE if (item == 7 and has_spk) else _sev_for([room], RED)
+            findings.append(Finding(
+                "S18", sev, "未設置", floor.label or "", f"{room.name}（{_fmt(room.area)} ㎡）應選設{systems}滅火設備，圖上未見",
+                f"依第 18 條附表第 {item} 項，此類場所樓地板面積達 {th} ㎡ 以上應選擇設置{systems}滅火設備"
+                + (f"；{alt}" if alt else "") + ("；本室設有撒水頭，若為預動式得替代，請確認" if sev == ORANGE and item == 7 else ""),
+                f"於 {room.name} 選設{systems}滅火設備並附設計計算；或依附表註記採替代方式並於圖上註明",
+                ["D0120029/18/1"], rooms=[room.name], area=room.area, geom=room.polygon, metrics={"item": item}))
+            break
+    notes = []
+    if ctx.occupancy == "甲-5":
+        kitchens = [r for r in floor.rooms if re.search(r"廚房", " ".join(r.labels))]
+        for r in kitchens:
+            if not any("simple_suppression" in e.kinds or "special_suppression" in e.kinds
+                       for e in eq if r.polygon.buffer(0.3).covers(Point(e.x, e.y))):
+                findings.append(Finding(
+                    "S18-2", ORANGE, "需確認", floor.label or "", f"{r.name} 未見簡易自動滅火設備",
+                    "樓地板面積 300 ㎡ 以上之餐廳，其廚房排油煙管及煙罩應設簡易自動滅火設備（已依第 18 條第 1 項設滅火設備者得免設）",
+                    "於排油煙管及煙罩設簡易自動滅火設備；若餐廳樓地板面積未達 300 ㎡ 請註明", ["D0120029/18/2"],
+                    rooms=[r.name], area=r.area, geom=r.polygon))
+    return findings, notes
+
+
 RULES = [
     ("SPK-46", "撒水頭水平距離", sprinkler_distance),
     ("HYD-34", "室內消防栓水平距離", hydrant_distance),
@@ -461,4 +529,5 @@ RULES = [
     ("EXT-31-1", "滅火效能值", extinguisher_count),
     ("EXT-31-2", "電氣設備處所滅火器", extinguisher_electrical),
     ("DET-120", "探測器數量", detector_count),
+    ("S18", "第 18 條特殊滅火設備", special_suppression),
 ]

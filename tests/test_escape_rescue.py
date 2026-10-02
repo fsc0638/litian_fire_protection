@@ -45,7 +45,7 @@ def test_direction_light_ranges_by_grade():
     fl = plan(rename={"會議室": "走廊"})
     light = lambda **kw: [eq("避難方向指示燈（單面單向）", 16, 1, **kw)]   # noqa: E731
     f, _ = ESC.direction_lights(fl, light(grade="C"), K.Context())         # 10 m：走廊遠端超出
-    assert f and f[0].severity == K.RED and f[0].law == ["D0120029/146-3/2/3", "D0120029/146-2"]
+    assert f and f[0].severity == K.RED and f[0].law == ["D0120029/146-3/2/3", "D0120029/146-2/1/1"]
     assert ESC.direction_lights(fl, light(grade="A"), K.Context())[0] == []   # 20 m：全涵蓋
     f, _ = ESC.direction_lights(fl, light(), K.Context())                  # 等級未標示 → 只有 C 級時不符
     assert f and all(x.severity == K.YELLOW for x in f) and "等級" in f[0].missing[0]
@@ -87,3 +87,35 @@ def test_standpipe_outlets_only_from_third_floor():
     f, _ = RES.standpipe_outlets(three, [eq("連結送水管出水口", 2, 2)], K.Context())
     assert [(x.severity, x.law) for x in f] == [(K.ORANGE, ["D0120029/180/1/1"])]
     assert RES.standpipe_outlets(plan(title="貳層平面圖"), [eq("連結送水管出水口", 2, 2)], K.Context())[0] == []
+
+
+# ── 2026-10-02 獨立稽核修正的回歸測試 ──
+
+def test_housing_rooms_exempt_from_emergency_lighting():
+    two = plan(title="貳層平面圖")
+    f, notes = ESC.emergency_lights(two, [eq("緊急照明燈（吸頂式）", 7, 7)], K.Context(occupancy="乙-7"))
+    assert f == [] and any(n.law == ["D0120029/179/1/3"] for n in notes)
+    f, _ = ESC.emergency_lights(two, [eq("緊急照明燈（吸頂式）", 7, 7)], K.Context(occupancy="戊-2"))
+    assert [x.severity for x in f] == [K.ORANGE]
+
+
+def test_smoke_exemptions_by_occupancy_suppression_and_fan():
+    fl = plan()
+    vent = eq("排煙口（天花板型）", 7.5, 7.5, open_area=0.36)
+    f, notes = RES.smoke_vents(fl, [vent], K.Context(occupancy="乙-7"))
+    assert f == [] and notes[0].law == ["D0120029/190/1/7"]
+    f, _ = RES.smoke_vents(fl, [vent], K.Context(occupancy="乙-3"))
+    assert f and all(x.severity != K.RED for x in f)                     # 學校教室得免設 → 降為需確認
+    co2 = eq("CO2噴頭（崁頂式）", 22, 5)
+    f, notes = RES.smoke_vents(fl, [vent, co2], K.Context())
+    assert not any("會議室" in x.rooms for x in f) and "D0120029/190/1/5" in notes[0].law
+    fan = eq("排煙機（平面圖用）", 1, 1)
+    f, notes = RES.smoke_vents(fl, [vent, fan], K.Context())
+    assert not any(x.category == "規格不符" for x in f) and any(n.law == ["D0120029/188/1/8"] for n in notes)
+
+
+def test_underground_building_outlets_checked_on_basements():
+    b1 = plan(rename={"男廁": "安全梯"}, title="地下一層平面圖")
+    f, _ = RES.standpipe_outlets(b1, [eq("連結送水管出水口", 2, 2)], K.Context(occupancy="戊-3"))
+    assert [x.severity for x in f] == [K.ORANGE]
+    assert RES.standpipe_outlets(b1, [eq("連結送水管出水口", 2, 2)], K.Context(occupancy="乙-6"))[0] == []

@@ -37,6 +37,10 @@ KIND_RULES = [
     ("direction_light", r"^避難方向指示燈|兼樓梯避難方向指示燈"),
     ("emergency_light", r"^緊急照明燈"),
     ("smoke_vent", r"^排煙口"),
+    ("smoke_fan", r"^排煙機"),
+    ("gas_detector", r"^瓦斯漏氣檢知器"),
+    ("simple_suppression", r"^簡易自動滅火設備$"),
+    ("special_suppression", r"^水霧噴頭$|^泡沫噴頭$|^泡沫頭|^CO2噴頭|^乾粉（海龍替代品）噴頭|^乾粉（海龍替代品）套裝型"),
 ]
 KIND_LABEL = {
     "extinguisher": "滅火器", "hydrant": "室內消防栓", "standpipe_outlet": "連結送水管出水口",

@@ -16,17 +16,19 @@ import re
 from litian.drawing.ir import sheet_number, sheet_title
 from litian.review.checks import RED, YELLOW, Context, Finding, Note, _of
 
-INCH = {"1/2": 15, "3/4": 20, "1": 25, "1-1/4": 32, "1-1/2": 40, "2": 50, "2-1/2": 65, "3": 80, "4": 100, "5": 125,
-        "6": 150, "8": 200}
+INCH = {0.5: 15, 0.75: 20, 1.0: 25, 1.25: 32, 1.5: 40, 2.0: 50, 2.5: 65, 3.0: 80, 4.0: 100, 5.0: 125, 6.0: 150, 8.0: 200}
+FRAC = {"½": 0.5, "¼": 0.25, "¾": 0.75}
 MM_SIZES = {15, 20, 25, 32, 40, 50, 65, 80, 100, 125, 150, 200, 250, 300}
 RE_MM = re.compile(r"(?:[Øø∅ΦφΦ]|DN)\s*(\d{2,3})|(\d{2,3})\s*(?:A|mm|MM|㎜)(?![A-Za-z])")
-RE_INCH = re.compile(r"(\d(?:\s*-\s*\d/\d)?|\d/\d)\s*(?:\"|”|″|吋|英吋)")
+# 吋：2"、2-1/2"、2 1/2"、2½"、2.5"、1/2"、3/4吋
+RE_INCH = re.compile(r"(?<![\d./])(?:(\d+(?:\.\d+)?)\s*(?:-\s*|\s+)?)?(\d/\d|[½¼¾])?\s*(?:\"|”|″|吋|英吋)")
 SYS = {
     "standpipe": re.compile(r"連結送水|送水立管|\bS\.?D\b", re.I),
     "hydrant": re.compile(r"消防栓|\bF\.?H\b", re.I),
     "sprinkler": re.compile(r"撒水|灑水|\bS\.?P\b", re.I),
 }
 RISER = re.compile(r"立管|RISER|\bR\.?S\b", re.I)
+BRANCH = re.compile(r"支管|BRANCH", re.I)
 END_VALVE = re.compile(r"末端查驗|查驗閥|TEST\s*VALVE", re.I)
 PIPE_CTX = re.compile(r"管|PIPE|查驗閥|VALVE", re.I)        # 管徑標註要有管線語境，避免把「樓板 150mm」當管徑
 MATERIAL = re.compile(r"CNS\s*-?\s*(6445|4626|6331)|SCH\s*\.?\s*40|碳鋼鋼管|不[銹鏽]鋼|合成樹脂", re.I)
@@ -38,10 +40,16 @@ def parse_size(s: str) -> int | None:
     if m:
         v = int(m.group(1) or m.group(2))
         return v if v in MM_SIZES else None
-    m = RE_INCH.search(s)
-    if m:
-        k = re.sub(r"\s+", "", m.group(1))
-        return INCH.get(k)
+    for m in RE_INCH.finditer(s):
+        whole, frac = m.group(1), m.group(2)
+        if not whole and not frac:
+            continue
+        v = float(whole) if whole else 0.0
+        if frac:
+            if "." in (whole or ""):
+                continue                               # 「2.5 1/2"」之類寫法不成立
+            v += FRAC.get(frac) or (int(frac[0]) / int(frac[2]))
+        return INCH.get(round(v, 2))
     return None
 
 
@@ -49,7 +57,10 @@ def systems(s: str) -> set[str]:
     return {k for k, pat in SYS.items() if pat.search(s)}
 
 
-def _hydrant_class(equipment) -> str | None:
+def _hydrant_class(equipment, ctx: Context | None = None) -> str | None:
+    """乙-11（倉庫）與丁類（工作場所）應設第一種消防栓（第 34 條第 1 項）；其餘看圖塊屬性。"""
+    if ctx is not None and ctx.occupancy and (ctx.occupancy == "乙-11" or ctx.occupancy.startswith("丁")):
+        return "1"
     kinds = {e.spec.get("hydrant_class") for e in equipment if "hydrant" in e.kinds}
     kinds.discard(None)
     return kinds.pop() if len(kinds) == 1 else None
@@ -60,7 +71,8 @@ def check_texts(ir: dict, equipment: list, ctx: Context) -> tuple[list[Finding],
     sheets = {s["idx"]: s for s in ir["sheets"]}
     findings: list[Finding] = []
     sized = 0
-    hclass = _hydrant_class(equipment)
+    hclass = _hydrant_class(equipment, ctx)
+    high = ctx.height is not None and ctx.height > 50
     for t in ir["texts"]:
         s = t["t"]
         size = parse_size(s)
@@ -75,8 +87,19 @@ def check_texts(ir: dict, equipment: list, ctx: Context) -> tuple[list[Finding],
                                     "使用密閉式撒水頭之自動撒水設備，末端查驗閥管徑應在 25 mm 以上", "改用管徑 25 mm 以上之末端查驗閥及配管",
                                     ["D0120029/56/1/1"], metrics={"size": size, "text": s[:60]}))
             continue
+        if BRANCH.search(s) and {"standpipe", "hydrant"} <= sy and size < 65:
+            findings.append(Finding(
+                "PIPE-181", RED, "規格不符", where, f"消防栓與連結送水管共用之支管 {size} mm 小於 65 mm（標註「{s[:30]}」）",
+                "與室內消防栓共用立管時，支管管徑應在 65 mm 以上", "支管改為 65 mm 以上", ["D0120029/181/1/1"],
+                metrics={"size": size, "text": s[:60]}))
+            continue
         if not RISER.search(s):
             continue
+        if "standpipe" in sy and "hydrant" in sy and high:
+            findings.append(Finding(
+                "PIPE-181", RED, "規格不符", where, f"建築物高度 {ctx.height} m 超過 50 m，連結送水管不得與室內消防栓共用立管（標註「{s[:30]}」）",
+                "建築物高度在 50 m 以下時，始得與室內消防栓共用立管", "連結送水管改設專用立管", ["D0120029/181/1/1"],
+                metrics={"size": size, "text": s[:60]}))
         if "standpipe" in sy:
             shared = "hydrant" in sy
             if size < 100:

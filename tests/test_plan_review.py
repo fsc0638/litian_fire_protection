@@ -415,3 +415,49 @@ def test_context_from_dict_and_group():
     assert c.occupancy_group == "2-4" and c.ceiling_height == {"1F": 4.5} and c.fireproof is True
     assert c.stories == 3 and c.height is None and c.no_opening == ["B1"]
     assert K.Context(occupancy="甲-5").occupancy_group == "1-5" and K.Context().occupancy_group is None
+
+
+# ── 2026-10-02 獨立稽核修正的回歸測試 ──
+
+def test_detector_heights_outside_selection_table():
+    fl = plan()
+    meet = [eq("差動式局限型探測器（1種）", 22 + i, 5) for i in range(4)]
+    f, _ = K.detector_count(fl, detectors(3) + meet, K.Context(ceiling_height={"1F": 9}))
+    assert {x.category for x in f} == {"規格不符"} and "D0120029/114/1" in f[0].law     # 熱式 8 m 以上不得使用
+    smoke = [eq("偵煙式局限型探測器（2種）", 7, 7), eq("偵煙式局限型探測器（2種）", 22, 5)]
+    f, _ = K.detector_count(fl, smoke, K.Context(ceiling_height={"1F": 16}))
+    assert {x.category for x in f} == {"規格不符"}                          # 偵煙二種 15 m 以上不得使用
+    assert K.detector_count(fl, smoke, K.Context(ceiling_height={"1F": 21}))[0] == []   # 超過 20 m 得免設
+
+
+def test_only_safety_stairs_exempt_from_sprinklers():
+    for name, exempt in (("樓梯", False), ("(E梯_直通樓梯)", False), ("安全梯", True), ("特別安全梯", True)):
+        r = F.Room(1, box(0, 0, 3, 3), [name], "stair", False)
+        assert (K._sprinkler_exempt(r, True) is not None) is exempt, name
+
+
+def test_lobbies_need_detectors_but_corridors_follow_walking_rule():
+    lobby = F.analyze(P.layers(), [t if t["t"] != "會議室" else {**t, "t": "門廳"} for t in P.texts()], scale=1.0, title="壹層平面圖")
+    f, _ = K.detector_count(lobby, detectors(3), K.Context(ceiling_height={"1F": 3.5}))
+    assert [x.rooms for x in f] == [["門廳"]]
+    corridor = F.analyze(P.layers(), [t if t["t"] != "會議室" else {**t, "t": "走廊"} for t in P.texts()], scale=1.0, title="壹層平面圖")
+    assert K.detector_count(corridor, detectors(3), K.Context(ceiling_height={"1F": 3.5}))[0] == []
+
+
+def test_speaker_proviso_for_small_corridor_uses_6_square_metres():
+    r = F.Room(1, box(0, 0, 2, 2.5), ["走廊"], "corridor", False)
+    fl = F.Floor("1F", "", 1.0, box(0, 0, 2, 2.5), [r], box(0, 0, 2, 2.5), box(0, 0, 0, 0), box(0, 0, 2, 2.5), True)
+    f, _ = K.speaker_distance(fl, [eq("揚聲器（嵌頂式）", 30, 30)], K.Context())
+    assert f[0].severity == K.ORANGE                                          # 5 ㎡ ≤ 6 ㎡：但書可能適用
+    r.polygon = box(0, 0, 4, 3)
+    fl2 = F.Floor("1F", "", 1.0, box(0, 0, 4, 3), [r], box(0, 0, 4, 3), box(0, 0, 0, 0), box(0, 0, 4, 3), True)
+    assert K.speaker_distance(fl2, [eq("揚聲器（嵌頂式）", 30, 30)], K.Context())[0][0].severity == K.RED   # 12 ㎡ 走廊
+
+
+def test_article_18_rooms_need_special_suppression():
+    gen = F.analyze(P.layers(), [t if t["t"] != "辦公室" else {**t, "t": "發電機室"} for t in P.texts()], scale=1.0, title="壹層平面圖")
+    base = [eq("乾粉滅火器", 15.5, 6.5)]
+    f, _ = K.special_suppression(gen, base, K.Context())
+    assert [(x.rule, x.severity, x.metrics["item"]) for x in f] == [("S18", K.RED, 5)] and f[0].law == ["D0120029/18/1"]
+    assert K.special_suppression(gen, base + [eq("CO2噴頭（崁頂式）", 7, 7)], K.Context())[0] == []
+    assert K.special_suppression(gen, [], K.Context()) == ([], [])          # 沒有任何消防設備的圖不判

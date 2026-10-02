@@ -23,16 +23,27 @@ OUTLET_STAIR = 5.0          # 第 180 條第 1 款：設於樓梯間或緊急升
 SMOKE_EXEMPT = r"儲藏|廁|洗手間"
 
 
+SMOKE_EXEMPT_OCC = {"乙-7": "集合住宅", "乙-9": "室內溜冰場、室內游泳池"}          # 第 190 條第 1 項第 7 款
+SMOKE_MAYBE_OCC = {"乙-3": "學校教室（補習班等不適用）", "乙-8": "學校活動中心、體育館（一般活動中心不適用）"}
+
+
 def smoke_vents(floor: Floor, eq: list[Equipment], ctx: Context, grid=None):
     vents = _of(eq, "smoke_vent")
     if not vents:
         return [], []
+    if ctx.occupancy in SMOKE_EXEMPT_OCC:
+        return [], [Note("SMK-190", f"{SMOKE_EXEMPT_OCC[ctx.occupancy]}得免設排煙設備，未檢核排煙口", ["D0120029/190/1/7"])]
+    maybe = SMOKE_MAYBE_OCC.get(ctx.occupancy or "")
+    mechanical = bool(_of(eq, "smoke_fan"))
     findings, exempt = [], []
     for room in floor.rooms:
         if room.kind in ("void", "outdoor") or room.area < 2:
             continue
         if not room.conflict and (room.kind in ("stair", "elevator", "shaft", "toilet") or re.search(SMOKE_EXEMPT, " ".join(room.labels))):
             exempt.append(room)
+            continue
+        if any("special_suppression" in e.kinds and room.polygon.buffer(0.3).covers(Point(e.x, e.y)) for e in eq):
+            exempt.append(room)                        # 設有二氧化碳、乾粉等滅火設備之場所（第 190 條第 1 項第 5 款）
             continue
         zone = room.polygon.intersection(floor.region)
         inside = [v for v in vents if room.polygon.buffer(0.3).covers(Point(v.x, v.y))]
@@ -57,7 +68,9 @@ def smoke_vents(floor: Floor, eq: list[Equipment], ctx: Context, grid=None):
                 ["D0120029/188/1/1", "D0120029/188/2"], rooms=[room.name], area=room.area, geom=room.polygon))
         areas = [v.spec.get("open_area") for v in inside]
         need = room.area * SMOKE_RATIO
-        if all(a is not None for a in areas):
+        if mechanical:
+            pass                                       # 設排煙機（機械排煙）：依第 188 條第 8 款排煙量檢討，不適用自然排煙 2%
+        elif all(a is not None for a in areas):
             have = sum(areas)
             if have < need:
                 findings.append(Finding(
@@ -72,15 +85,25 @@ def smoke_vents(floor: Floor, eq: list[Equipment], ctx: Context, grid=None):
                 f"排煙口開口面積應達防煙區劃面積之 2%（本範圍約需 {need:.2f} ㎡），圖上排煙口沒有尺寸或面積",
                 "於設備表或圖例標示排煙口尺寸後重新檢核", ["D0120029/188/1/7"],
                 missing=["排煙口開口尺寸或面積"], rooms=[room.name], area=room.area, geom=room.polygon))
-    notes = [Note("SMK-190", "免設排煙處所（樓梯間、昇降路、管道間、儲藏室、廁所等）：" + "、".join(r.name for r in exempt[:12]),
-                  ["D0120029/190/1/4"])] if exempt else []
+    if maybe:
+        for f in findings:
+            if f.severity == RED:
+                f.severity = ORANGE
+                f.why += f"；若屬{maybe}得免設排煙設備（第 190 條第 1 項第 7 款），請確認"
+                f.law = f.law + ["D0120029/190/1/7"]
+    notes = [Note("SMK-190", "免設排煙處所（樓梯間、昇降路、管道間、儲藏室、廁所、設有二氧化碳等滅火設備之場所）："
+                  + "、".join(r.name for r in exempt[:12]), ["D0120029/190/1/4", "D0120029/190/1/5"])] if exempt else []
+    if mechanical:
+        notes.append(Note("SMK-188", "本層設有排煙機：排煙量應每分鐘 120 m³ 以上，且依防煙區劃面積計算（第 188 條第 1 項第 8 款），請檢附計算",
+                          ["D0120029/188/1/8"]))
     return findings, notes
 
 
 def standpipe_outlets(floor: Floor, eq: list[Equipment], ctx: Context, grid=None):
     outs = _of(eq, "standpipe_outlet")
     kind, lv = _level(floor.label or "")
-    if not outs or kind != "above" or lv < 3:
+    underground = ctx.occupancy == "戊-3" and kind == "base"          # 地下建築物各層
+    if not outs or not ((kind == "above" and lv >= 3) or underground):
         return [], []
     findings = []
     for p in C.uncovered(floor.region, [(o.x, o.y) for o in outs], OUTLET_DIST):

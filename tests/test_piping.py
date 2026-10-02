@@ -10,6 +10,7 @@ from litian.review import piping as PIPE
 @pytest.mark.parametrize("text,size", [
     ("消防栓立管 Ø50", 50), ("連結送水管立管 100A", 100), ("SP 立管 4\"", 100), ("2-1/2\" 支管", 65),
     ("DN65", 65), ("末端查驗閥 25mm", 25), ("PIT:180cm", None), ("Ø37 管", None),
+    ("消防栓立管 2 1/2\"", 65), ("2½\"", 65), ("2.5\"", 65), ("1 1/2\" 管", 40), ("1.5\"", 40), ("3/4吋", 20),
 ])
 def test_parse_size(text, size):
     assert PIPE.parse_size(text) == size
@@ -61,3 +62,20 @@ def test_end_test_valve_per_floor():
     f, notes = PIPE.end_test_valve(fl, [spk, valve], K.Context())
     assert f == [] and "最遠支管末端" in notes[0].text
     assert PIPE.end_test_valve(fl, [valve], K.Context()) == ([], [])
+
+
+# ── 2026-10-02 獨立稽核修正的回歸測試 ──
+
+def test_first_class_hydrant_inferred_for_warehouse_and_factory():
+    f, _ = PIPE.check_texts(ir("消防栓立管 Ø50", "CNS 6445"), [hyd()], K.Context(occupancy="丁-2"))
+    assert rules(f) == [("PIPE-32", K.RED)]                                # 第 34 條：丁類應設第一種 → 63 mm
+    f, _ = PIPE.check_texts(ir("消防栓立管 2 1/2\"", "CNS 6445"), [hyd()], K.Context(occupancy="乙-11"))
+    assert f == []                                                           # 65 mm ≥ 63 mm（吋制寫法正確解析）
+
+
+def test_shared_standpipe_branch_and_height_limit():
+    f, _ = PIPE.check_texts(ir("消防栓兼連結送水支管 Ø50", "CNS 6445"), [], K.Context())
+    assert rules(f) == [("PIPE-181", K.RED)] and "支管" in f[0].title
+    f, _ = PIPE.check_texts(ir("消防栓兼連結送水立管 Ø100", "CNS 6445"), [], K.Context(height=60))
+    assert rules(f) == [("PIPE-181", K.RED)] and "不得" in f[0].title
+    assert PIPE.check_texts(ir("消防栓兼連結送水立管 Ø100", "CNS 6445"), [], K.Context(height=45))[0] == []

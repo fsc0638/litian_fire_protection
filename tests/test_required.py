@@ -67,7 +67,7 @@ def test_office_tower_twelve_storeys():
     assert by(reqs, "19").law == ["D0120029/19/1/3"]
     assert by(reqs, "23-1").floors == ["11F", "12F"]
     assert by(reqs, "26").status == RQ.REQUIRED and by(reqs, "26").floors[0] == "3F"
-    assert by(reqs, "29").floors == ["11F", "12F"]
+    assert by(reqs, "29").status == RQ.REQUIRED and by(reqs, "29").floors is None      # 十一層以上建築物之「各樓層」
     assert by(reqs, "15").law == ["D0120029/15/1/2"]
 
 
@@ -143,3 +143,46 @@ def test_engine_summarises_when_no_fire_equipment_at_all(tmp_path):
     res = EN.review_dxf(p, ctx=K.Context(occupancy="乙-6"))
     assert [f.rule for f in res.building_findings] == ["REQ"] and "未認出任何消防設備" in res.building_findings[0].title
     assert not any(f.rule.startswith("REQ-") for f in res.floors[0].findings)
+
+
+# ── 2026-10-02 獨立稽核修正的回歸測試 ──
+
+def test_school_classroom_exceptions_are_not_guessed():
+    em = by(RQ.evaluate(prof("乙-3", SAMPLE)), "24")
+    assert em.status == RQ.UNKNOWN and em.missing == ["是否為學校教室"]
+    small = by(RQ.evaluate(prof("乙-3", [("1F", 1, 800), ("2F", 2, 800)])), "15")
+    assert small.status == RQ.UNKNOWN and small.missing == ["是否為學校教室"]          # 補習班 500 ㎡、學校教室 1,400 ㎡
+    assert by(RQ.evaluate(prof("乙-3", [("1F", 1, 1500)])), "15").status == RQ.REQUIRED
+
+
+def test_height_unknown_from_eleven_storeys_is_not_low_rise():
+    p = prof("乙-6", [(f"{i}F", i, 800) for i in range(1, 13)])
+    assert p.high_rise is None
+    reqs = RQ.evaluate(p)
+    assert "建築物高度（是否為高層建築物）" in by(reqs, "17").missing
+    assert not any("第 19 條第 2 項" in n for n in by(reqs, "19").notes)      # 高層與否未知 → 不提示撒水免設
+
+
+def test_gas_leak_radio_and_broadcast():
+    reqs = RQ.evaluate(prof("甲-5", [("B1", -1, 1200), ("1F", 1, 200)], stories=1))
+    assert by(reqs, "21").status == RQ.REQUIRED and by(reqs, "21").floors == ["B1"]
+    deep = RQ.evaluate(prof("乙-6", [(f"B{i}", -i, 800) for i in range(1, 5)] + [("1F", 1, 800)], stories=1, height=20))
+    assert by(deep, "30").status == RQ.REQUIRED and by(deep, "30").law == ["D0120029/30/1/3"]
+    assert by(deep, "18").status == RQ.UNKNOWN                               # 第 18 條按房間逐層判定
+
+
+def test_high_rack_warehouse_needs_storey_height():
+    r = by(RQ.evaluate(prof("乙-11", [("1F", 1, 900)], ceiling_height={"1F": 8})), "17")
+    assert r.status == RQ.UNKNOWN and "樓層高度" in r.missing[0]
+    r = by(RQ.evaluate(prof("乙-11", [("1F", 1, 900)], ceiling_height={"1F": 12})), "17")
+    assert r.status == RQ.REQUIRED and r.law == ["D0120029/17/1/6"]
+
+
+def test_composite_with_class_a_requires_extinguishers():
+    r = by(RQ.evaluate(prof("戊-1", SAMPLE)), "14")
+    assert r.status == RQ.REQUIRED and "D0120029/14/1/1" in r.law and r.floors is None
+
+
+def test_basement_only_trigger_limits_scope_to_that_floor():
+    reqs = RQ.evaluate(prof("乙-6", [("B1", -1, 200), ("1F", 1, 100), ("2F", 2, 100)], stories=2))
+    assert by(reqs, "15").floors == ["B1"] and by(reqs, "15").law == ["D0120029/15/1/4"]
