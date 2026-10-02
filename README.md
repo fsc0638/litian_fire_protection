@@ -103,7 +103,7 @@ bash /opt/litian/repo/deploy/oracle/06_update_from_git.sh
 - 費用防護：每日總數 `ASK_DAILY_LIMIT`（預設 500，不分來源；台北時間每天 23:59 重新計算；計數存在資料庫 `ask_usage` 表，重新部署不會歸零）。今日用量見 `/api/law/ask/status` 的 `used_today`，每題的 token 用量記在 API 容器日誌。
 - 問題提到具體場所（例：KTV、旅館）時，自動把該場所的第 12 條分類條文排在最前面，AI 才能先判斷場所類別再套門檻。
 - 測試期提問紀錄：每次按「查詢」寫一筆到 `ask_log` 表（問題、檢索結果、AI 回答與查核結果、用量、耗時；來源只存 IP 的雜湊，無法還原）。頁尾已告知使用者。匯出 CSV：`bash /opt/litian/repo/deploy/oracle/08_export_ask_log.sh [起始日 YYYY-MM-DD]`。
-- LINE 版本目前不做（2026-10-01 決定）。
+- LINE 版法規問答機器人目前不做（2026-10-01 決定；與審核工作台的 LINE 登入無關）。
 
 ## 圖面處理（第 1 期 M1）
 
@@ -114,8 +114,13 @@ bash /opt/litian/repo/deploy/oracle/06_update_from_git.sh
 ## 審核工作台（第 1 期 M1b）
 
 - 網址 `/workbench`：登入、建立案件、上傳 DWG／DXF（拖放、單檔上限 200 MB）、看處理狀態、各張圖的圖號圖名與抽出的文字。
-- 帳號只能在主機上建立，密碼由本人輸入：`sudo docker compose exec api python -m litian.auth create-user 帳號 [--role admin]`（另有 `set-password`、`disable`、`list`）。
-- 密碼以 scrypt 雜湊保存；登入狀態放在 HttpOnly、Secure、SameSite=Lax 的 Cookie，資料庫只存權杖雜湊，12 小時過期；同一來源一小時內登入失敗 10 次會暫停。
+- **登入用 LINE**（LINE Login v2.1，`src/litian/line_login.py`），不使用密碼。開通靠管理者發的**一次性邀請連結**：工作台右上角「帳號管理」輸入帳號名稱與角色 → 產生連結（預設 24 小時內有效、只能用一次）→ 本人點連結用 LINE 登入，該 LINE 帳號即綁定此帳號。同仁換手機、換 LINE 帳號時，在帳號列表按「重新綁定 LINE」另發換綁連結（角色不變，原有登入全部登出）。開新帳號遇到同名會拒絕，不會悄悄變成換綁。沒有綁定的 LINE 帳號一律進不來。
+- 安全做法：state（綁定發起登入的瀏覽器 Cookie，只能用一次、10 分鐘內有效）、nonce、PKCE（S256）；ID token 交給 LINE 驗證端點驗簽，再核對 iss、aud、nonce、到期時間；LINE 的 access token 用完即丟。邀請連結的權杖放在網址 `#` 片段（不送到伺服器、不進存取紀錄），開通一律關閉 LINE 自動登入。邀請權杖與登入權杖在資料庫只存 SHA-256。Cookie 用 `__Host-` 前綴（同網域其他子網域塞不進來）、HttpOnly、Secure、SameSite=Lax，登入 12 小時過期。不以來源 IP 封鎖登入（權杖都是 256 位元亂數，無從猜測；IP 封鎖反而會讓整間辦公室被一個網頁鎖住），進行中的登入暫存另有全站上限。至少保留一位啟用中的管理者（同時互相停用也擋得住）；管理者不能停用自己、不能在網頁上替自己換綁；管理者被停用或降級時，他發出、還沒用掉的邀請一併作廢。
+- 設定（由專案主本人做，**要在部署這一版之前**）：在 LINE Developers 建立 **LINE Login 頻道**（App type 選 Web app；和問答機器人的 Messaging API 頻道不同），LINE Login 分頁的 Callback URL 填 `https://<對外網址>/api/auth/line/callback`；把 `LINE_LOGIN_CHANNEL_ID`、`LINE_LOGIN_CHANNEL_SECRET`、`LINE_LOGIN_CALLBACK_URL` 填進主機 `/opt/litian/.env`。部署腳本 `06_update_from_git.sh` 會檢查這三項沒填就停止，並在部署前備份資料庫到 `/opt/litian/backup/`（這一版會移除舊的密碼欄位，回退需先還原備份）。頻道剛建好是「Developing」，只有頻道的 Admin／Tester 能登入（Tester 的開發者帳號要先連結 LINE 帳號）；開放給同仁要改成「Published」（改了不能改回）。
+- 換正式網域時一起改：Caddy 網站位址（`05_route_api.sh`）、`.env` 的 `LINE_LOGIN_CALLBACK_URL`（改完 `cd /opt/litian && sudo docker compose up -d api`）、LINE 頻道的 Callback URL（可先同時登記新舊兩個，切換時不中斷）；已發出的邀請連結指向舊網址，要重發。從舊網址按登入時，系統會先轉到 `LINE_LOGIN_CALLBACK_URL` 的網址。
+- LINE 開發準則要求使用者不再使用時解除授權：本系統不保存 LINE 的 access token，無法代為解除；停用帳號時請當事人到 LINE「設定 → 帳號 → 已連動的應用程式」自行解除（登入頁與停用確認視窗都有寫）。
+- 端點：`GET /api/auth/line/start`（用 LINE 登入）、`POST /api/auth/line/start`（邀請頁，權杖放表單）、`GET /api/auth/line/callback`、`POST /api/auth/invite`（查邀請）、`POST /api/auth/logout`、`GET /api/auth/me`；管理者：`GET /api/admin/users`、`POST /api/admin/invites`（`mode` 為 new 或 rebind）、`DELETE /api/admin/invites/{id}`、`PATCH /api/admin/users/{id}`。
+- 第一位管理者（或網頁進不去時）在主機上產生邀請連結：`cd /opt/litian && sudo docker compose exec api python -m litian.auth invite 帳號 --role admin`（另有 `list`、`disable 帳號`、`enable 帳號`、`role 帳號 admin|reviewer`）。舊版用密碼建立的帳號保留帳號名稱與角色，用 `invite 原帳號名稱` 產生換綁連結即可改用 LINE 登入。
 
 ## 資料來源與授權
 

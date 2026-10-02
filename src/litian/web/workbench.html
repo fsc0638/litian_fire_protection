@@ -34,7 +34,10 @@ body { margin: 0; background: var(--bg); color: var(--text);
 a { color: var(--accent-text); }
 .wrap { max-width: 1100px; margin: 0 auto; padding: 0 16px; }
 header.top { background: var(--surface); border-bottom: 1px solid var(--border); }
-header.top .wrap { display: flex; align-items: center; gap: 12px; min-height: 56px; }
+header.top .wrap { display: flex; align-items: center; gap: 6px 12px; min-height: 56px; flex-wrap: wrap; padding-top: 6px; padding-bottom: 6px; }
+#who { min-width: 0; overflow-wrap: anywhere; }
+#admin-link, #logout { white-space: nowrap; }
+@media (max-width: 760px) { .wide-only { display: none; } }
 header h1 { font-size: 1.1rem; margin: 0; }
 .grow { flex: 1 1 auto; }
 .muted { color: var(--muted); }
@@ -50,8 +53,17 @@ button { font: inherit; border-radius: 8px; border: 1px solid var(--border); bac
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 button:disabled { opacity: .55; cursor: progress; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.login { max-width: 360px; margin: 40px auto; }
+.login { max-width: 400px; margin: 40px auto; }
 .login label { display: block; margin: 10px 0 4px; font-weight: 600; }
+/* LINE 登入按鈕：LINE 官方指定底色 #06C755，滑過疊 10% 黑、按下疊 30% 黑 */
+.btn-line { display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 44px;
+  background: #06C755; border: 0; border-radius: 8px; color: #fff; font-weight: 700; text-decoration: none; white-space: nowrap; }
+.btn-line:hover { background: linear-gradient(rgba(0,0,0,.1), rgba(0,0,0,.1)), #06C755; }
+.btn-line:active { background: linear-gradient(rgba(0,0,0,.3), rgba(0,0,0,.3)), #06C755; }
+.btn-line[aria-disabled="true"] { opacity: .5; pointer-events: none; }
+.linkbox { font-family: ui-monospace, Consolas, monospace; font-size: .8rem; word-break: break-all; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+select { font: inherit; padding: 7px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
 .note { border-radius: 8px; padding: 9px 12px; font-size: .9rem; }
 .note.err { background: var(--err-soft); color: var(--err); }
 .note.info { background: var(--surface-2); color: var(--muted); }
@@ -107,23 +119,63 @@ ol.findings li.rejected { opacity: .55; }
     <h1>消防圖審系統｜審核工作台</h1>
     <span class="grow"></span>
     <span id="who" class="muted small"></span>
+    <a id="admin-link" class="small hidden" href="#admin">帳號管理</a>
     <button id="logout" class="hidden" type="button">登出</button>
   </div>
 </header>
 
 <main class="wrap">
-  <form id="login" class="card login hidden">
+  <div id="login" class="card login stack hidden">
     <h2>登入</h2>
-    <label for="u">帳號</label>
-    <input id="u" type="text" autocomplete="username" required>
-    <label for="p">密碼</label>
-    <input id="p" type="password" autocomplete="current-password" required>
-    <div class="row" style="margin-top:14px"><button class="primary" type="submit">登入</button></div>
-    <p id="login-msg" class="note err hidden"></p>
-    <p class="muted small">帳號由系統管理者在主機上建立。圖說屬客戶機密，僅限授權人員使用。</p>
+    <a id="line-login" class="btn-line" href="/api/auth/line/start">用 LINE 登入</a>
+    <p id="login-msg" class="note err hidden" role="alert"></p>
+    <p class="muted small">第一次使用請向管理者索取邀請連結，點連結用 LINE 登入即完成開通。圖說屬客戶機密，僅限授權人員使用。</p>
+    <p class="muted small">本系統只透過 LINE 確認身分（LINE 使用者 ID 與顯示名稱），不讀取聊天、好友等資料。不再使用時，可在 LINE「設定 → 帳號 → 已連動的應用程式」解除。共用電腦用完請一併登出 LINE。</p>
+  </div>
+
+  <form id="invite" class="card login stack hidden" method="post" action="/api/auth/line/start">
+    <h2>開通審核工作台</h2>
+    <p id="invite-desc"></p>
+    <input type="hidden" name="invite" id="invite-token">
+    <button class="btn-line" type="submit" id="invite-go">用 LINE 登入並開通</button>
+    <a id="invite-login" class="small hidden" href="/api/auth/line/start">已開通過？直接用 LINE 登入</a>
+    <p id="invite-msg" class="note err hidden" role="alert"></p>
+    <p class="muted small">按下後會轉到 LINE 確認身分。這個連結只能用一次；用哪個 LINE 帳號登入，之後就固定用那個 LINE 帳號登入。</p>
   </form>
 
   <section id="app" class="stack hidden">
+    <div id="admin-view" class="stack hidden">
+      <div class="row"><button id="admin-back" type="button">← 回案件清單</button></div>
+      <form id="inv-form" class="card stack">
+        <h2>邀請同仁（產生一次性 LINE 開通連結）</h2>
+        <div class="row">
+          <label class="small" style="flex:1 1 200px">帳號名稱<input id="inv-user" type="text" minlength="2" maxlength="32" required placeholder="例：王小明 或 amy"></label>
+          <label class="small">角色<br><select id="inv-role"><option value="reviewer">審圖人員</option><option value="admin">管理者</option></select></label>
+          <label class="small">有效時間<br><select id="inv-hours"><option value="24">24 小時</option><option value="72">3 天</option><option value="168">7 天</option></select></label>
+          <button class="primary" type="submit" style="align-self:flex-end">產生連結</button>
+        </div>
+        <p class="muted small">這裡只開新帳號。同仁換手機或換 LINE 帳號時，請在下方帳號列表按「重新綁定 LINE」。</p>
+        <div id="inv-result" class="stack hidden">
+          <div id="inv-link" class="linkbox"></div>
+          <div class="row"><button id="inv-copy" type="button">複製連結</button><span id="inv-note" class="small muted"></span></div>
+        </div>
+        <p id="inv-msg" class="note err hidden" role="alert"></p>
+      </form>
+      <div class="card">
+        <h2>帳號</h2>
+        <div style="overflow-x:auto"><table>
+          <thead><tr><th>帳號</th><th>角色</th><th>LINE</th><th>狀態</th><th class="opt">最後登入</th><th>操作</th></tr></thead>
+          <tbody id="users"></tbody></table></div>
+        <p id="users-msg" class="note err hidden" role="alert"></p>
+      </div>
+      <div class="card">
+        <h2>待開通的邀請</h2>
+        <div style="overflow-x:auto"><table>
+          <thead><tr><th>帳號</th><th>用途</th><th>角色</th><th class="opt">發出者</th><th>到期</th><th></th></tr></thead>
+          <tbody id="invites"></tbody></table></div>
+        <p id="no-invites" class="muted small hidden">目前沒有待開通的邀請。</p>
+      </div>
+    </div>
     <div id="list-view" class="stack">
       <form id="new-case" class="card row">
         <input id="case-name" type="text" maxlength="100" placeholder="新案件名稱，例如：某某廠房新建工程" required style="flex:1 1 260px">
@@ -219,34 +271,167 @@ ol.findings li.rejected { opacity: .55; }
 
   async function api(path, opts = {}) {
     const res = await fetch(path, { credentials: "same-origin", ...opts });
-    if (res.status === 401 && !path.endsWith("/login")) { showLogin(); throw new Error("請先登入"); }
+    if (res.status === 401) { showLogin(me ? "session_expired" : null); throw new Error("請先登入"); }
     const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(typeof body.detail === "string" ? body.detail : "操作失敗（" + res.status + "）");
+    if (!res.ok) {
+      const d = body.detail;
+      if (typeof d === "string") throw new Error(d);
+      if (Array.isArray(d) && d.length) throw new Error("輸入格式不符：" + (d[0].loc || []).slice(-1)[0] + "（" + (d[0].msg || "") + "）");
+      throw new Error("操作失敗（" + res.status + "）");
+    }
     return body;
   }
 
-  function showLogin() { $("#app").classList.add("hidden"); $("#login").classList.remove("hidden"); $("#logout").classList.add("hidden"); $("#who").textContent = ""; }
+  // 登入失敗代碼 → 訊息（後端只帶代碼，不帶細節）
+  const LOGIN_ERRORS = {
+    not_configured: "LINE 登入尚未設定完成，請聯絡系統管理者。（管理者：請依部署說明第 4b 項設定 LINE Login）",
+    session_expired: "登入已逾時，請重新登入。",
+    line_unavailable: "LINE 暫時無法使用，請稍等幾分鐘再試。",
+    busy: "目前登入的人太多，請稍等幾分鐘再試。",
+    denied: "已取消 LINE 授權，沒有登入。",
+    expired: "登入逾時或已失效（例如在不同瀏覽器完成、或開了無痕視窗），請重新登入。",
+    line_error: "LINE 驗證失敗，請稍後再試。",
+    invite_invalid: "邀請連結無效、已使用或已過期，請向管理者索取新的連結。",
+    line_taken: "這個 LINE 帳號已經綁定其他工作台帳號。請改用原本的帳號登入，或請管理者處理。",
+    not_registered: "這個 LINE 帳號尚未開通。第一次使用請向管理者索取邀請連結。",
+    disabled: "這個帳號已停用，請聯絡管理者。",
+  };
+  const errText = (code) => (Object.prototype.hasOwnProperty.call(LOGIN_ERRORS, code) ? LOGIN_ERRORS[code] : "登入失敗，請重新登入。");
+  const PENDING = "pending_invite";                       // 開通中途失敗（取消、逾時）時，讓邀請卡回來重試
+  const pending = { get() { try { return sessionStorage.getItem(PENDING); } catch { return null; } },
+                    set(v) { try { v ? sessionStorage.setItem(PENDING, v) : sessionStorage.removeItem(PENDING); } catch {} } };
+  let me = null;
+  function showLogin(err) {
+    me = null; clearInterval(timer);
+    $("#app").classList.add("hidden"); $("#invite").classList.add("hidden"); $("#login").classList.remove("hidden");
+    $("#logout").classList.add("hidden"); $("#admin-link").classList.add("hidden"); $("#who").textContent = "";
+    const msg = err && errText(err);
+    $("#login-msg").textContent = msg || ""; $("#login-msg").classList.toggle("hidden", !msg);
+    // 自動登入失敗（逾時、狀態不符）時改用不自動登入的方式重試
+    $("#line-login").href = "/api/auth/line/start" + (err === "expired" ? "?noauto=1" : "");
+  }
   function showApp(user) {
-    $("#login").classList.add("hidden"); $("#app").classList.remove("hidden");
-    $("#who").textContent = user.username + (user.role === "admin" ? "（管理者）" : ""); $("#logout").classList.remove("hidden");
+    me = user; pending.set(null);
+    $("#login").classList.add("hidden"); $("#invite").classList.add("hidden"); $("#app").classList.remove("hidden");
+    const who = $("#who"); who.textContent = user.username + (user.role === "admin" ? "（管理者）" : "");
+    if (user.line_name) { const s = document.createElement("span"); s.className = "wide-only"; s.textContent = "｜LINE：" + user.line_name; who.append(s); }
+    $("#logout").classList.remove("hidden"); $("#admin-link").classList.toggle("hidden", user.role !== "admin");
     route();
   }
-
-  $("#login").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    $("#login-msg").classList.add("hidden");
+  async function showInvite(token, err) {
+    $("#app").classList.add("hidden"); $("#login").classList.add("hidden"); $("#invite").classList.remove("hidden");
+    $("#invite-token").value = token; $("#invite-go").disabled = true; $("#invite-desc").textContent = "確認邀請中…";
+    $("#invite-msg").classList.toggle("hidden", !err); $("#invite-msg").textContent = err ? errText(err) + "可以再按一次下面的按鈕。" : "";
+    $("#invite-login").classList.add("hidden");
     try {
-      const r = await api("/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: $("#u").value.trim(), password: $("#p").value }) });
-      $("#p").value = ""; showApp(r.user);
-    } catch (err) { $("#login-msg").textContent = err.message; $("#login-msg").classList.remove("hidden"); }
+      const r = await api("/api/auth/invite", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) });
+      const what = r.kind === "new" ? "開通工作台帳號「" + r.username + "」（" + (r.role === "admin" ? "管理者" : "審圖人員") + "）"
+                                    : "替工作台帳號「" + r.username + "」重新綁定 LINE";
+      $("#invite-desc").textContent = "你收到的邀請：" + what + "。連結到 " + fmtTime(r.expires_at) + " 前有效。";
+      $("#invite-go").disabled = !r.line_login;
+      if (!r.line_login) { $("#invite-msg").textContent = LOGIN_ERRORS.not_configured; $("#invite-msg").classList.remove("hidden"); }
+    } catch (e) {
+      // 邀請已用過／過期：已登入的人直接進工作台；沒登入的給一般登入（很多人會把舊邀請連結當登入捷徑）
+      pending.set(null);
+      const r = await fetch("/api/auth/me", { credentials: "same-origin" }).catch(() => null);
+      if (r && r.ok) { showApp(await r.json()); return; }
+      $("#invite-desc").textContent = "";
+      $("#invite-msg").textContent = e.message; $("#invite-msg").classList.remove("hidden");
+      $("#invite-login").classList.remove("hidden");
+    }
+  }
+  $("#invite").addEventListener("submit", () => { pending.set($("#invite-token").value); });
+  function fmtTime(t) {
+    const d = new Date(t);
+    return isNaN(d) ? String(t || "") : d.toLocaleString("zh-TW", { hour12: false, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  }
+  // 登出後整頁重載：清掉畫面上的案件資料、剛產生的邀請連結等
+  $("#logout").addEventListener("click", async () => { try { await api("/api/auth/logout", { method: "POST" }); } catch {} location.replace("/workbench"); });
+
+  // ---------- 帳號管理（管理者）----------
+  async function showAdmin() {
+    if (!me || me.role !== "admin") { location.hash = ""; return; }
+    ["#list-view", "#case-view"].forEach((s) => $(s).classList.add("hidden")); $("#admin-view").classList.remove("hidden");
+    $("#users-msg").classList.add("hidden");
+    const d = await api("/api/admin/users");
+    $("#inv-msg").classList.toggle("hidden", d.line_login);
+    if (!d.line_login) $("#inv-msg").textContent = LOGIN_ERRORS.not_configured;
+    const ROLE = { admin: "管理者", reviewer: "審圖人員" };
+    $("#users").innerHTML = d.users.map((u) => {
+      const self = u.id === me.id;
+      const acts = self ? '<span class="small muted">（自己）</span>' :
+        '<button type="button" data-act="' + (u.disabled ? "enable" : "disable") + '">' + (u.disabled ? "啟用" : "停用") + "</button> " +
+        '<button type="button" data-act="role" data-role="' + (u.role === "admin" ? "reviewer" : "admin") + '">' + (u.role === "admin" ? "改為審圖人員" : "設為管理者") + "</button> " +
+        (u.disabled ? "" : '<button type="button" data-act="rebind">重新綁定 LINE</button>');
+      return '<tr data-id="' + u.id + '" data-name="' + esc(u.username) + '"><td>' + esc(u.username) + "</td><td>" + ROLE[u.role] + "</td><td>" +
+        (u.line_bound ? esc(u.line_name || "已綁定") : '<span class="muted">未綁定</span>') + "</td><td>" + (u.disabled ? '<span class="badge b-failed">停用</span>' : "啟用") +
+        '</td><td class="opt">' + (u.last_login_at ? fmtTime(u.last_login_at) : "-") + '</td><td class="row">' + acts + "</td></tr>";
+    }).join("");
+    $("#no-invites").classList.toggle("hidden", d.invites.length > 0);
+    $("#invites").innerHTML = d.invites.map((v) => '<tr data-inv="' + v.id + '"><td>' + esc(v.username) + "</td><td>" + (v.kind === "new" ? "開新帳號" : "重新綁定") +
+      "</td><td>" + ROLE[v.role] + '</td><td class="opt">' + esc(v.created_by) + "</td><td>" + fmtTime(v.expires_at) +
+      '</td><td><button type="button" data-act="revoke">撤銷</button></td></tr>').join("");
+  }
+  async function makeInvite(username, role, hours, mode) {
+    $("#inv-msg").classList.add("hidden"); $("#inv-result").classList.add("hidden");
+    try {
+      const r = await api("/api/admin/invites", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, role, hours: Number(hours), mode }) });
+      $("#inv-link").textContent = r.url;
+      $("#inv-note").textContent = (r.kind === "new" ? "開新帳號「" : "重新綁定「") + r.username + "」，" + fmtTime(r.expires_at) +
+        " 前有效、只能用一次。連結只顯示這一次，請直接傳給本人（例如 LINE 私訊），不要貼在群組。";
+      $("#inv-result").classList.remove("hidden");
+      await showAdmin();
+      $("#inv-form").scrollIntoView({ behavior: "smooth", block: "start" });
+    } catch (err) { $("#inv-msg").textContent = err.message; $("#inv-msg").classList.remove("hidden"); $("#inv-form").scrollIntoView({ block: "start" }); }
+  }
+  $("#inv-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    makeInvite($("#inv-user").value.trim(), $("#inv-role").value, $("#inv-hours").value, "new");
   });
-  $("#logout").addEventListener("click", async () => { try { await api("/api/auth/logout", { method: "POST" }); } catch {} showLogin(); });
+  $("#inv-copy").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText($("#inv-link").textContent); $("#inv-copy").textContent = "已複製"; }
+    catch { $("#inv-copy").textContent = "請手動選取複製"; }
+    setTimeout(() => { $("#inv-copy").textContent = "複製連結"; }, 2000);
+  });
+  $("#users").addEventListener("click", async (e) => {
+    const btn = e.target.closest("button[data-act]"); if (!btn) return;
+    const tr = btn.closest("tr[data-id]"), act = btn.dataset.act, name = tr.dataset.name;
+    if (act === "rebind") {
+      if (confirm("產生「" + name + "」重新綁定 LINE 的連結？\n拿到連結的人用 LINE 登入後，就會成為這個帳號（角色不變），原本綁定的 LINE 帳號立即登出、不能再登入。請只把連結交給本人。"))
+        makeInvite(name, "reviewer", 24, "rebind");
+      return;
+    }
+    const body = act === "role" ? { role: btn.dataset.role } : { disabled: act === "disable" };
+    const ask = act === "disable" ? "停用「" + name + "」？對方會立即登出、無法再登入；他發出還沒用掉的邀請也會作廢。\n（LINE 端的授權請本人到 LINE「設定 → 帳號 → 已連動的應用程式」解除）" :
+      act === "role" ? "把「" + name + "」" + (btn.dataset.role === "admin" ? "設為管理者？" : "改為審圖人員？") + "對方需要重新登入。" : null;
+    if (ask && !confirm(ask)) return;
+    try {
+      await api("/api/admin/users/" + tr.dataset.id, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      await showAdmin();
+    } catch (err) { $("#users-msg").textContent = err.message; $("#users-msg").classList.remove("hidden"); }
+  });
+  $("#invites").addEventListener("click", async (e) => {
+    const btn = e.target.closest("button[data-act=revoke]"); if (!btn) return;
+    try { await api("/api/admin/invites/" + btn.closest("tr[data-inv]").dataset.inv, { method: "DELETE" }); }
+    catch (err) { $("#users-msg").textContent = err.message; $("#users-msg").classList.remove("hidden"); return; }
+    await showAdmin();
+  });
+  $("#admin-back").addEventListener("click", () => { location.hash = ""; });
 
   // ---------- 路由：#case=ID ----------
   window.addEventListener("hashchange", route);
+  const inviteIn = (hash) => (hash.match(/^#invite=([A-Za-z0-9_-]{20,200})$/) || [])[1];
   function route() {
     clearInterval(timer);
+    const inv = inviteIn(location.hash);                     // 已開著工作台時在同一分頁點邀請連結（只改了 # 片段）
+    if (inv) { history.replaceState(null, "", location.pathname); showInvite(inv); return; }
+    if (!me) return;
+    if (location.hash === "#admin") {
+      $("#inv-result").classList.add("hidden"); $("#inv-link").textContent = ""; $("#inv-msg").classList.add("hidden");
+      showAdmin(); return;
+    }
+    $("#admin-view").classList.add("hidden");
     const m = location.hash.match(/case=(\d+)/);
     if (m) openCase(Number(m[1])); else listCases();
   }
@@ -485,7 +670,16 @@ ol.findings li.rejected { opacity: .55; }
   drop.addEventListener("drop", (e) => upload(e.dataTransfer.files));
 
   // ---------- 啟動 ----------
-  fetch("/api/auth/me", { credentials: "same-origin" }).then((r) => r.ok ? r.json().then(showApp) : showLogin()).catch(showLogin);
+  const loginError = new URLSearchParams(location.search).get("login_error");
+  const fromHash = inviteIn(location.hash);
+  if (fromHash || loginError) history.replaceState(null, "", location.pathname + (fromHash ? "" : location.hash));
+  if (fromHash) showInvite(fromHash);
+  else fetch("/api/auth/me", { credentials: "same-origin" }).then(async (r) => {
+    if (r.ok) return showApp(await r.json());
+    const inv = pending.get();                              // 開通到一半（取消、逾時）回來：回到邀請卡
+    if (inv && loginError) return showInvite(inv, loginError);
+    pending.set(null); showLogin(loginError);
+  }).catch(() => showLogin(loginError));
 })();
 </script>
 </body>

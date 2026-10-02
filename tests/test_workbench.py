@@ -1,4 +1,4 @@
-"""審核工作台：登入、權限、上傳（本機，不連資料庫；資料庫的實際 SQL 由 test_db_integration.py 在主機上驗）。"""
+"""審核工作台：權限、上傳、檢核結果（本機，不連資料庫；LINE 登入見 test_line_login.py，資料庫的實際 SQL 由 test_db_integration.py 在主機上驗）。"""
 
 from contextlib import contextmanager
 from types import SimpleNamespace as NS
@@ -12,18 +12,6 @@ from litian import auth as AU
 USER = {"id": 1, "username": "amy", "role": "reviewer"}
 
 
-def test_password_hash_roundtrip_and_salt():
-    h1, h2 = AU.hash_password("correct horse 1"), AU.hash_password("correct horse 1")
-    assert h1 != h2 and h1.startswith("scrypt$")                      # 每次鹽不同
-    assert AU.verify_password("correct horse 1", h1) and not AU.verify_password("wrong", h1)
-    assert not AU.verify_password("x", "garbage") and not AU.verify_password("x", "md5$1$2$3$4$5")
-
-
-def test_password_policy():
-    with pytest.raises(ValueError, match="至少"):
-        AU.check_new_password("short")
-
-
 @pytest.fixture
 def client(monkeypatch, tmp_path):
     @contextmanager
@@ -31,10 +19,8 @@ def client(monkeypatch, tmp_path):
         yield NS()
     monkeypatch.setattr(api, "pool", NS(connection=conn))
     monkeypatch.setattr(api, "CASES_DIR", tmp_path)
-    api._login_fails.clear()
     state = {"files": []}
     monkeypatch.setattr(api.AU, "session_user", lambda c, token: USER if token == "good-token" else None)
-    monkeypatch.setattr(api.AU, "login", lambda c, u, p: ("good-token", USER) if (u, p) == ("amy", "pw-1234567890") else None)
     monkeypatch.setattr(api.AU, "logout", lambda c, token: state.setdefault("logout", token))
     monkeypatch.setattr(api, "_one", lambda sql, *a: {"id": a[0], "name": "案", "created_by": "amy", "created_at": "t"}
                         if "FROM review_case" in sql else {"n": 0})
@@ -51,28 +37,22 @@ def test_requires_login(client):
     assert client.get("/workbench").status_code == 200                 # 網頁本身可開，資料要登入
 
 
-def test_login_sets_secure_cookie_and_logout(client):
-    r = client.post("/api/auth/login", json={"username": "amy", "password": "pw-1234567890"})
-    assert r.status_code == 200 and r.json()["user"]["username"] == "amy"
-    sc = r.headers["set-cookie"].lower()
-    assert "fr_session=good-token" in sc and "httponly" in sc and "secure" in sc and "samesite=lax" in sc
-    client.cookies.set("fr_session", "good-token")
+def test_logout_clears_session(client):
+    client.cookies.set("__Host-fr_session", "good-token")
     assert client.get("/api/auth/me").json()["username"] == "amy"
-    client.post("/api/auth/logout")
-    assert client.state["logout"] == "good-token"
+    r = client.post("/api/auth/logout")
+    assert r.status_code == 200 and client.state["logout"] == "good-token"
+    assert r.headers["set-cookie"].startswith("__Host-fr_session=") and "max-age=0" in r.headers["set-cookie"].lower()
 
 
-def test_login_lockout_after_failures(client):
-    h = {"X-Forwarded-For": "198.51.100.3"}
-    codes = [client.post("/api/auth/login", json={"username": "amy", "password": "bad"}, headers=h).status_code
-             for _ in range(api.LOGIN_FAIL_MAX)]
-    assert codes == [401] * api.LOGIN_FAIL_MAX
-    r = client.post("/api/auth/login", json={"username": "amy", "password": "pw-1234567890"}, headers=h)
-    assert r.status_code == 429                                         # 鎖定後連對的密碼也擋
+def test_password_login_is_gone(client):
+    assert client.post("/api/auth/login", json={"username": "amy", "password": "x"}).status_code in (404, 405)
+    html = client.get("/workbench").text
+    assert 'type="password"' not in html and "/api/auth/line/start" in html and "用 LINE 登入" in html
 
 
 def test_upload_streams_to_disk_with_hash(client, tmp_path):
-    client.cookies.set("fr_session", "good-token")
+    client.cookies.set("__Host-fr_session", "good-token")
     files = [("files", ("../../A1-05 面積計算表.dwg", b"AC1027" + b"x" * 100, "application/octet-stream")),
              ("files", ("A1-05.dwl", b"lock", "application/octet-stream"))]
     r = client.post("/api/cases/3/files", files=files)
@@ -84,7 +64,7 @@ def test_upload_streams_to_disk_with_hash(client, tmp_path):
 
 
 def test_upload_rejects_oversize_and_removes_partial(client, tmp_path, monkeypatch):
-    client.cookies.set("fr_session", "good-token")
+    client.cookies.set("__Host-fr_session", "good-token")
     monkeypatch.setattr(api, "UPLOAD_MAX", 10)
     r = client.post("/api/cases/4/files", files=[("files", ("big.dwg", b"0123456789AB", "application/octet-stream"))])
     assert r.status_code == 413 and "超過單檔上限" in r.json()["detail"]
@@ -92,7 +72,7 @@ def test_upload_rejects_oversize_and_removes_partial(client, tmp_path, monkeypat
 
 
 def test_sheet_texts_sorted_top_to_bottom(client, monkeypatch):
-    client.cookies.set("fr_session", "good-token")
+    client.cookies.set("__Host-fr_session", "good-token")
     monkeypatch.setattr(api, "_one", lambda sql, *a: {"file_id": 1, "idx": 0, "number": "A1-05", "title": "面積計算表"})
     monkeypatch.setattr(api, "_all", lambda sql, *a: [{"t": "下", "x": 0, "y": 1, "layer": "0"},
                                                        {"t": "右上", "x": 9, "y": 5, "layer": "0"},
@@ -104,7 +84,7 @@ def test_sheet_texts_sorted_top_to_bottom(client, monkeypatch):
 def test_reviews_require_login_and_attach_svg_urls_and_laws(client, monkeypatch):
     assert client.get("/api/cases/3/reviews").status_code == 401
     assert client.get("/api/cases/3/files/7/review/1F.svg").status_code == 401
-    client.cookies.set("fr_session", "good-token")
+    client.cookies.set("__Host-fr_session", "good-token")
     result = {"floors": [{"label": "1F", "findings": [{"law": ["D0120029/34/1/1/1"]}], "notes": [{"law": ["D0120029/49/1/1"]}]}],
               "warnings": []}
 
@@ -124,7 +104,7 @@ def test_reviews_require_login_and_attach_svg_urls_and_laws(client, monkeypatch)
 
 
 def test_review_svg_served_only_from_cases_dir(client, monkeypatch, tmp_path):
-    client.cookies.set("fr_session", "good-token")
+    client.cookies.set("__Host-fr_session", "good-token")
     rev = tmp_path / "3" / "001_F.dxf.review"
     rev.mkdir(parents=True)
     (rev / "1F.svg").write_text("<svg/>", encoding="utf-8")
@@ -142,7 +122,7 @@ def test_review_svg_served_only_from_cases_dir(client, monkeypatch, tmp_path):
 
 
 def test_context_validates_and_requeues(client, monkeypatch):
-    client.cookies.set("fr_session", "good-token")
+    client.cookies.set("__Host-fr_session", "good-token")
     saved = {}
     monkeypatch.setattr(api, "_one", lambda sql, *a: {"ok": 1} if "occupancy_code" in sql and a[0] == "丁-2" else
                         ({"id": 3, "name": "案", "created_by": "amy", "created_at": "t"} if "review_case" in sql else None))
@@ -172,7 +152,7 @@ def test_workbench_policy_switches_match_defaults():
 
 
 def test_decisions_store_accept_reject_and_undo(client, monkeypatch):
-    client.cookies.set("fr_session", "good-token")
+    client.cookies.set("__Host-fr_session", "good-token")
     calls = []
     monkeypatch.setattr(api, "_one", lambda sql, *a: {"ok": 1} if a == (7, 3) else None)
     monkeypatch.setattr(api.DS, "decide", lambda c, fid, key, dec, note, u: calls.append((fid, key, dec, note, u)))
@@ -185,7 +165,7 @@ def test_decisions_store_accept_reject_and_undo(client, monkeypatch):
 
 
 def test_report_html_and_csv(client, monkeypatch, tmp_path):
-    client.cookies.set("fr_session", "good-token")
+    client.cookies.set("__Host-fr_session", "good-token")
     rev = tmp_path / "3" / "001.dxf.review"
     rev.mkdir(parents=True)
     (rev / "1F.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"><title>plan</title></svg>', encoding="utf-8")

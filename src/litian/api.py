@@ -13,17 +13,18 @@ import json
 import logging
 import os
 import re
+import secrets
 import time
 from collections import Counter, deque
 from contextlib import asynccontextmanager
 from functools import lru_cache
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 import openai
-from fastapi import Cookie, Depends, FastAPI, File, Header, HTTPException, Query, Request, Response, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from psycopg.rows import dict_row
@@ -31,6 +32,7 @@ from psycopg_pool import ConnectionPool
 
 from . import ask as A
 from . import auth as AU
+from . import line_login as LL
 from .drawing import store as DS
 from .drawing.cli import safe_name
 from .lawdb import search as S
@@ -546,54 +548,159 @@ async def ask(body: AskBody, request: Request, x_access_code: str = Header("")):
 
 CASES_DIR = Path(os.environ.get("CASES_DIR", "/data/cases"))
 UPLOAD_MAX = 200 * 1024 * 1024        # 單檔上限
-LOGIN_FAIL_MAX = 10                   # 同一來源一小時內登入失敗上限
-_login_fails: dict[str, deque] = {}
+NO_STORE = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
+LOGIN_ERROR_RE = re.compile(r"[A-Za-z_]{1,40}")
+# 不用來源 IP 封鎖登入：state、邀請權杖都是 256 位元亂數，沒有猜測空間；而整間辦公室共用一個對外 IP，
+# IP 封鎖反而會讓一個網頁（偷放 20 張圖片打回呼網址）就把全部同仁鎖在外面。灌資料表由全站暫存上限擋。
 
 
-def _login_rate(ip: str, failed: bool = False) -> None:
-    now = time.monotonic()
-    f = _login_fails.setdefault(ip, deque())
-    while f and now - f[0] > 3600:
-        f.popleft()
-    if failed:
-        f.append(now)
-    elif len(f) >= LOGIN_FAIL_MAX:
-        raise HTTPException(429, "登入失敗次數太多，請一小時後再試。")
+def _line_cfg() -> LL.Config | None:
+    try:
+        return LL.Config.from_env()
+    except ValueError as e:
+        log.warning("line login config invalid: %s", e)
+        return None
 
 
-def current_user(fr_session: str | None = Cookie(None)) -> dict:
+def current_user(session: str | None = Cookie(None, alias=AU.COOKIE)) -> dict:
     with pool.connection() as c:
-        u = AU.session_user(c, fr_session)
+        u = AU.session_user(c, session)
     if not u:
         raise HTTPException(401, "請先登入")
     return u
 
 
-class LoginBody(BaseModel):
-    username: str = Field(min_length=1, max_length=64)
-    password: str = Field(min_length=1, max_length=256)
+def require_admin(user: dict = Depends(current_user)) -> dict:
+    if user["role"] != "admin":
+        raise HTTPException(403, "只有管理者可以使用帳號管理")
+    return user
 
 
-@app.post("/api/auth/login")
-def auth_login(body: LoginBody, request: Request, response: Response):
-    ip = _client_ip(request)
-    _login_rate(ip)
+def _to_workbench(error: str | None = None) -> RedirectResponse:
+    """登入流程結束一律回工作台；錯誤只帶代碼（訊息由頁面對應）。"""
+    return RedirectResponse("/workbench" + (f"?login_error={error}" if error else ""), status_code=303, headers=NO_STORE)
+
+
+def _line_start(request: Request, invite: str | None, no_auto: bool, browser: str | None) -> RedirectResponse:
+    cfg = _line_cfg()
+    if not cfg:
+        return _to_workbench("not_configured")
+    host = request.headers.get("host", "")
+    if host and host != urlsplit(cfg.callback_url).netloc:
+        # 從別的網址（舊網域、IP）進來：登入暫存 Cookie 會留在那個網址，LINE 卻回到登記的網址 → 必定失敗。先轉到正式網址
+        log.warning("line login started from host %s, callback host is %s", host[:80], urlsplit(cfg.callback_url).netloc)
+        return RedirectResponse(cfg.base_url + "/workbench", status_code=303, headers=NO_STORE)
+    invite_id = None
+    # 同一瀏覽器已有登入暫存 Cookie 就沿用（兩個分頁同時登入時，兩個都能完成）
+    browser = browser if browser and 20 <= len(browser) <= 100 else secrets.token_urlsafe(32)
+    try:
+        with pool.connection() as c:
+            if invite is not None:
+                inv = AU.invite_info(c, invite)
+                if not inv:
+                    return _to_workbench("invite_invalid")
+                invite_id = inv["id"]
+            state, nonce = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+            verifier = secrets.token_urlsafe(64)                # PKCE：86 字元（規定 43～128）
+            AU.save_login_state(c, state, browser, nonce, verifier, invite_id)
+    except AU.AuthError as e:
+        log.warning("line login start refused: %s", e.code)
+        return _to_workbench(e.code)
+    r = RedirectResponse(LL.authorize_url(cfg, state, nonce, verifier, no_auto_login=no_auto), status_code=303,
+                         headers=NO_STORE)
+    r.set_cookie(AU.LOGIN_COOKIE, browser, max_age=AU.STATE_MINUTES * 60, httponly=True, secure=True,
+                 samesite="lax", path="/")
+    return r
+
+
+@app.get("/api/auth/line/start")
+def auth_line_start(request: Request, noauto: str | None = None,
+                    login_cookie: str | None = Cookie(None, alias=AU.LOGIN_COOKIE)):
+    """「用 LINE 登入」：轉到 LINE 授權頁。noauto=1：自動登入失敗後重試（不自動登入，改顯示登入畫面）。"""
+    return _line_start(request, None, noauto == "1", login_cookie)
+
+
+@app.post("/api/auth/line/start")
+def auth_line_start_invite(request: Request, invite: str = Form(..., max_length=200),
+                           login_cookie: str | None = Cookie(None, alias=AU.LOGIN_COOKIE)):
+    """邀請頁的「用 LINE 登入並開通」：權杖放表單內容。開通一律不自動登入：
+    手機自動登入失敗（無痕視窗、App 連結失效）會讓開通卡住，共用電腦也可能自動用到別人的 LINE。"""
+    return _line_start(request, invite, True, login_cookie)
+
+
+def _ip_tag(request: Request) -> str:
+    return _client_tag(request)[:12]                          # 日誌只記雜湊，不記原始 IP
+
+
+@app.get("/api/auth/line/callback")
+def auth_line_callback(request: Request, code: str | None = Query(None, max_length=512),
+                       state: str | None = Query(None, max_length=200), error: str | None = Query(None, max_length=64),
+                       login_cookie: str | None = Cookie(None, alias=AU.LOGIN_COOKIE)):
+    """LINE 授權後回到這裡：核對 state 與發起登入的瀏覽器 → 換 token → 驗 ID token → 開通或登入。"""
+    tag = _ip_tag(request)
+    cfg = _line_cfg()
+    if not cfg:
+        return _to_workbench("not_configured")
     with pool.connection() as c:
-        r = AU.login(c, body.username.strip(), body.password)
-    if not r:
-        _login_rate(ip, failed=True)
-        raise HTTPException(401, "帳號或密碼不正確")
-    token, user = r
-    response.set_cookie(AU.COOKIE, token, max_age=AU.SESSION_HOURS * 3600, httponly=True, secure=True,
-                        samesite="lax", path="/")
-    return {"user": user}
+        st = AU.take_login_state(c, state, login_cookie)       # 只能用一次
+    if error:
+        err = error.upper() if LOGIN_ERROR_RE.fullmatch(error) else "OTHER"
+        log.info("line login error=%s client=%s", err, tag)
+        return _to_workbench("denied" if err == "ACCESS_DENIED" else "line_error")
+    if not st or not code:
+        # 逾時、換了瀏覽器、LINE 自動登入失敗（官方文件：此時 state 會不符），或偽造的回呼
+        log.info("line login state mismatch client=%s cookie=%s", tag, bool(login_cookie))
+        return _to_workbench("expired")
+    try:
+        id_token = LL.exchange_code(cfg, code, st["verifier"])
+        claims = LL.verify_id_token(cfg, id_token, st["nonce"])
+    except LL.LineError as e:
+        log.warning("line login failed client=%s transient=%s: %s", tag, e.transient, e)
+        return _to_workbench("line_unavailable" if e.transient else "line_error")
+    except Exception:                                           # 任何意外都回工作台，不給 500
+        log.exception("line login unexpected error client=%s", tag)
+        return _to_workbench("line_error")
+    try:
+        with pool.connection() as c:
+            token, user = AU.line_login(c, claims["sub"], claims["name"], st["invite_id"])
+    except AU.AuthError as e:
+        log.info("line login refused code=%s client=%s", e.code, tag)
+        return _to_workbench(e.code)
+    except Exception:
+        log.exception("line login database error client=%s", tag)
+        return _to_workbench("line_error")
+    log.info("line login user_id=%s invite=%s", user["id"], st["invite_id"] is not None)
+    r = _to_workbench()
+    r.set_cookie(AU.COOKIE, token, max_age=AU.SESSION_HOURS * 3600, httponly=True, secure=True, samesite="lax", path="/")
+    r.delete_cookie(AU.LOGIN_COOKIE, path="/", secure=True, httponly=True, samesite="lax")
+    return r
+
+
+class InviteCheck(BaseModel):
+    token: str = Field(min_length=10, max_length=200)
+
+
+@app.post("/api/auth/invite")
+def auth_invite(body: InviteCheck):
+    """邀請頁：顯示這張邀請開通哪個帳號。"""
+    with pool.connection() as c:
+        inv = AU.invite_info(c, body.token)
+    if not inv:
+        raise HTTPException(404, "這條邀請連結已使用、已作廢或已過期。已開通的同仁請直接用 LINE 登入；還沒開通請向管理者索取新的連結")
+    return {"username": inv["username"], "kind": inv["kind"], "role": inv["role"], "expires_at": inv["expires_at"],
+            "line_login": _line_cfg() is not None}
+
+
+@app.get("/api/auth/options")
+def auth_options():
+    return {"line_login": _line_cfg() is not None}
 
 
 @app.post("/api/auth/logout")
-def auth_logout(response: Response, fr_session: str | None = Cookie(None)):
+def auth_logout(response: Response, session: str | None = Cookie(None, alias=AU.COOKIE)):
     with pool.connection() as c:
-        AU.logout(c, fr_session)
-    response.delete_cookie(AU.COOKIE, path="/")
+        AU.logout(c, session)
+    response.delete_cookie(AU.COOKIE, path="/", secure=True, httponly=True, samesite="lax")
     return {"ok": True}
 
 
@@ -602,9 +709,75 @@ def auth_me(user: dict = Depends(current_user)):
     return user
 
 
+# ---- 帳號管理（管理者）：發邀請、停用／啟用、改角色 ----
+
+class InviteCreate(BaseModel):
+    username: str = Field(min_length=2, max_length=32)
+    role: str = Field("reviewer", pattern=r"^(reviewer|admin)$")
+    hours: int = Field(AU.INVITE_HOURS, ge=1, le=AU.INVITE_MAX_HOURS)
+    mode: str = Field("new", pattern=r"^(new|rebind)$")        # new：開新帳號；rebind：既有帳號重新綁定 LINE
+
+
+class UserPatch(BaseModel):
+    disabled: bool | None = None
+    role: str | None = Field(None, pattern=r"^(reviewer|admin)$")
+
+
+@app.get("/api/admin/users")
+def admin_users(user: dict = Depends(require_admin)):
+    with pool.connection() as c:
+        return {"users": AU.list_users(c), "invites": AU.pending_invites(c), "line_login": _line_cfg() is not None}
+
+
+@app.post("/api/admin/invites")
+def admin_invite(body: InviteCreate, user: dict = Depends(require_admin)):
+    cfg = _line_cfg()
+    if not cfg:
+        raise HTTPException(409, "LINE 登入尚未設定，邀請連結無法使用（請先依部署說明第 4b 項設定 LINE Login）")
+    if body.mode == "rebind" and body.username.strip() == user["username"]:
+        raise HTTPException(422, "不能在網頁上替自己重新綁定 LINE（請由另一位管理者操作，或在主機上用命令列）")
+    try:
+        with pool.connection() as c:
+            token, inv = AU.create_invite(c, body.username, body.role, user["username"], body.hours,
+                                          mode=body.mode, created_by_id=user["id"])
+    except AU.Conflict as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    log.info("invite created by_id=%s kind=%s", user["id"], inv["kind"])
+    return {**inv, "url": AU.invite_link(cfg.base_url, token)}
+
+
+@app.delete("/api/admin/invites/{invite_id}")
+def admin_revoke(invite_id: int, user: dict = Depends(require_admin)):
+    with pool.connection() as c:
+        if not AU.revoke_invite(c, invite_id):
+            raise HTTPException(404, "沒有這張待開通的邀請")
+    return {"ok": True}
+
+
+@app.patch("/api/admin/users/{user_id}")
+def admin_update_user(user_id: int, body: UserPatch, user: dict = Depends(require_admin)):
+    if user_id == user["id"] and (body.disabled or (body.role and body.role != "admin")):
+        raise HTTPException(422, "不能停用自己或取消自己的管理者身分（請由另一位管理者操作）")
+    try:
+        with pool.connection() as c:
+            u = AU.update_user(c, user_id, disabled=body.disabled, role=body.role)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    log.info("user updated by_id=%s target_id=%s disabled=%s role=%s", user["id"], u["id"], u["disabled"], u["role"])
+    return u
+
+
 @app.get("/workbench", include_in_schema=False)
 def workbench():
-    return HTMLResponse(WEB_WORKBENCH.read_text(encoding="utf-8"), headers={"Cache-Control": "no-cache"})
+    # 邀請連結帶權杖：不送 Referer；不允許被別的網站嵌入（帳號管理按鈕防點擊劫持）
+    return HTMLResponse(WEB_WORKBENCH.read_text(encoding="utf-8"),
+                        headers={"Cache-Control": "no-cache", "Referrer-Policy": "no-referrer",
+                                 "Content-Security-Policy": "frame-ancestors 'none'", "X-Frame-Options": "DENY",
+                                 "X-Content-Type-Options": "nosniff"})
 
 
 class CaseBody(BaseModel):

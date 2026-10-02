@@ -24,11 +24,31 @@ for f in docker-compose.yml Caddyfile .env.example 02_up.sh 03_libredwg_test.sh 
 done
 
 cd "$RUN"
+# 審核工作台只能用 LINE 登入：.env 沒填 LINE Login 三個設定就部署，所有人都會登不進去
+n=$(sudo grep -cE '^LINE_LOGIN_(CHANNEL_ID|CHANNEL_SECRET|CALLBACK_URL)=.+' "$RUN/.env" || true)
+if [ "${n:-0}" -lt 3 ] && [ -z "${LITIAN_ALLOW_NO_LINE:-}" ]; then
+  say "【停止】/opt/litian/.env 的 LINE_LOGIN_CHANNEL_ID、LINE_LOGIN_CHANNEL_SECRET、LINE_LOGIN_CALLBACK_URL 沒有都填（目前 ${n:-0} 個）。"
+  say "審核工作台只能用 LINE 登入，請先依 deploy/oracle/README.md 第 4b 項設定；確定要先部署請加 LITIAN_ALLOW_NO_LINE=1 重跑。"
+  exit 1
+fi
+# 部署前備份資料庫（結構變更不一定能回退；保留最近 7 份）
+sudo install -d -m 700 "$RUN/backup"
+bk="$RUN/backup/litian-$(date +%Y%m%d-%H%M%S).sql.gz"
+sudo docker compose exec -T postgres pg_dump -U litian litian </dev/null | gzip | sudo tee "$bk" >/dev/null
+sudo chmod 600 "$bk"
+say "資料庫備份：$bk（$(sudo du -h "$bk" | cut -f1)）"
+ls -1t "$RUN"/backup/litian-*.sql.gz 2>/dev/null | tail -n +8 | xargs -r sudo rm -f
 # 圖面處理的資料夾（worker 與 converter 都以 65534 身分執行）
 sudo install -d -o 65534 -g 65534 "$RUN/data/cases" "$RUN/data/convert" "$RUN/data/convert/in" "$RUN/data/convert/out" "$RUN/data/convert/work"
 nice -n 19 sudo docker compose build api converter >/tmp/litian-build.log 2>&1 || { tail -20 /tmp/litian-build.log; exit 1; }
 sudo docker compose up -d api worker converter
-for i in $(seq 1 20); do curl -sf http://127.0.0.1:8100/api/health >/dev/null && break; sleep 2; done
+ok=""
+for i in $(seq 1 30); do curl -sf http://127.0.0.1:8100/api/health >/dev/null && { ok=1; break; }; sleep 2; done
+if [ -z "$ok" ]; then
+  say "【失敗】API 啟動後 60 秒內健康檢查沒有通過，最後的日誌："
+  sudo docker compose logs --tail 40 api
+  exit 1
+fi
 sudo docker compose exec -T api python -m litian.lawdb.store </dev/null
 # 向量索引：只補算有變動的節點（沒有 OPENAI_API_KEY 時自動略過）
 sudo docker compose exec -T api python -m litian.lawdb.vectors </dev/null

@@ -59,6 +59,10 @@ services:
       ASK_ACCESS_CODE: ${ASK_ACCESS_CODE:-}
       ASK_DAILY_LIMIT: ${ASK_DAILY_LIMIT:-500}
       CASES_DIR: /data/cases
+      # 審核工作台用 LINE 登入（LINE Login 頻道；由使用者本人填在 .env，三個都填了才啟用）
+      LINE_LOGIN_CHANNEL_ID: ${LINE_LOGIN_CHANNEL_ID:-}
+      LINE_LOGIN_CHANNEL_SECRET: ${LINE_LOGIN_CHANNEL_SECRET:-}
+      LINE_LOGIN_CALLBACK_URL: ${LINE_LOGIN_CALLBACK_URL:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -68,8 +72,11 @@ services:
       - ./data/cases:/data/cases       # 工作台上傳的圖說（worker 共用）
     ports:
       - "127.0.0.1:8100:8000"   # 只綁主機本機，由主機層 Caddy 轉送 /api/*
-    networks: [internal, edge]  # internal 連資料庫；edge 讓呼叫 OpenAI API 能出外網
+    networks: [internal, edge]  # internal 連資料庫；edge 讓呼叫 OpenAI、LINE API 能出外網
     mem_limit: 768m
+    logging:                    # 容器日誌輪替（預設不輪替、一直累積）
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
 
   # 圖面處理：佇列在 PostgreSQL；DWG 交給 converter 轉檔，抽取在 worker 的子行程（限時、限記憶體）
   worker:
