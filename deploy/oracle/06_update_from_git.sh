@@ -37,7 +37,8 @@ bk="$RUN/backup/litian-$(date +%Y%m%d-%H%M%S).sql.gz"
 sudo docker compose exec -T postgres pg_dump -U litian litian </dev/null | gzip | sudo tee "$bk" >/dev/null
 sudo chmod 600 "$bk"
 say "資料庫備份：$bk（$(sudo du -h "$bk" | cut -f1)）"
-ls -1t "$RUN"/backup/litian-*.sql.gz 2>/dev/null | tail -n +8 | xargs -r sudo rm -f
+# 備份資料夾只有 root 能讀，列檔也要 sudo（不加 sudo 會讓 set -e 在這裡中止部署）
+sudo find "$RUN/backup" -maxdepth 1 -name 'litian-*.sql.gz' -printf '%T@ %p\n' | sort -rn | tail -n +8 | cut -d' ' -f2- | xargs -r sudo rm -f
 # 圖面處理的資料夾（worker 與 converter 都以 65534 身分執行）
 sudo install -d -o 65534 -g 65534 "$RUN/data/cases" "$RUN/data/convert" "$RUN/data/convert/in" "$RUN/data/convert/out" "$RUN/data/convert/work"
 nice -n 19 sudo docker compose build api converter >/tmp/litian-build.log 2>&1 || { tail -20 /tmp/litian-build.log; exit 1; }
