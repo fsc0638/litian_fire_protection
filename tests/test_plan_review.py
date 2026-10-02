@@ -355,11 +355,14 @@ def test_worker_runs_review_after_extraction(tmp_path, monkeypatch):
     make_fire_dxf(dxf)
     saved, reviews, failed = [], [], []
     monkeypatch.setattr(W.ST, "claim", lambda conn: {"id": 7, "name": "F-101.dxf", "kind": "dxf", "path": str(dxf), "attempts": 1})
-    monkeypatch.setattr(W.ST, "save_result", lambda conn, fid, ir, stats: saved.append(fid))
+    monkeypatch.setattr(W.ST, "save_result", lambda conn, fid, ir, stats, status="done": saved.append((fid, status)))
+    marks = []
+    monkeypatch.setattr(W.ST, "mark", lambda conn, fid, status, stats: marks.append((fid, status, stats.get("review"))))
     monkeypatch.setattr(W.ST, "save_review", lambda conn, fid, status, result, error, svg_dir: reviews.append((fid, status, result, error, svg_dir)))
     monkeypatch.setattr(W.ST, "save_failure", lambda conn, fid, err, retry: failed.append(err))
     assert W.run_once(FakeConn(), tmp_path) is True
-    assert failed == [] and saved == [7]
+    assert failed == [] and saved == [(7, "reviewing")]                 # 有平面圖：先標「檢核中」
+    assert marks and marks[-1][:2] == (7, "done") and marks[-1][2]["floors"] == 1
     fid, status, result, error, svg_dir = reviews[0]
     assert (fid, status, error) == (7, "done", None)
     fl = result["floors"][0]

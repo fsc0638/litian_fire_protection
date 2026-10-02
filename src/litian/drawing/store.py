@@ -1,6 +1,6 @@
 """案件、檔案、圖面中介資料的資料表與工作佇列（PostgreSQL，SELECT … FOR UPDATE SKIP LOCKED）。
 
-檔案狀態：queued（排隊）→ processing（處理中）→ done（完成）｜failed（失敗）｜skipped（不支援的檔案類型）
+檔案狀態：queued（排隊）→ processing（處理中）→〔reviewing（檢核中，有平面圖時）〕→ done（完成）｜failed（失敗）｜skipped（不支援的檔案類型）
 """
 
 from __future__ import annotations
@@ -72,7 +72,7 @@ RETURNING id, case_id, name, kind, path, attempts
 RECOVER_SQL = """
 UPDATE case_file SET status = CASE WHEN attempts < %s THEN 'queued' ELSE 'failed' END,
        error = CASE WHEN attempts < %s THEN error ELSE '處理逾時或中斷次數過多' END, updated_at = now()
-WHERE status = 'processing' AND updated_at < now() - make_interval(secs => %s)
+WHERE status IN ('processing', 'reviewing') AND updated_at < now() - make_interval(secs => %s)
 """
 
 
@@ -110,7 +110,7 @@ def recover_stale(conn, older_than_s: int) -> int:
     return conn.execute(RECOVER_SQL, (MAX_ATTEMPTS, MAX_ATTEMPTS, older_than_s)).rowcount
 
 
-def save_result(conn, file_id: int, ir: dict, stats: dict) -> None:
+def save_result(conn, file_id: int, ir: dict, stats: dict, status: str = "done") -> None:
     conn.execute("INSERT INTO file_ir (file_id, ir) VALUES (%s, %s::jsonb) "
                  "ON CONFLICT (file_id) DO UPDATE SET ir = EXCLUDED.ir",
                  (file_id, json.dumps(ir, ensure_ascii=False)))
@@ -122,8 +122,12 @@ def save_result(conn, file_id: int, ir: dict, stats: dict) -> None:
                       (file_id, s["idx"], stats["sheet_numbers"][s["idx"]],
                        IR.sheet_title(m) or None, IR.meta_field(m, "比例"), IR.meta_field(m, "單位"),
                        json.dumps(m, ensure_ascii=False), s["bbox"]))
-    conn.execute("UPDATE case_file SET status = 'done', error = NULL, stats = %s::jsonb, updated_at = now() "
-                 "WHERE id = %s", (json.dumps(stats, ensure_ascii=False), file_id))
+    mark(conn, file_id, status, stats)
+
+
+def mark(conn, file_id: int, status: str, stats: dict) -> None:
+    conn.execute("UPDATE case_file SET status = %s, error = NULL, stats = %s::jsonb, updated_at = now() "
+                 "WHERE id = %s", (status, json.dumps(stats, ensure_ascii=False), file_id))
 
 
 def save_review(conn, file_id: int, status: str, result: dict | None, error: str | None, svg_dir: str | None) -> None:

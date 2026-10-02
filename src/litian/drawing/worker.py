@@ -80,9 +80,10 @@ def process(conn, job: dict, spool: Path) -> dict:
     with tempfile.TemporaryDirectory() as d:
         work = Path(d)
         ir, stats = extract_in_subprocess(src, work)
+        review = has_floor_plans(ir)
         with conn.transaction():
-            ST.save_result(conn, job["id"], ir, stats)
-        if has_floor_plans(ir):
+            ST.save_result(conn, job["id"], ir, stats, status="reviewing" if review else "done")
+        if review:
             # 檢核失敗不影響抽取結果（文字、圖紙照常可看），只記下原因
             svg_dir = path.with_name(path.name + ".review")
             try:
@@ -93,6 +94,7 @@ def process(conn, job: dict, spool: Path) -> dict:
             except Exception as e:
                 ST.save_review(conn, job["id"], "failed", None, f"{type(e).__name__}: {e}", None)
                 log.warning("review failed file=%s error=%s", job["id"], e)
+            ST.mark(conn, job["id"], "done", stats)
     return stats
 
 

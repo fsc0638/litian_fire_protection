@@ -82,6 +82,13 @@ def test_save_result_failure_and_recover(conn):
                  (ST.MAX_ATTEMPTS, f2))
     ST.recover_stale(conn, 60)
     assert conn.execute("SELECT status FROM case_file WHERE id = %s", (f2,)).fetchone()["status"] == "failed"
+    # 檢核中當掉也要能救回；檢核結果可覆寫
+    conn.execute("UPDATE case_file SET status = 'reviewing', attempts = 1, updated_at = now() - interval '2 hours' WHERE id = %s", (fid,))
+    assert ST.recover_stale(conn, 60) == 1
+    ST.save_review(conn, fid, "failed", None, "RuntimeError: 檢核失敗", None)
+    ST.save_review(conn, fid, "done", {"floors": []}, None, "/x/a.dxf.review")
+    row = conn.execute("SELECT status, result, error, svg_dir FROM file_review WHERE file_id = %s", (fid,)).fetchone()
+    assert (row["status"], row["result"], row["error"], row["svg_dir"]) == ("done", {"floors": []}, None, "/x/a.dxf.review")
 
 
 def test_auth_login_session_logout_password_disable(conn):

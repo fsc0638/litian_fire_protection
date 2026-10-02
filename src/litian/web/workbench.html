@@ -62,7 +62,7 @@ tr.click { cursor: pointer; }
 tr.click:hover td, tr.sel td { background: var(--surface-2); }
 .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: .78rem; font-weight: 600; white-space: nowrap; }
 .b-done { background: var(--ok-soft); color: var(--ok); }
-.b-queued, .b-processing { background: var(--warn-soft); color: var(--warn); }
+.b-queued, .b-processing, .b-reviewing { background: var(--warn-soft); color: var(--warn); }
 .b-failed { background: var(--err-soft); color: var(--err); }
 .b-skipped { background: var(--surface-2); color: var(--muted); }
 .drop { border: 2px dashed var(--border); border-radius: 12px; padding: 18px; text-align: center; color: var(--muted); }
@@ -170,7 +170,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
 (() => {
   const $ = (s) => document.querySelector(s);
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  const STATUS = { queued: "排隊中", processing: "處理中", done: "完成", failed: "失敗", skipped: "略過" };
+  const STATUS = { queued: "排隊中", processing: "處理中", reviewing: "檢核中", done: "完成", failed: "失敗", skipped: "略過" };
   let currentCase = null, timer = null, sheetTexts = [];
 
   async function api(path, opts = {}) {
@@ -246,7 +246,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
     $("#sheets").innerHTML = d.sheets.map((s) => '<tr class="click" data-id="' + s.id + '"><td>' + esc(s.number || "—") + "</td><td>" + esc(s.title || "") +
       '</td><td class="opt">' + esc(s.scale || "") + '</td><td class="opt">' + esc(s.unit || "") + "</td></tr>").join("");
     clearInterval(timer);
-    if (d.files.some((f) => f.status === "queued" || f.status === "processing")) timer = setInterval(refreshCase, 3000);
+    if (d.files.some((f) => ["queued", "processing", "reviewing"].includes(f.status))) timer = setInterval(refreshCase, 3000);
     await loadReviews();
   }
 

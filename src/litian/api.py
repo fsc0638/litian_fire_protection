@@ -615,7 +615,7 @@ class CaseBody(BaseModel):
 def cases_list(user: dict = Depends(current_user)):
     return _all("SELECT c.id, c.name, c.created_by, c.created_at, count(f.id) AS files, "
                 "count(f.id) FILTER (WHERE f.status = 'done') AS done, "
-                "count(f.id) FILTER (WHERE f.status IN ('queued', 'processing')) AS pending, "
+                "count(f.id) FILTER (WHERE f.status IN ('queued', 'processing', 'reviewing')) AS pending, "
                 "count(f.id) FILTER (WHERE f.status = 'failed') AS failed "
                 "FROM review_case c LEFT JOIN case_file f ON f.case_id = c.id "
                 "GROUP BY c.id ORDER BY c.id DESC LIMIT 200")

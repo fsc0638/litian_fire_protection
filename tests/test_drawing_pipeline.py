@@ -101,7 +101,7 @@ def test_worker_processes_dwg_through_converter(tmp_path, monkeypatch):
     dwg.write_bytes(b"AC1027")
     saved, failed = [], []
     monkeypatch.setattr(W.ST, "claim", lambda conn: {"id": 5, "name": "A1-05.dwg", "kind": "dwg", "path": str(dwg), "attempts": 1})
-    monkeypatch.setattr(W.ST, "save_result", lambda conn, fid, ir, stats: saved.append((fid, stats)))
+    monkeypatch.setattr(W.ST, "save_result", lambda conn, fid, ir, stats, status="done": saved.append((fid, stats)))
     monkeypatch.setattr(W.ST, "save_failure", lambda conn, fid, err, retry: failed.append((fid, err, retry)))
 
     def fake_converter():                        # 模擬轉檔服務：看到 in/f5.dwg 就交出 DXF
