@@ -1,4 +1,4 @@
-"""一份圖檔的檢核流程：DXF → 各樓層平面理解 → 設備辨識 → 逐條規則 → 缺失。
+"""一份圖檔的檢核流程：DXF → 各樓層平面理解 → 設備辨識 → 挑空投影 → 逐條規則 → 應設判定 → 缺失。
 
 命令列（開發與驗收用）：python -m litian.review.engine <in.dxf> <out.json> [--svg 資料夾]
 """
@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import re
 import sys
 import time
 from collections import Counter
@@ -25,6 +27,7 @@ from litian.review import escape as ESC
 from litian.review import piping as PIPE
 from litian.review import rescue as RES
 from litian.review import required as RQ
+from litian.review import stack as ST
 
 EQUIP_MARGIN = 2.0      # 外框外 2 m 內的設備（送水口、壁掛）仍算這層；更遠的多半是圖例表
 
@@ -39,6 +42,7 @@ class FloorResult:
     findings: list[K.Finding]
     notes: list[K.Note]
     outside: int = 0
+    projected: list[E.Equipment] = field(default_factory=list)   # 上層挑空投影來的設備：只參與檢核，不計入設備數量
 
 
 @dataclass
@@ -118,6 +122,224 @@ def presence_findings(res: Result) -> None:
         sort_findings(fr.findings)
 
 
+def _name(fr: FloorResult) -> str:
+    return fr.number or fr.title
+
+
+def project_voids(res: Result, ctx: K.Context) -> None:
+    """上層挑空範圍內（屋頂板下）、屋突層房間外的探測器，投影到下層實際保護的房間（見 stack.py）。"""
+    projs, warns = ST.project_detectors([fr.floor for fr in res.floors], [_name(fr) for fr in res.floors],
+                                        [fr.equipment for fr in res.floors], ctx.stories)
+    res.warnings.extend(warns)
+    for p in projs:
+        fr, src = res.floors[p.target], res.floors[p.source]
+        fr.projected.extend(p.equipment)
+        kinds = Counter(next(E.KIND_LABEL[k] for k in e.kinds if k in ST.DETECT_KINDS) for e in p.equipment)
+        what = "、".join(f"{n} 個{k}" for k, n in kinds.items())
+        where = f"{src.floor.label} 屋頂層房間外" if p.roof else f"{src.floor.label} 挑空範圍內"
+        fr.notes.append(K.Note("DET-120", f"{_name(src)} 圖上 {where}的 {what}裝在本層大空間上方的樓板下，已併入本層探測器檢核；"
+                                          f"兩圖以共同的電梯、管道間、樓梯 {p.shift.anchors} 處對位（位移 dx {p.shift.dx:+.2f} m、"
+                                          f"dy {p.shift.dy:+.2f} m）。這些探測器畫在上層圖，不計入本圖設備數量"))
+
+
+SIGNS = {"EXIT-146-3": ("23-1", "出口標示燈"), "DIR-146-3": ("23-2", "避難方向指示燈")}
+
+
+def voluntary_signs(res: Result, ctx: K.Context) -> None:
+    """依第 23 條非應設的出口標示燈、避難方向指示燈（自主設置）：位置、涵蓋缺失改為建議（法規解讀設定 voluntary_signs_note）。
+    整棟未達門檻 → 各層都改；只有部分樓層應設（地下層、無開口樓層、十一層以上）→ 其他地上樓層改。"""
+    if not ctx.rule("voluntary_signs_note"):
+        return
+    req = {r.key: r for r in res.requirements}
+    for fr in res.floors:
+        kind, lv = RQ._level(fr.floor.label or "")
+        main = f"{lv}F" if kind == "mezz" else fr.floor.label
+        changed = False
+        for f in fr.findings:
+            if f.rule not in SIGNS or f.severity == K.BLUE or (r := req.get(SIGNS[f.rule][0])) is None:
+                continue
+            name = SIGNS[f.rule][1]
+            if r.status == RQ.NOT_REQUIRED:
+                scope = "本建物"
+            elif r.status == RQ.REQUIRED and r.floors is not None and kind in ("above", "mezz") and main not in r.floors:
+                scope = f"本層（應設樓層：{'、'.join(r.floors)}）"
+            else:
+                continue
+            f.severity, changed = K.BLUE, True
+            f.why += f"；依第 23 條{scope}非應設{name}（自主設置），檢討結果僅供參考"
+            f.law += [x for x in r.law[:1] if x not in f.law]
+        if changed:
+            sort_findings(fr.findings)
+
+
+STAIR_LETTER = re.compile(r"([A-Z])梯")
+STAIR_VERTICAL = 15.0        # 第 133 條第 2 款第 5 目：樓梯垂直每 15 m 至少一個 L 級揚聲器
+
+
+def _stair_name(room: F.Room) -> tuple[str, bool]:
+    """樓梯配對用名稱：有「A梯」「(C梯)」「D梯_安全梯」等字母的取字母，否則取完整名稱。回傳（名稱, 是否有字母）。"""
+    letters = sorted({m for s in room.labels for m in STAIR_LETTER.findall(s)})
+    if letters:
+        return "、".join(letters) + "梯", True
+    pat = dict(F.ROOM_KINDS)["stair"]
+    names = [re.sub(r"[\s()（）]", "", s) for s in room.labels if re.search(pat, s)]
+    return (names[0] if names else room.name), False
+
+
+def _elevation(label: str, stories: int) -> float:
+    """樓層代號 → 第幾層樓板（1F＝0；夾層＝半層；屋突 R1F（RF）＝地上層數）。"""
+    kind, lv = RQ._level(label)
+    if kind == "above":
+        return lv - 1
+    if kind == "mezz":
+        return lv - 0.5
+    if kind == "base":
+        return lv
+    m = re.fullmatch(r"R(\d+)F", label)
+    return stories + (int(m.group(1)) if m else 1) - 1
+
+
+def _stairs(res: Result, stories: int) -> list[dict]:
+    """各座樓梯（跨樓層配對）＋各層樓梯間內的揚聲器數。每個樓層代號取揚聲器最多的一張圖（同層各圖平面相同）。
+    配對：字母相同（「A梯」「(A梯)」）、或完整名稱相同（同層有兩座以上同名的不配，例：屋突層好幾座「梯間」）；
+    上下相鄰兩層對位得出時，位置重疊的樓梯間也算同一座（字母不同的不併）。配不起來的各自列出。"""
+    pick: dict[str, int] = {}
+    for i, fr in enumerate(res.floors):
+        n = sum("speaker" in e.kinds for e in fr.equipment)
+        lab = fr.floor.label or ""
+        if lab not in pick or n > sum("speaker" in e.kinds for e in res.floors[pick[lab]].equipment):
+            pick[lab] = i
+    nodes = []                                      # (樓層代號, 圖索引, 房間, 揚聲器數, 名稱, 有字母)
+    for lab, i in pick.items():
+        fl = res.floors[i].floor
+        cnt = Counter()
+        for e in res.floors[i].equipment:
+            if "speaker" in e.kinds and (r := fl.room_near(e.x, e.y)) is not None and r.kind == "stair":
+                cnt[r.id] += 1
+        nodes += [(lab, i, r, cnt[r.id], *_stair_name(r)) for r in fl.rooms if r.kind == "stair"]
+    parent = list(range(len(nodes)))
+
+    def find(a: int) -> int:
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    def union(a: int, b: int) -> None:
+        la = {nodes[k][4] for k in range(len(nodes)) if find(k) == find(a) and nodes[k][5]}
+        lb = {nodes[k][4] for k in range(len(nodes)) if find(k) == find(b) and nodes[k][5]}
+        if not (la and lb and la != lb):            # 兩邊都有字母且不同：不同座樓梯
+            parent[find(a)] = find(b)
+
+    same_floor = Counter((n[0], n[4]) for n in nodes)
+    first: dict[str, int] = {}
+    for k, n in enumerate(nodes):
+        if n[5] or same_floor[(n[0], n[4])] == 1:
+            if n[4] in first:
+                union(k, first[n[4]])
+            else:
+                first[n[4]] = k
+    order = sorted(pick, key=lambda lab: _elevation(lab, stories))
+    for lo, hi in zip(order, order[1:]):
+        if _elevation(hi, stories) - _elevation(lo, stories) > 1:
+            continue                                # 中間樓層沒有圖：不憑位置配對
+        sh = ST.align(res.floors[pick[hi]].floor, res.floors[pick[lo]].floor)
+        if sh is None:
+            continue
+        for a, na in enumerate(nodes):
+            if na[0] != hi:
+                continue
+            ca = na[2].polygon.centroid
+            for b, nb in enumerate(nodes):
+                if nb[0] != lo:
+                    continue
+                cb = nb[2].polygon.centroid
+                if (nb[2].polygon.buffer(0.5).covers(Point(ca.x + sh.dx, ca.y + sh.dy))
+                        or na[2].polygon.buffer(0.5).covers(Point(cb.x - sh.dx, cb.y - sh.dy))):
+                    union(a, b)
+    groups: dict[int, list] = {}
+    for k, n in enumerate(nodes):
+        groups.setdefault(find(k), []).append(n)
+    out = []
+    for members in groups.values():
+        letters = sorted({n[4] for n in members if n[5]})
+        name = "／".join(letters) if letters else Counter(n[4] for n in members).most_common(1)[0][0]
+        members.sort(key=lambda n: _elevation(n[0], stories))
+        floors: dict[str, int] = {}
+        for n in members:
+            floors[n[0]] = floors.get(n[0], 0) + n[3]
+        out.append({"name": name, "floors": floors, "rooms": [f"{n[0]} {n[2].name}" for n in members],
+                    "ids": "、".join(f"{n[0]} #{n[2].id}" for n in members),
+                    "letters": {m for n in members for s in n[2].labels for m in STAIR_LETTER.findall(s)}})
+    dup = Counter(g["name"] for g in out)
+    for g in out:
+        if dup[g["name"]] > 1:
+            g["name"] += f"（{g['ids']}）"          # 同名配不起來的（例：屋突層幾座「梯間」）以樓層＋房間編號區分
+    out.sort(key=lambda g: g["name"])
+    return out
+
+
+def stair_speakers(res: Result, ctx: K.Context) -> None:
+    """SPKR-133-5：樓梯間的揚聲器依垂直距離每 15 m 至少一個 L 級（第 133 條第 2 款第 5 目），不套水平 10 m。
+    樓高未知時只列各座樓梯各層有無揚聲器（資料不足）。法規解讀設定 stair_speaker_vertical。"""
+    if not ctx.rule("stair_speaker_vertical") or not any("speaker" in e.kinds for fr in res.floors for e in fr.equipment):
+        return
+    stories = ctx.stories or (res.profile.stories if res.profile else None)
+    stairs = _stairs(res, stories or 1)
+    if not stairs:
+        return
+    law = ["D0120029/133/1/2/5"]
+    # 樓梯名稱只出現在大空間裡（樓梯沒有圍成獨立房間）：無法檢討，明白列出請人工確認
+    named = {m for g in stairs for m in g["letters"]}
+    loose = sorted({m for fr in res.floors for r in fr.floor.rooms if r.kind != "stair"
+                    for m in STAIR_LETTER.findall(" ".join(r.labels))} - named)
+    if loose:
+        res.building_notes.append(K.Note("SPKR-133-5", "、".join(f"{m}梯" for m in loose) + " 只標示在其他房間內（樓梯沒有圍成獨立房間），"
+                                         "未檢討其樓梯間揚聲器（垂直每 15 m 一個），請人工確認", law))
+    listing = "；".join(f"{g['name']}：" + "、".join(f"{lab} {n} 個" if n else f"{lab} 無" for lab, n in g["floors"].items())
+                       for g in stairs)
+    metrics = {"stairs": {g["name"]: g["floors"] for g in stairs}}
+    if ctx.height is None or not stories:
+        res.building_findings.append(K.Finding(
+            "SPKR-133-5", K.YELLOW, "資料不足", "全棟", "樓梯間揚聲器（垂直每 15 m 一個）需樓高資料才能判定",
+            "揚聲器設於樓梯時，至少垂直距離每 15 m 設一個 L 級揚聲器（樓梯間不套各層水平 10 m）；"
+            f"各座樓梯各層樓梯間內的揚聲器：{listing}。樓高未知，無法換算各座樓梯的垂直距離"
+            + (f"；另 {'、'.join(f'{m}梯' for m in loose)} 沒有圍成樓梯間，未列入" if loose else ""),
+            "補填建築物高度（或各層樓高）後重新檢核；樓梯間依垂直每 15 m 至少一個 L 級揚聲器配置",
+            law, missing=["各層樓高（或建築物高度）"], metrics=metrics))
+        return
+    h = ctx.height / stories
+    drawn = sorted({fr.floor.label or "" for fr in res.floors}, key=lambda lab: _elevation(lab, stories))
+    for g in stairs:
+        zs = {lab: _elevation(lab, stories) * h for lab in g["floors"]}
+        span = max(zs.values()) - min(zs.values())
+        need = max(1, math.ceil(span / STAIR_VERTICAL - 1e-9))
+        have = sum(g["floors"].values())
+        lit = sorted(zs[lab] for lab, n in g["floors"].items() if n)
+        gaps = [b - a for a, b in zip([min(zs.values())] + lit, lit + [max(zs.values())])] if lit else []
+        base = (f"{g['name']}（{'、'.join(g['floors'])}）垂直範圍約 {K._fmt(span)} m"
+                f"（以建築物高度 {K._fmt(ctx.height)} m ÷ {stories} 層估算每層約 {K._fmt(h)} m），"
+                f"每 15 m 至少一個需 {need} 個；各層樓梯間內：" + "、".join(
+                    f"{lab} {n} 個" if n else f"{lab} 無" for lab, n in g["floors"].items()))
+        # 整座樓梯在圖上連續兩層以上都認得出樓梯間才判不符；只認得部分樓層（其他層沒圍成樓梯間或名稱、位置對不上）→ 需確認
+        idx = sorted(drawn.index(lab) for lab in g["floors"])
+        whole = len(idx) >= 2 and idx[-1] - idx[0] + 1 == len(idx)
+        if have < need:
+            res.building_findings.append(K.Finding(
+                "SPKR-133-5", K.RED if whole else K.ORANGE, "數量不足" if whole else "需確認", "全棟",
+                f"{g['name']} 樓梯間揚聲器不足（需 {need} 個，現有 {have} 個）",
+                base + ("" if whole else f"；這座樓梯只在 {'、'.join(g['floors'])} 認得出樓梯間（其他樓層沒有圍成獨立的樓梯間，"
+                                         "或名稱、位置對不上），可能有樓層的揚聲器沒算到，請人工確認"),
+                f"於 {g['name']} 樓梯間增設 L 級揚聲器，使垂直距離每 15 m 至少一個", law,
+                rooms=g["rooms"], metrics={"need": need, "have": have, "span": round(span, 2)}))
+        elif max(gaps) > STAIR_VERTICAL:
+            res.building_findings.append(K.Finding(
+                "SPKR-133-5", K.ORANGE, "需確認", "全棟", f"{g['name']} 樓梯間揚聲器垂直間距可能超過 15 m",
+                base + f"；數量足夠，但有一段約 {K._fmt(max(gaps))} m 沒有揚聲器（樓高為平均估算，請以剖面圖確認）",
+                f"調整 {g['name']} 樓梯間揚聲器位置，使垂直每 15 m 範圍內都有一個", law,
+                rooms=g["rooms"], metrics={"need": need, "have": have, "span": round(span, 2)}))
+
+
 def review_dxf(path: str | Path, *, ctx: K.Context | None = None, dictionary: E.Dictionary | None = None,
                profile: F.LayerProfile | None = None, ir: dict | None = None) -> Result:
     from ezdxf import recover
@@ -163,12 +385,20 @@ def review_dxf(path: str | Path, *, ctx: K.Context | None = None, dictionary: E.
         res.unknown_blocks.update(unknown)
         zone = fl.outline.buffer(EQUIP_MARGIN)
         inside = [e for e in eq if zone.covers(Point(e.x, e.y))]
-        findings, notes = review_floor(fl, inside, ctx)
-        res.floors.append(FloorResult(s["idx"], number, title, fl, inside, findings, notes, len(eq) - len(inside)))
+        res.floors.append(FloorResult(s["idx"], number, title, fl, inside, [], [], len(eq) - len(inside)))
+    del prims
+    # 各層都理解完才投影（上層挑空內的探測器要併到下層），再逐層跑規則
+    project_voids(res, ctx)
+    for fr in res.floors:
+        findings, notes = review_floor(fr.floor, fr.equipment + fr.projected, ctx)
+        fr.findings = findings
+        fr.notes.extend(notes)
     if res.floors:
         res.profile = RQ.build_profile(res.floors, ctx)
         res.requirements = RQ.evaluate(res.profile)
         presence_findings(res)
+        voluntary_signs(res, ctx)
+        stair_speakers(res, ctx)
     pf, pn = PIPE.check_texts(ir, [e for fr in res.floors for e in fr.equipment], ctx)
     res.building_findings.extend(pf)
     res.building_notes.extend(pn)
