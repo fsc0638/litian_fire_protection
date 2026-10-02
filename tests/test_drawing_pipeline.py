@@ -141,3 +141,24 @@ def test_safe_name():
     assert CLI.safe_name("../../etc/passwd") == "passwd"
     assert CLI.safe_name("C:\\圖\\A1-05_面積計算表.dwg") == "A1-05_面積計算表.dwg"
     assert CLI.safe_name("a b|c.dwg") == "a_b_c.dwg"
+
+
+def test_repair_streams_and_rejoins_split_unicode_escapes(tmp_path):
+    """長文字每 250 字切段時切在 Unicode 跳脫碼（反斜線 U+XXXX）中間 → 殘段移到下一段；APPID 壞名稱照舊修補。"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("repair_dxf", "tools/dwg2dxf/repair_dxf.py")
+    R = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(R)
+    bs = "\\"
+    src = tmp_path / "in.dxf"
+    lines = ["0", "SECTION", "5", "1A", "100", "AcDbRegAppTableRecord", "2", "BAD\x01NAME",
+             "0", "MTEXT", "3", f"{bs}U+5357{bs}U+57", "3", f"12{bs}U+5340", "1", f"{bs}U+64F4{bs}U+",
+             "0", "EOF", "", ""]
+    src.write_bytes("\r\n".join(lines).encode("utf-8"))
+    stats = R.repair(str(src), str(tmp_path / "out.dxf"))
+    out = (tmp_path / "out.dxf").read_bytes().decode("utf-8").split("\r\n")
+    assert stats == {"merged": 0, "fixed": 1, "escapes": 2}
+    assert out[out.index("AcDbRegAppTableRecord") + 2] == "APP_1A"
+    assert out[out.index("MTEXT") + 2] == f"{bs}U+5357" and out[out.index("MTEXT") + 4] == f"{bs}U+5712{bs}U+5340"
+    assert out[out.index("MTEXT") + 6] == f"{bs}U+64F4"            # 最後一段殘缺的 \U+ 丟掉
+    assert out[-3:] == ["0", "EOF", ""]

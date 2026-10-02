@@ -48,13 +48,27 @@ def bad_name(name: bytes) -> bool:
     return False
 
 
+# 3) 長文字（MTEXT 等）每 250 字切一段（群組碼 3…3、最後 1）；切點落在 \U+XXXX 中間時，
+#    殘缺的跳脫碼會讓 ezdxf 讀檔中斷 → 把殘段移到下一段開頭；後面沒有接續段就丟掉殘段。
+PARTIAL_ESC = re.compile(rb"\\[Uu](?:\+[0-9A-Fa-f]{0,3})?$|\\$")
+
+
 def repair(src: str, dst: str) -> dict:
-    stats = {"merged": 0, "fixed": 0}
+    stats = {"merged": 0, "fixed": 0, "escapes": 0}
     recent = deque(maxlen=6)          # 往前找 handle（群組碼 5）用
     want, handle = 0, b"X"            # 剛看到 AcDbRegAppTableRecord：接下來 5 組內的群組碼 2 是名稱
+    carry = b""                       # 上一段被切斷的跳脫碼殘段
     with open(src, "rb") as f, open(dst, "wb", buffering=1 << 20) as out:
         for code, val in pairs(f, stats):
             c = code.strip()
+            if carry:
+                if c in (b"1", b"3"):
+                    val = carry + val
+                carry = b""
+            m = PARTIAL_ESC.search(val)
+            if m and c in (b"1", b"3"):
+                carry, val = (val[m.start():], val[:m.start()]) if c == b"3" else (b"", val[:m.start()])
+                stats["escapes"] += 1
             if want:
                 if c == b"2":
                     if bad_name(val):
@@ -73,4 +87,4 @@ def repair(src: str, dst: str) -> dict:
 
 if __name__ == "__main__":
     s = repair(sys.argv[1], sys.argv[2])
-    print(f"{sys.argv[1].split('/')[-1]}: merged_lines={s['merged']} appid_fixed={s['fixed']}")
+    print(f"{sys.argv[1].split('/')[-1]}: merged_lines={s['merged']} appid_fixed={s['fixed']} split_escapes={s['escapes']}")
