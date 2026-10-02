@@ -28,7 +28,9 @@ KIND_RULES = [
     ("sprinkler", r"^密閉式撒水頭|^撒水頭（附防護板）$"),
     ("sprinkler_sidewall", r"^撒水頭（側壁式）$"),
     ("detector", r"[局侷]限型探測器"),
-    ("manual_alarm", r"^手動警報機$"),
+    ("flame_detector", r"^火焰式探測器$"),
+    # 綜合消防栓箱的圖例本身含 P（火警發信機）、B（警鈴）、L（標示燈），即手動報警設備（第 132 條第 1 項第 4 款）
+    ("manual_alarm", r"^手動警報機$|^綜合消防栓箱"),
     ("end_test_valve", r"^末端查驗閥$"),
     ("alarm_valve", r"^自動警報逆止閥"),
     ("emergency_outlet", r"緊急電源插座"),
@@ -37,14 +39,15 @@ KIND_RULES = [
     ("direction_light", r"^避難方向指示燈|兼樓梯避難方向指示燈"),
     ("emergency_light", r"^緊急照明燈"),
     ("smoke_vent", r"^排煙口"),
-    ("smoke_fan", r"^排煙機"),
+    ("smoke_fan", r"^排煙機(?!控制盤)"),
     ("gas_detector", r"^瓦斯漏氣檢知器"),
     ("simple_suppression", r"^簡易自動滅火設備$"),
     ("special_suppression", r"^水霧噴頭$|^泡沫噴頭$|^泡沫頭|^CO2噴頭|^乾粉（海龍替代品）噴頭|^乾粉（海龍替代品）套裝型"),
 ]
 KIND_LABEL = {
     "extinguisher": "滅火器", "hydrant": "室內消防栓", "standpipe_outlet": "連結送水管出水口",
-    "sprinkler": "撒水頭", "sprinkler_sidewall": "側壁型撒水頭", "detector": "探測器", "speaker": "揚聲器",
+    "sprinkler": "撒水頭", "sprinkler_sidewall": "側壁型撒水頭", "detector": "探測器", "flame_detector": "火焰式探測器",
+    "speaker": "揚聲器",
     "exit_sign": "出口標示燈", "direction_light": "避難方向指示燈", "emergency_light": "緊急照明燈",
     "smoke_vent": "排煙口", "outdoor_hydrant": "室外消防栓", "manual_alarm": "手動警報機",
     "end_test_valve": "末端查驗閥", "alarm_valve": "自動警報逆止閥", "emergency_outlet": "緊急電源插座",
@@ -175,11 +178,26 @@ class Equipment:
         return self.legend
 
 
+LEGEND_LAYER = re.compile(r"(^|[-_ $])TAB($|[-_ ])|圖例|LEGEND", re.I)    # 圖例表裡的符號不是設備
+DUP_TOL = 0.05                                                              # 同名圖塊 5 cm 內重疊插入只算一個
+
+
 def recognize(inserts: list[dict], scale: float, dictionary: Dictionary) -> tuple[list[Equipment], Counter]:
     """inserts：IR 的圖塊清單（圖面單位）。回傳（認得的消防設備, 認不出名稱的圖塊計數）。
-    認得但不屬於檢核種類的圖例（閥、幫浦等）不列入設備，也不算認不出。"""
+    認得但不屬於檢核種類的圖例（閥、幫浦等）不列入設備，也不算認不出。
+    設備位置用圖塊的圖形中心（cx, cy；有些圖塊的圖形離基準點很遠），沒有時用插入點。
+    圖例表圖層上的符號不算；同名圖塊重疊插入（同一點畫兩次）只算一個。"""
     found, unknown = [], Counter()
+    seen: dict[tuple, list[tuple[float, float]]] = {}
     for ins in inserts:
+        if LEGEND_LAYER.search(ins.get("layer", "")):
+            continue
+        x, y = ins.get("cx", ins["x"]) * scale, ins.get("cy", ins["y"]) * scale
+        key = (ins["name"], round(x), round(y))
+        near = [p for dx in (-1, 0, 1) for dy in (-1, 0, 1) for p in seen.get((ins["name"], key[1] + dx, key[2] + dy), [])]
+        if any(abs(px - x) <= DUP_TOL and abs(py - y) <= DUP_TOL for px, py in near):
+            continue
+        seen.setdefault(key, []).append((x, y))
         hit = dictionary.match(ins["name"], ins.get("layer", ""))
         if hit is None:
             unknown[ins["name"]] += 1
@@ -189,6 +207,5 @@ def recognize(inserts: list[dict], scale: float, dictionary: Dictionary) -> tupl
         if not kinds:
             continue
         spec = {**defaults, **specs(legend, ins.get("attribs") or {})}     # 圖塊屬性優先於字典預設
-        found.append(Equipment(ins.get("h", ""), ins["name"], legend, kinds, ins["x"] * scale, ins["y"] * scale,
-                               ins.get("layer", ""), spec))
+        found.append(Equipment(ins.get("h", ""), ins["name"], legend, kinds, x, y, ins.get("layer", ""), spec))
     return found, unknown

@@ -164,7 +164,7 @@ def test_dictionary_norm_layer_fallback_and_defaults():
     assert d.match("A$C2D2A4668", "揚聲器(吸頂式)")[0] == "揚聲器（吸頂式）"
     assert d.match("A$Cxxxx", "ARCH") is None
     found, unknown = E.recognize([{"name": "Dlight3", "x": 0, "y": 0, "layer": "方向指示燈", "attribs": {}},
-                                  {"name": "Dlight3", "x": 0, "y": 0, "layer": "x", "attribs": {"等級": "A"}}], 1.0, d)
+                                  {"name": "Dlight3", "x": 500, "y": 0, "layer": "x", "attribs": {"等級": "A"}}], 1.0, d)
     assert [e.spec["grade"] for e in found] == ["B", "A"] and not unknown         # 圖塊屬性優先於字典預設
     with pytest.raises(ValueError, match="不在附件三"):
         E.Dictionary(legend, blocks=[("^X$", "不存在的設備")])

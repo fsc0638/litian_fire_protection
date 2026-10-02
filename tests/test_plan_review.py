@@ -155,7 +155,8 @@ def test_dictionary_lookup_and_kinds():
     assert DICT.lookup(" 乾粉滅火器 ") == "乾粉滅火器"
     firm = E.Dictionary(LEGEND, blocks=[(r"^SPK-PEND", "密閉式撒水頭（向下型）")])
     assert firm.lookup("SPK-PEND-15") == "密閉式撒水頭（向下型）" and DICT.lookup("SPK-PEND-15") is None
-    assert E.kinds_of("綜合消防栓箱（含連結送水管出水口）") == ("hydrant", "standpipe_outlet")
+    # 綜合消防栓箱的圖例含 P（發信機）、B（警鈴）、L（標示燈）：同時是手動報警設備
+    assert E.kinds_of("綜合消防栓箱（含連結送水管出水口）") == ("hydrant", "standpipe_outlet", "manual_alarm")
     assert E.kinds_of("逆止閥") == ()
 
 
@@ -168,10 +169,20 @@ def test_specs_from_name_and_attributes():
 
 def test_recognize_counts_unknown_and_ignores_non_check_legend():
     ins = [{"name": "乾粉滅火器", "x": 100, "y": 200, "attribs": {}}, {"name": "逆止閥", "x": 0, "y": 0},
-           {"name": "XYZ", "x": 0, "y": 0}, {"name": "XYZ", "x": 1, "y": 0}]
+           {"name": "XYZ", "x": 0, "y": 0}, {"name": "XYZ", "x": 1000, "y": 0}]
     found, unknown = E.recognize(ins, 0.01, DICT)
     assert [(e.legend, e.x, e.y) for e in found] == [("乾粉滅火器", 1.0, 2.0)]
     assert unknown == {"XYZ": 2}
+
+
+def test_recognize_uses_graphic_centre_skips_legend_table_and_duplicates():
+    """圖形畫在離基準點很遠的圖塊用圖形中心；圖例表圖層上的符號、同一點重疊插入的不算。"""
+    ins = [{"name": "乾粉滅火器", "x": -44079, "y": 74771, "cx": 1000, "cy": 2000, "layer": "FP"},
+           {"name": "乾粉滅火器", "x": 1000.5, "y": 2000, "layer": "FP"},             # 同一具畫兩次（相距 5 mm）
+           {"name": "乾粉滅火器", "x": 1300, "y": 2000, "layer": "FP"},
+           {"name": "乾粉滅火器", "x": 9000, "y": 9000, "layer": "FP-TAB"}]           # 圖例表
+    found, _ = E.recognize(ins, 0.01, DICT)
+    assert [(e.x, e.y) for e in found] == [(10.0, 20.0), (13.0, 20.0)]
 
 
 # ── 檢核規則 ─────────────────────────────────────────────────────────────

@@ -14,12 +14,12 @@ from litian.review import checks as K
 SEV_COLOR = {K.RED: "#d93025", K.ORANGE: "#e8710a", K.YELLOW: "#c9a100", K.BLUE: "#1a73e8"}
 KIND_STYLE = {   # 種類 → (顏色, 形狀)
     "sprinkler": ("#1a73e8", "dot"), "sprinkler_sidewall": ("#1a73e8", "dot"),
-    "detector": ("#9334e6", "square"), "extinguisher": ("#d93025", "tri"),
+    "detector": ("#9334e6", "square"), "flame_detector": ("#9334e6", "tri"), "extinguisher": ("#d93025", "tri"),
     "hydrant": ("#b31412", "box"), "standpipe_outlet": ("#b31412", "box"),
     "speaker": ("#0b8043", "dot"), "exit_sign": ("#188038", "box"), "direction_light": ("#188038", "tri"),
     "emergency_light": ("#f29900", "dot"), "smoke_vent": ("#5f6368", "square"),
 }
-KIND_NAME = {"sprinkler": "撒水頭", "detector": "探測器", "extinguisher": "滅火器", "hydrant": "消防栓",
+KIND_NAME = {"sprinkler": "撒水頭", "detector": "探測器", "flame_detector": "火焰式探測器", "extinguisher": "滅火器", "hydrant": "消防栓",
              "speaker": "揚聲器", "exit_sign": "出口標示燈", "direction_light": "避難方向指示燈",
              "emergency_light": "緊急照明", "smoke_vent": "排煙口", "standpipe_outlet": "送水口"}
 ROOM_FILL = {"void": "#eceff1", "outdoor": "#eceff1", "toilet": "#e6f4ea", "stair": "#fce8e6", "elevator": "#f3e8fd",

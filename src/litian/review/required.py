@@ -243,7 +243,7 @@ def sprinkler(p: Profile) -> Requirement:
 
 
 def fire_alarm(p: Profile) -> Requirement:
-    name, kinds = "火警自動警報設備", ("detector",)
+    name, kinds = "火警自動警報設備", ("detector", "flame_detector")
     if not p.occupancy:
         return _unknown_occ("19", name, kinds, [L + "19/1"])
     st = p.stories or 0

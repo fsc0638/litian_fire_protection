@@ -149,14 +149,17 @@ def review_dxf(path: str | Path, *, ctx: K.Context | None = None, dictionary: E.
             res.warnings.append(f"{number or title}：無法判斷圖面單位（圖框沒有「單位」欄、DXF 也沒設），未檢核")
             continue
         prof = profile or F.LayerProfile()
-        doors = [(i["x"], i["y"]) for i in ir["inserts"] if i["f"] == s["idx"] and prof.role(i.get("layer", "")) == "door"]
+        sheet_ins = [i for i in ir["inserts"] if i["f"] == s["idx"]]
+        at = lambda i: (i.get("cx", i["x"]), i.get("cy", i["y"]))  # noqa: E731   圖形中心（沒有時用插入點）
+        doors = [at(i) for i in sheet_ins if prof.role(i.get("layer", "")) == "door"]
+        fixtures = [at(i) for i in sheet_ins if F.is_fixture(i["name"], i.get("layer", ""))]
         try:
             fl = F.analyze(G.by_bbox(prims, s["bbox"]), [t for t in ir["texts"] if t["f"] == s["idx"]],
-                           scale=scale, title=title, profile=profile, doors=doors)
+                           scale=scale, title=title, profile=profile, doors=doors, fixtures=fixtures)
         except ValueError as e:
             res.warnings.append(f"{number or title}：{e}")
             continue
-        eq, unknown = E.recognize([i for i in ir["inserts"] if i["f"] == s["idx"]], scale, dictionary)
+        eq, unknown = E.recognize(sheet_ins, scale, dictionary)
         res.unknown_blocks.update(unknown)
         zone = fl.outline.buffer(EQUIP_MARGIN)
         inside = [e for e in eq if zone.covers(Point(e.x, e.y))]

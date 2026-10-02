@@ -87,6 +87,18 @@ def _place(b, insert):
     return [_r(min(p.x for p in pts)), _r(min(p.y for p in pts)), _r(max(p.x for p in pts)), _r(max(p.y for p in pts))]
 
 
+def _pos(e):
+    """實體插入點的世界座標。TEXT、INSERT 的插入點在物件座標系：鏡射插入（法向量朝 -Z）時要換算，否則 X 會變號；
+    MTEXT 本來就是世界座標。"""
+    p = e.dxf.insert
+    if e.dxftype() == "MTEXT":
+        return p
+    try:
+        return e.ocs().to_wcs(p)
+    except Exception:
+        return p
+
+
 DRAWING_NO = re.compile(r"[A-Z]{1,4}-?[0-9A-Z]{1,5}(?:-\d{1,2})?")
 DETAIL_NAME = re.compile(r"\(\s*\d+\s*\)\s*$")
 NOTE_PREFIX = re.compile(r"^(變更設計|本次|註|說明|備註|NOTE|\d+\s*[.、．])", re.I)     # 變更說明、編號條列不是圖名
@@ -209,7 +221,7 @@ def sheet_title(meta: dict) -> str:
     return meta_field(meta, "圖名") or ""
 
 
-def _expand_block(e, frame_of, texts: list, inserts: list, depth: int = 0) -> None:
+def _expand_block(e, frame_of, texts: list, inserts: list, depth: int = 0, center_of=None) -> None:
     """綁定進來的外部參考（建築底圖）：展開裡面的文字（不設上限，房名都在這裡）與巢狀圖塊（門、設備）。"""
     name = _clean(e.dxf.name)
     try:
@@ -221,19 +233,30 @@ def _expand_block(e, frame_of, texts: list, inserts: list, depth: int = 0) -> No
         if t in ("TEXT", "MTEXT"):
             s = _text_of(v).strip()
             if s:
-                q = v.dxf.insert
+                q = _pos(v)
                 texts.append({"h": e.dxf.handle, "t": s, "x": _r(q.x), "y": _r(q.y),
                               "ht": _r(v.dxf.char_height if t == "MTEXT" else v.dxf.height),
                               "rot": _r(v.dxf.get("rotation", 0)), "layer": _clean(v.dxf.layer),
                               "f": frame_of(q.x, q.y), "src": f"xref:{name}"})
         elif t == "INSERT" and depth < 3:
-            q = v.dxf.insert
-            inserts.append({"h": e.dxf.handle, "name": _clean(v.dxf.name), "x": _r(q.x), "y": _r(q.y),
-                            "rot": _r(v.dxf.get("rotation", 0)), "sx": _r(v.dxf.get("xscale", 1)),
-                            "sy": _r(v.dxf.get("yscale", 1)), "layer": _clean(v.dxf.layer),
-                            "f": frame_of(q.x, q.y), "attribs": {}, "src": f"xref:{name}"})
+            q = _pos(v)
+            item = {"h": e.dxf.handle, "name": _clean(v.dxf.name), "x": _r(q.x), "y": _r(q.y),
+                    "rot": _r(v.dxf.get("rotation", 0)), "sx": _r(v.dxf.get("xscale", 1)),
+                    "sy": _r(v.dxf.get("yscale", 1)), "layer": _clean(v.dxf.layer),
+                    "attribs": {}, "src": f"xref:{name}"}
+            _locate(item, v, frame_of, center_of)
+            inserts.append(item)
             if "$0$" in v.dxf.name:                                     # 綁定時參考檔的圖塊名稱加上「參考名$0$」前綴
-                _expand_block(v, frame_of, texts, inserts, depth + 1)     # 參考檔內的巢狀圖塊（房名標籤等）
+                _expand_block(v, frame_of, texts, inserts, depth + 1, center_of)   # 參考檔內的巢狀圖塊（房名標籤等）
+
+
+def _locate(item: dict, e, frame_of, center_of) -> None:
+    """圖塊的圖形中心（cx, cy）與所屬圖紙。有些圖塊的圖形畫在離基準點很遠的地方（實測有偏 571 m 的），
+    設備位置與所屬圖紙一律看圖形中心；圖塊沒有線條（只有文字）時用插入點。"""
+    c = center_of(e) if center_of else None
+    if c is not None:
+        item["cx"], item["cy"] = _r(c[0]), _r(c[1])
+    item["f"] = frame_of(item.get("cx", item["x"]), item.get("cy", item["y"]))
 
 
 def extract(path: str | Path, expand: tuple[str, ...] | list[str] = ()) -> dict:
@@ -294,27 +317,41 @@ def extract(path: str | Path, expand: tuple[str, ...] | list[str] = ()) -> dict:
         hits = [(area(b), i) for i, b in assignable if _contains(b, x, y)]
         return min(hits)[1] if hits else None
 
+    def center_of(e):
+        name = e.dxf.name
+        if name in frame_names or name in expand or name.startswith("*D"):
+            return None
+        try:
+            if name not in local:
+                blk = doc.blocks.get(name)
+                local[name] = _bbox(blk) if blk is not None else None
+            b = _place(local[name], e)
+        except Exception:
+            return None
+        return None if b is None else ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2)
+
     texts, inserts, segments, polygons = [], [], [], []
     for e in msp:
         t = e.dxftype()
         if t in ("TEXT", "MTEXT"):
             s = _text_of(e).strip()
             if s:
-                p = e.dxf.insert
+                p = _pos(e)
                 texts.append({"h": e.dxf.handle, "t": s, "x": _r(p.x), "y": _r(p.y),
                               "ht": _r(e.dxf.char_height if t == "MTEXT" else e.dxf.height),
                               "rot": _r(e.dxf.get("rotation", 0)), "layer": _clean(e.dxf.layer),
                               "f": frame_of(p.x, p.y), "src": t})
         elif t == "INSERT":
-            p = e.dxf.insert
+            p = _pos(e)
             name = _clean(e.dxf.name)
-            inserts.append({"h": e.dxf.handle, "name": name, "x": _r(p.x), "y": _r(p.y),
-                            "rot": _r(e.dxf.get("rotation", 0)), "sx": _r(e.dxf.get("xscale", 1)),
-                            "sy": _r(e.dxf.get("yscale", 1)), "layer": _clean(e.dxf.layer),
-                            "f": frame_of(p.x, p.y),
-                            "attribs": {_clean(a.dxf.tag): _clean(a.dxf.text) for a in e.attribs}})
+            item = {"h": e.dxf.handle, "name": name, "x": _r(p.x), "y": _r(p.y),
+                    "rot": _r(e.dxf.get("rotation", 0)), "sx": _r(e.dxf.get("xscale", 1)),
+                    "sy": _r(e.dxf.get("yscale", 1)), "layer": _clean(e.dxf.layer),
+                    "attribs": {_clean(a.dxf.tag): _clean(a.dxf.text) for a in e.attribs}}
+            _locate(item, e, frame_of, center_of)
+            inserts.append(item)
             if e.dxf.name in expand:
-                _expand_block(e, frame_of, texts, inserts)
+                _expand_block(e, frame_of, texts, inserts, center_of=center_of)
             elif e.dxf.name not in frame_names and not e.dxf.name.startswith("*D"):   # 圖框與標註圖塊不展開
                 k = 0
                 for v in e.virtual_entities():
@@ -323,7 +360,7 @@ def extract(path: str | Path, expand: tuple[str, ...] | list[str] = ()) -> dict:
                     if v.dxftype() in ("TEXT", "MTEXT"):
                         s = _text_of(v).strip()
                         if s:
-                            q = v.dxf.insert
+                            q = _pos(v)
                             texts.append({"h": e.dxf.handle, "t": s, "x": _r(q.x), "y": _r(q.y),
                                           "ht": _r(v.dxf.char_height if v.dxftype() == "MTEXT" else v.dxf.height),
                                           "rot": _r(v.dxf.get("rotation", 0)), "layer": _clean(v.dxf.layer),
