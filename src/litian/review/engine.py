@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import time
@@ -170,6 +171,25 @@ def _geo(g, nd: int = 2):
     return {"type": m["type"], "coordinates": _round(m["coordinates"], nd)}
 
 
+def finding_key(f: K.Finding) -> str:
+    """同一條缺失在重跑檢核後的識別碼：規則＋樓層＋房間＋範圍外框（取整到公尺）；沒有範圍的用設備名或標註文字。
+    缺失內的數字（需幾個、多少 ㎡）會隨檢核條件變，不放進識別碼。"""
+    parts = [f.rule, f.floor or "", ",".join(sorted(f.rooms))]
+    if f.geom is not None and not f.geom.is_empty:
+        parts.append(",".join(str(round(v)) for v in f.geom.bounds))
+    else:
+        parts.append(str(f.metrics.get("equipment") or f.metrics.get("text") or f.category))
+    return hashlib.sha1("|".join(parts).encode("utf-8")).hexdigest()[:12]
+
+
+def _finding(i: int, f: K.Finding, geom: bool) -> dict:
+    return {"no": i, "key": finding_key(f), "rule": f.rule, "severity": f.severity, "category": f.category, "floor": f.floor,
+            "title": f.title, "why": f.why, "fix": f.fix, "law": f.law, "missing": f.missing,
+            "rooms": f.rooms, "area": round(f.area, 2) if f.area else None, "metrics": f.metrics,
+            "bbox": [round(v, 2) for v in f.geom.bounds] if f.geom is not None and not f.geom.is_empty else None,
+            **({"geom": _geo(f.geom)} if geom else {})}
+
+
 def to_dict(res: Result, geom: bool = True) -> dict:
     """geom=False：缺失只留外框（bbox），存資料庫用；範圍圖形已畫在標示圖上。"""
     floors = []
@@ -184,12 +204,7 @@ def to_dict(res: Result, geom: bool = True) -> dict:
             "equipment": dict(kinds), "equipment_outside": fr.outside,
             "warnings": fl.warnings,
             "notes": [{"rule": n.rule, "text": n.text, "law": n.law} for n in fr.notes],
-            "findings": [{"no": i, "rule": f.rule, "severity": f.severity, "category": f.category, "floor": f.floor,
-                          "title": f.title, "why": f.why, "fix": f.fix, "law": f.law, "missing": f.missing,
-                          "rooms": f.rooms, "area": round(f.area, 2) if f.area else None, "metrics": f.metrics,
-                          "bbox": [round(v, 2) for v in f.geom.bounds] if f.geom is not None and not f.geom.is_empty else None,
-                          **({"geom": _geo(f.geom)} if geom else {})}
-                         for i, f in enumerate(fr.findings, 1)],
+            "findings": [_finding(i, f, geom) for i, f in enumerate(fr.findings, 1)],
         })
     building = None
     if res.profile is not None or res.building_findings:
@@ -205,10 +220,7 @@ def to_dict(res: Result, geom: bool = True) -> dict:
             "requirements": [{"key": r.key, "equipment": r.equipment, "kinds": list(r.kinds), "status": r.status,
                               "why": r.why, "law": r.law, "floors": r.floors, "missing": r.missing, "notes": r.notes}
                              for r in res.requirements],
-            "findings": [{"no": i, "rule": f.rule, "severity": f.severity, "category": f.category, "floor": f.floor,
-                          "title": f.title, "why": f.why, "fix": f.fix, "law": f.law, "missing": f.missing,
-                          "rooms": f.rooms, "area": None, "metrics": f.metrics, "bbox": None}
-                         for i, f in enumerate(res.building_findings, 1)],
+            "findings": [_finding(i, f, False) for i, f in enumerate(res.building_findings, 1)],
         }
     return {"floors": floors, "building": building, "unknown_blocks": dict(res.unknown_blocks.most_common(50)),
             "warnings": res.warnings, "seconds": res.seconds}

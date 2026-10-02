@@ -154,7 +154,7 @@ def indoor_hydrant(p: Profile) -> Requirement:
 
 
 def outdoor_hydrant(p: Profile) -> Requirement:
-    name, kinds = "室外消防栓設備", ("outdoor_hydrant",)
+    name, kinds = "室外消防栓設備", ()          # 設於建築物外（配置圖），不在各層平面圖逐層比對
     if not p.occupancy:
         return _unknown_occ("16", name, kinds, [L + "16/1"])
     a12 = sum(f.area for f in p.floors if f.level in (1, 2))

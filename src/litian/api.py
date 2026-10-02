@@ -690,14 +690,17 @@ def cases_sheet_texts(case_id: int, sheet_id: int, user: dict = Depends(current_
 REVIEW_LABEL = re.compile(r"^[0-9A-Z]{1,6}$")
 
 
-@app.get("/api/cases/{case_id}/reviews")
-def cases_reviews(case_id: int, user: dict = Depends(current_user)):
-    _case_or_404(case_id)
-    rows = _all("SELECT r.file_id, f.name, r.status, r.error, r.result, r.created_at FROM file_review r "
+def _review_bundle(case_id: int) -> dict:
+    """檢核結果＋引用條文＋審核結果＋檢核條件（工作台與報告共用）。"""
+    rows = _all("SELECT r.file_id, f.name, r.status, r.error, r.result, r.svg_dir, r.created_at FROM file_review r "
                 "JOIN case_file f ON f.id = r.file_id WHERE f.case_id = %s ORDER BY f.name", case_id)
     ids = set()
     for r in rows:
-        for fl in (r["result"] or {}).get("floors", []):
+        res = r["result"] or {}
+        b = res.get("building") or {}
+        for item in b.get("findings", []) + b.get("requirements", []) + b.get("notes", []):
+            ids.update(item["law"])
+        for fl in res.get("floors", []):
             fl["svg"] = f"/api/cases/{case_id}/files/{r['file_id']}/review/{fl['label']}.svg"
             for item in fl["findings"] + fl["notes"]:
                 ids.update(item["law"])
@@ -705,7 +708,99 @@ def cases_reviews(case_id: int, user: dict = Depends(current_user)):
     if ids:
         for x in _all("SELECT node_id, citation, text FROM law_node WHERE node_id = ANY(%s)", sorted(ids)):
             laws[x["node_id"]] = {"citation": x["citation"], "text": (x["text"] or "")[:600]}
-    return {"reviews": rows, "laws": laws}
+    with pool.connection() as c:
+        ctx = DS.get_context(c, case_id)
+        dec = DS.decisions(c, case_id)
+    return {"reviews": rows, "laws": laws, "context": ctx, "decisions": dec}
+
+
+@app.get("/api/cases/{case_id}/reviews")
+def cases_reviews(case_id: int, user: dict = Depends(current_user)):
+    _case_or_404(case_id)
+    b = _review_bundle(case_id)
+    for r in b["reviews"]:
+        r.pop("svg_dir", None)
+    return b
+
+
+class ContextBody(BaseModel):
+    occupancy: str | None = Field(None, max_length=8)
+    fireproof: bool | None = None
+    stories: int | None = Field(None, ge=1, le=200)
+    height: float | None = Field(None, gt=0, le=1000)
+    site_area: float | None = Field(None, gt=0, le=10_000_000)
+    ceiling_height: dict[str, float] = Field(default_factory=dict)
+    no_opening: list[str] = Field(default_factory=list, max_length=200)
+    floor_area: dict[str, float] = Field(default_factory=dict)
+
+
+FLOOR_LABEL = re.compile(r"^(\d{1,3}M?F|B\d{1,2}|R\d?F)$")
+
+
+@app.put("/api/cases/{case_id}/context")
+def cases_context(case_id: int, body: ContextBody, user: dict = Depends(current_user)):
+    """存檢核條件，並把已檢核的檔案排入「只重跑檢核」。"""
+    _case_or_404(case_id)
+    if body.occupancy and not _one("SELECT 1 AS ok FROM occupancy_code WHERE code = %s", body.occupancy):
+        raise HTTPException(422, f"沒有這個場所類別：{body.occupancy}")
+    for d, lo, hi, what in ((body.ceiling_height, 0.5, 100, "天花板高度"), (body.floor_area, 1, 1_000_000, "樓地板面積")):
+        for k, v in d.items():
+            if not FLOOR_LABEL.match(k) or not (lo <= v <= hi):
+                raise HTTPException(422, f"{what}格式不符：{k} = {v}")
+    if any(not FLOOR_LABEL.match(k) for k in body.no_opening):
+        raise HTTPException(422, "無開口樓層代號格式不符")
+    ctx = body.model_dump()
+    with pool.connection() as c:
+        DS.save_context(c, case_id, ctx, user["username"])
+        n = DS.requeue_reviews(c, case_id)
+    return {"saved": True, "requeued": n}
+
+
+class DecisionBody(BaseModel):
+    key: str = Field(pattern=r"^[0-9a-f]{12}$")
+    decision: str | None = Field(None, pattern=r"^(accept|reject)$")
+    note: str | None = Field(None, max_length=500)
+
+
+@app.post("/api/cases/{case_id}/files/{file_id}/decisions")
+def cases_decide(case_id: int, file_id: int, body: DecisionBody, user: dict = Depends(current_user)):
+    if not _one("SELECT 1 AS ok FROM case_file WHERE id = %s AND case_id = %s", file_id, case_id):
+        raise HTTPException(404, "沒有這個檔案")
+    with pool.connection() as c:
+        DS.decide(c, file_id, body.key, body.decision, (body.note or "").strip() or None, user["username"])
+    return {"ok": True}
+
+
+def _report_inputs(case_id: int):
+    case = _case_or_404(case_id)
+    b = _review_bundle(case_id)
+    occ = {r["code"]: r["text"] for r in _all("SELECT code, text FROM occupancy_code")}
+    svgs = {}
+    root = CASES_DIR.resolve()
+    for r in b["reviews"]:
+        for fl in (r["result"] or {}).get("floors", []):
+            if r.get("svg_dir") and REVIEW_LABEL.match(fl["label"] or ""):
+                p = (Path(r["svg_dir"]) / f"{fl['label']}.svg").resolve()
+                if root in p.parents and p.is_file():
+                    svgs[(r["file_id"], fl["label"])] = p.read_text(encoding="utf-8")
+    return case, b, occ, svgs
+
+
+@app.get("/api/cases/{case_id}/report", include_in_schema=False)
+def cases_report(case_id: int, user: dict = Depends(current_user)):
+    from .review import report as RP
+    case, b, occ, svgs = _report_inputs(case_id)
+    html = RP.build_html(case, b["context"], occ, b["reviews"], b["decisions"], b["laws"], svgs, user["username"])
+    return HTMLResponse(html, headers={"Cache-Control": "private, no-store"})
+
+
+@app.get("/api/cases/{case_id}/report.csv", include_in_schema=False)
+def cases_report_csv(case_id: int, user: dict = Depends(current_user)):
+    from .review import report as RP
+    case, b, _occ, _svgs = _report_inputs(case_id)
+    data = RP.build_csv(case, b["reviews"], b["decisions"], b["laws"])
+    return Response(data.encode("utf-8"), media_type="text/csv; charset=utf-8", headers={
+        "Content-Disposition": f"attachment; filename=\"case-{case_id}-findings.csv\"", "Cache-Control": "private, no-store"})
 
 
 @app.get("/api/cases/{case_id}/files/{file_id}/review/{label}.svg", include_in_schema=False)

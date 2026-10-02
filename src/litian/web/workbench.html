@@ -83,6 +83,21 @@ ol.findings li.s-YELLOW { border-left-color: #c9a100; } ol.findings li.s-BLUE { 
 .sev.s-YELLOW { background: #a68400; } .sev.s-BLUE { background: #1a73e8; }
 .law { color: var(--muted); } .law span { border-bottom: 1px dotted var(--muted); cursor: help; }
 details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+.grid2 label, .lbl { display: block; font-size: .85rem; color: var(--muted); }
+select, input[type=number] { font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); width: 100%; margin-top: 3px; }
+#c-floors input[type=number] { max-width: 130px; }
+a.btn { display: inline-block; font-size: .9rem; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2);
+  color: var(--text); padding: 6px 12px; text-decoration: none; }
+.decide { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+.decide input { flex: 1 1 160px; font: inherit; font-size: .85rem; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); }
+.decide button { padding: 3px 10px; font-size: .85rem; }
+ol.findings li.rejected { opacity: .55; }
+.st-REQUIRED { background: var(--accent-soft); color: var(--accent-text); }
+.st-NOT_REQUIRED { background: var(--surface-2); color: var(--muted); }
+.st-UNKNOWN { background: var(--warn-soft); color: var(--warn); }
 @media (max-width: 760px) { .cols { grid-template-columns: minmax(0, 1fr); } th.opt, td.opt { display: none; } }
 </style>
 </head>
@@ -141,8 +156,28 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
         </table>
       </div>
       <div class="card">
-        <h2>檢核結果</h2>
+        <h2>檢核條件</h2>
+        <p class="muted small">圖面讀不到或讀不準的資料。填了之後系統會自動重新檢核（不必重新上傳）；「資料不足」的缺失多半是缺這裡的資料。</p>
+        <form id="ctx-form" class="stack">
+          <div class="grid2">
+            <label>場所類別（第 12 條）<select id="c-occ"><option value="">（未填寫）</option></select></label>
+            <label>防火構造<select id="c-fp"><option value="">依圖面註記判讀</option><option value="1">是</option><option value="0">否</option></select></label>
+            <label>地上層數<input id="c-stories" type="number" min="1" max="200" placeholder="依平面圖推定"></label>
+            <label>建築物高度（m）<input id="c-height" type="number" step="0.01" min="0"></label>
+            <label>基地面積（㎡）<input id="c-site" type="number" step="0.01" min="0"></label>
+          </div>
+          <div style="overflow-x:auto"><table>
+            <thead><tr><th>樓層</th><th>圖面判讀面積</th><th>面積覆寫（㎡）</th><th>天花板高度（m）</th><th>無開口樓層</th></tr></thead>
+            <tbody id="c-floors"></tbody></table></div>
+          <p id="c-floors-hint" class="muted small">上傳平面圖並完成檢核後，這裡會列出各樓層。</p>
+          <div class="row"><button class="primary" type="submit">儲存並重新檢核</button><span id="ctx-msg" class="small muted"></span></div>
+        </form>
+      </div>
+      <div class="card">
+        <div class="row" style="justify-content:space-between;margin-bottom:8px"><h2 style="margin:0">檢核結果</h2>
+          <span class="row"><a id="rep-html" class="btn" target="_blank" rel="noopener">匯出報告（可列印成 PDF）</a><a id="rep-csv" class="btn">匯出 CSV</a></span></div>
         <p id="review-hint" class="muted small">上傳含平面圖的 DWG／DXF 後，系統會自動認出房間與消防設備，逐項比對法規並標出缺失。</p>
+        <p id="review-summary" class="small muted"></p>
         <div id="reviews"></div>
       </div>
       <div class="cols">
@@ -229,7 +264,7 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
   async function openCase(id) {
     currentCase = id;
     $("#list-view").classList.add("hidden"); $("#case-view").classList.remove("hidden");
-    lastReviews = ""; $("#reviews").innerHTML = "";
+    lastReviews = ""; ctxDirty = false; $("#reviews").innerHTML = ""; $("#ctx-msg").textContent = "";
     $("#texts").innerHTML = ""; $("#filter").classList.add("hidden"); $("#texts-hint").classList.remove("hidden"); $("#texts-title").textContent = "圖面文字";
     await refreshCase();
   }
@@ -252,33 +287,139 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
 
   // ---------- 檢核結果 ----------
   const SEV = { RED: "不符", ORANGE: "需確認", YELLOW: "資料不足", BLUE: "建議" };
+  const RSTAT = { REQUIRED: "應設", NOT_REQUIRED: "未達門檻", UNKNOWN: "無法判定" };
   const KIND = { sprinkler: "撒水頭", sprinkler_sidewall: "側壁型撒水頭", detector: "探測器", extinguisher: "滅火器",
-    hydrant: "室內消防栓", standpipe_outlet: "連結送水管出水口", speaker: "揚聲器", exit_sign: "出口標示燈",
-    direction_light: "避難方向指示燈", emergency_light: "緊急照明燈", smoke_vent: "排煙口" };
-  let lastReviews = "";
+    hydrant: "室內消防栓", outdoor_hydrant: "室外消防栓", standpipe_outlet: "連結送水管出水口", speaker: "揚聲器",
+    exit_sign: "出口標示燈", direction_light: "避難方向指示燈", emergency_light: "緊急照明燈", smoke_vent: "排煙口",
+    manual_alarm: "手動警報機", end_test_valve: "末端查驗閥", alarm_valve: "自動警報逆止閥", emergency_outlet: "緊急電源插座" };
+  let lastReviews = "", bundle = { reviews: [], laws: {}, decisions: {}, context: {} }, occList = null, ctxDirty = false;
   function lawHtml(ids, laws) {
     return ids.map((id) => { const l = laws[id]; return l ? '<span title="' + esc(l.text) + '">' + esc(l.citation) + "</span>" : esc(id); }).join("、");
   }
+  function decisionOf(fileId, key) { return (bundle.decisions[String(fileId)] || {})[key] || {}; }
+  function decisionHtml(fileId, key) {
+    const d = decisionOf(fileId, key);
+    if (d.decision) return '<div class="decide"><span class="badge ' + (d.decision === "accept" ? "b-done" : "b-skipped") + '">' +
+      (d.decision === "accept" ? "已接受" : "已退回") + "</span>" + (d.note ? '<span class="small">' + esc(d.note) + "</span>" : "") +
+      '<button type="button" data-act="undo">撤回</button></div>';
+    return '<div class="decide"><input type="text" maxlength="500" placeholder="審核備註（選填）" aria-label="審核備註">' +
+      '<button type="button" data-act="accept">接受</button><button type="button" data-act="reject">退回</button></div>';
+  }
+  function findingHtml(fileId, f) {
+    const rej = decisionOf(fileId, f.key).decision === "reject";
+    return '<li class="s-' + f.severity + (rej ? " rejected" : "") + '" data-file="' + fileId + '" data-key="' + esc(f.key) + '">' +
+      '<span class="badge sev s-' + f.severity + '">' + f.no + "．" + SEV[f.severity] + "</span> <b>" + esc(f.title) + "</b>" +
+      '<div class="small">' + esc(f.why) + "</div>" +
+      '<div class="small"><b>建議：</b>' + esc(f.fix) + "</div>" +
+      (f.missing.length ? '<div class="small"><b>要補的資料：</b>' + f.missing.map(esc).join("；") + "</div>" : "") +
+      '<div class="small law">依據：' + lawHtml(f.law, bundle.laws) + "</div>" + decisionHtml(fileId, f.key) + "</li>";
+  }
+  function noteHtml(notes) {
+    return notes.map((n) => '<div class="small">' + esc(n.text) + (n.law && n.law.length ? '<span class="law">（' + lawHtml(n.law, bundle.laws) + "）</span>" : "") + "</div>").join("");
+  }
+  function buildingHtml(r) {
+    const b = r.result.building; if (!b) return "";
+    const p = b.profile;
+    const req = (b.requirements || []).map((q) => "<tr><td>" + esc(q.equipment) + '</td><td><span class="badge st-' + q.status + '">' + RSTAT[q.status] + "</span>" +
+      (q.floors ? '<div class="small">' + esc(q.floors.join("、")) + "</div>" : "") + '</td><td class="small">' + esc(q.why) +
+      (q.missing.length ? "<div><b>需補：</b>" + q.missing.map(esc).join("；") + "</div>" : "") +
+      q.notes.map((n) => '<div class="muted">※ ' + esc(n) + "</div>").join("") + '</td><td class="small law">' + lawHtml(q.law, bundle.laws) + "</td></tr>").join("");
+    const items = (b.findings || []).map((f) => findingHtml(r.file_id, f)).join("");
+    const head = p ? '<div class="small muted">地上 ' + (p.stories ?? "?") + " 層｜總樓地板面積約 " + Math.round(p.total_area).toLocaleString() + " ㎡｜" +
+      (p.occupancy ? "場所類別 " + esc(p.occupancy) : "場所類別未填寫（在上方「檢核條件」填寫）") + "</div>" + p.notes.map((n) => '<div class="small muted">※ ' + esc(n) + "</div>").join("") : "";
+    return '<section class="floor"><h3>全棟｜' + esc(r.name) + "</h3>" + head +
+      (req ? '<details open><summary>應設設備判定（設置標準第 14～30-1 條）</summary><div style="overflow-x:auto"><table><thead><tr><th>設備</th><th>判定</th><th>理由</th><th>依據</th></tr></thead><tbody>' + req + "</tbody></table></div></details>" : "") +
+      (items ? '<ol class="findings">' + items + "</ol>" : "") +
+      ((b.notes || []).length ? "<details><summary>說明</summary>" + noteHtml(b.notes) + "</details>" : "") + "</section>";
+  }
+  function updateSummary() {
+    let total = 0, acc = 0, rej = 0;
+    bundle.reviews.forEach((r) => {
+      const fs = [...(r.result?.building?.findings || []), ...(r.result?.floors || []).flatMap((fl) => fl.findings)];
+      fs.forEach((f) => { total++; const d = decisionOf(r.file_id, f.key).decision; if (d === "accept") acc++; if (d === "reject") rej++; });
+    });
+    $("#review-summary").textContent = total ? "共 " + total + " 條缺失：已接受 " + acc + "、已退回 " + rej + "、未審核 " + (total - acc - rej) + "。退回的缺失不會列入匯出報告。" : "";
+  }
+  async function loadOccupancy() {
+    if (occList) return;
+    occList = await api("/api/law/occupancy");
+    const order = "甲乙丙丁戊";
+    const rank = (c) => (order.indexOf(c) < 0 ? 99 : order.indexOf(c));
+    occList.sort((a, b) => rank(a.cls) - rank(b.cls) || a.number - b.number);
+    $("#c-occ").innerHTML = '<option value="">（未填寫）</option>' + occList.map((o) => '<option value="' + esc(o.code) + '">' +
+      esc(o.code + "　" + (o.text.length > 36 ? o.text.slice(0, 36) + "…" : o.text)) + "</option>").join("");
+  }
+  function fillContext() {
+    if (ctxDirty) return;
+    const c = bundle.context || {};
+    $("#c-occ").value = c.occupancy || "";
+    $("#c-fp").value = c.fireproof === true ? "1" : c.fireproof === false ? "0" : "";
+    $("#c-stories").value = c.stories ?? ""; $("#c-height").value = c.height ?? ""; $("#c-site").value = c.site_area ?? "";
+    const m = new Map();
+    bundle.reviews.forEach((r) => (r.result?.floors || []).forEach((fl) => { if (!m.has(fl.label)) m.set(fl.label, fl.area); }));
+    $("#c-floors-hint").classList.toggle("hidden", m.size > 0);
+    $("#c-floors").innerHTML = [...m.entries()].map(([lab, area]) => '<tr data-l="' + esc(lab) + '"><td>' + esc(lab) + "</td><td>" + Math.round(area).toLocaleString() + " ㎡</td>" +
+      '<td><input class="f-area" type="number" step="0.01" min="0" aria-label="' + esc(lab) + ' 樓地板面積" value="' + esc((c.floor_area || {})[lab] ?? "") + '"></td>' +
+      '<td><input class="f-h" type="number" step="0.01" min="0" aria-label="' + esc(lab) + ' 天花板高度" value="' + esc((c.ceiling_height || {})[lab] ?? "") + '"></td>' +
+      '<td><input class="f-no" type="checkbox" aria-label="' + esc(lab) + ' 無開口樓層"' + ((c.no_opening || []).includes(lab) ? " checked" : "") + "></td></tr>").join("");
+  }
+  $("#ctx-form").addEventListener("input", () => { ctxDirty = true; });
+  $("#ctx-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const num = (v) => (v === "" ? null : Number(v));
+    const body = { occupancy: $("#c-occ").value || null, fireproof: $("#c-fp").value === "" ? null : $("#c-fp").value === "1",
+      stories: num($("#c-stories").value), height: num($("#c-height").value), site_area: num($("#c-site").value),
+      ceiling_height: {}, floor_area: {}, no_opening: [] };
+    document.querySelectorAll("#c-floors tr").forEach((tr) => {
+      const l = tr.dataset.l, a = tr.querySelector(".f-area").value, h = tr.querySelector(".f-h").value;
+      if (a !== "") body.floor_area[l] = Number(a);
+      if (h !== "") body.ceiling_height[l] = Number(h);
+      if (tr.querySelector(".f-no").checked) body.no_opening.push(l);
+    });
+    $("#ctx-msg").textContent = "儲存中…";
+    try {
+      const r = await api("/api/cases/" + currentCase + "/context", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      ctxDirty = false;
+      $("#ctx-msg").textContent = r.requeued ? "已儲存，" + r.requeued + " 個檔案重新檢核中…" : "已儲存（目前沒有可重新檢核的檔案）";
+      await refreshCase();
+    } catch (err) { $("#ctx-msg").textContent = err.message; }
+  });
+  $("#reviews").addEventListener("click", async (e) => {
+    const btn = e.target.closest("button[data-act]"); if (!btn) return;
+    const li = btn.closest("li[data-key]"), act = btn.dataset.act;
+    const note = (li.querySelector(".decide input") || {}).value || null;
+    btn.disabled = true;
+    try {
+      await api("/api/cases/" + currentCase + "/files/" + li.dataset.file + "/decisions", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: li.dataset.key, decision: act === "undo" ? null : act, note }) });
+      const m = (bundle.decisions[li.dataset.file] = bundle.decisions[li.dataset.file] || {});
+      if (act === "undo") delete m[li.dataset.key]; else m[li.dataset.key] = { decision: act, note };
+      lastReviews = JSON.stringify(bundle);
+      li.querySelector(".decide").outerHTML = decisionHtml(li.dataset.file, li.dataset.key);
+      li.classList.toggle("rejected", act === "reject");
+      updateSummary();
+    } catch (err) { btn.disabled = false; alert(err.message); }
+  });
   async function loadReviews() {
+    await loadOccupancy().catch(() => {});
     const d = await api("/api/cases/" + currentCase + "/reviews");
     const key = JSON.stringify(d);
     if (key === lastReviews) return;
     lastReviews = key;
+    bundle = d;
+    $("#rep-html").href = "/api/cases/" + currentCase + "/report";
+    $("#rep-csv").href = "/api/cases/" + currentCase + "/report.csv";
+    fillContext();
+    updateSummary();
     $("#review-hint").classList.toggle("hidden", d.reviews.length > 0);
     $("#reviews").innerHTML = d.reviews.map((r) => {
       if (r.status !== "done") return '<p class="note err">' + esc(r.name) + "：檢核失敗（" + esc(r.error || "") + "）</p>";
       const floors = r.result.floors;
       if (!floors.length) return '<p class="muted small">' + esc(r.name) + "：沒有可檢核的平面圖。</p>";
-      return floors.map((fl) => {
+      return buildingHtml(r) + floors.map((fl) => {
         const cnt = {}; fl.findings.forEach((f) => { cnt[f.severity] = (cnt[f.severity] || 0) + 1; });
         const chips = ["RED", "ORANGE", "YELLOW", "BLUE"].filter((k) => cnt[k]).map((k) => '<span class="badge sev s-' + k + '">' + SEV[k] + " " + cnt[k] + "</span>").join(" ");
         const eq = Object.entries(fl.equipment).map(([k, n]) => (KIND[k] || k) + " " + n).join("、") || "未認出消防設備";
-        const items = fl.findings.map((f) => '<li class="s-' + f.severity + '"><span class="badge sev s-' + f.severity + '">' + f.no + "．" + SEV[f.severity] + "</span> <b>" + esc(f.title) + "</b>" +
-          '<div class="small">' + esc(f.why) + "</div>" +
-          '<div class="small"><b>建議：</b>' + esc(f.fix) + "</div>" +
-          (f.missing.length ? '<div class="small"><b>要補的資料：</b>' + f.missing.map(esc).join("；") + "</div>" : "") +
-          '<div class="small law">依據：' + lawHtml(f.law, d.laws) + "</div></li>").join("");
-        const notes = fl.notes.map((n) => '<div class="small">' + esc(n.text) + '<span class="law">（' + lawHtml(n.law, d.laws) + "）</span></div>").join("");
         const warns = fl.warnings.concat(r.result.warnings || []).map((w) => '<div class="small">' + esc(w) + "</div>").join("");
         return '<section class="floor"><h3>' + esc(fl.label) + "｜" + esc(fl.number || "") + " " + esc(fl.title) + "</h3>" +
           '<div class="small muted">' + esc(r.name) + "｜樓地板約 " + Math.round(fl.area).toLocaleString() + " ㎡｜" + esc(eq) +
@@ -287,8 +428,8 @@ details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
             ? '<span class="badge b-done">未發現缺失</span>'
             : '<span class="badge b-skipped">未認出消防設備，本層未檢核</span>')) + "</div>" +
           '<a href="' + fl.svg + '" target="_blank" rel="noopener"><img class="plan" loading="lazy" alt="' + esc(fl.label) + ' 檢核標示圖" src="' + fl.svg + '"></a>' +
-          '<ol class="findings">' + items + "</ol>" +
-          (notes ? "<details><summary>免設處所與說明</summary>" + notes + "</details>" : "") +
+          '<ol class="findings">' + fl.findings.map((f) => findingHtml(r.file_id, f)).join("") + "</ol>" +
+          (fl.notes.length ? "<details><summary>免設處所與說明</summary>" + noteHtml(fl.notes) + "</details>" : "") +
           (warns ? "<details><summary>判讀提醒</summary>" + warns + "</details>" : "") + "</section>";
       }).join("");
     }).join("");

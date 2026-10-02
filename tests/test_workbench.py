@@ -110,11 +110,15 @@ def test_reviews_require_login_and_attach_svg_urls_and_laws(client, monkeypatch)
 
     def fake_all(sql, *a):
         if "FROM file_review" in sql:
-            return [{"file_id": 7, "name": "F-101.dxf", "status": "done", "error": None, "result": result, "created_at": "t"}]
+            return [{"file_id": 7, "name": "F-101.dxf", "status": "done", "error": None, "result": result, "svg_dir": None, "created_at": "t"}]
         assert "law_node" in sql and a[0] == ["D0120029/34/1/1/1", "D0120029/49/1/1"]
         return [{"node_id": "D0120029/34/1/1/1", "citation": "設置標準第34條第1項第1款第1目", "text": "各層任一點…"}]
     monkeypatch.setattr(api, "_all", fake_all)
+    monkeypatch.setattr(api.DS, "get_context", lambda c, cid: {"occupancy": "丁-2"})
+    monkeypatch.setattr(api.DS, "decisions", lambda c, cid: {"7": {"abc": {"decision": "accept"}}})
     d = client.get("/api/cases/3/reviews").json()
+    assert d["context"] == {"occupancy": "丁-2"} and d["decisions"]["7"]["abc"]["decision"] == "accept"
+    assert "svg_dir" not in d["reviews"][0]
     assert d["reviews"][0]["result"]["floors"][0]["svg"] == "/api/cases/3/files/7/review/1F.svg"
     assert d["laws"]["D0120029/34/1/1/1"]["citation"].startswith("設置標準第34條")
 
@@ -135,3 +139,63 @@ def test_review_svg_served_only_from_cases_dir(client, monkeypatch, tmp_path):
     assert client.get("/api/cases/3/files/7/review/x.svg").status_code == 404          # 樓層代號格式不符
     svg_dir["v"] = str(outside)                                                       # 資料庫裡的路徑不在案件資料夾內
     assert client.get("/api/cases/3/files/7/review/1F.svg").status_code == 404
+
+
+def test_context_validates_and_requeues(client, monkeypatch):
+    client.cookies.set("fr_session", "good-token")
+    saved = {}
+    monkeypatch.setattr(api, "_one", lambda sql, *a: {"ok": 1} if "occupancy_code" in sql and a[0] == "丁-2" else
+                        ({"id": 3, "name": "案", "created_by": "amy", "created_at": "t"} if "review_case" in sql else None))
+    monkeypatch.setattr(api.DS, "save_context", lambda c, cid, ctx, u: saved.update(ctx=ctx, by=u))
+    monkeypatch.setattr(api.DS, "requeue_reviews", lambda c, cid: 2)
+    body = {"occupancy": "丁-2", "ceiling_height": {"1F": 6.5}, "no_opening": ["B1"], "stories": 3, "fireproof": True}
+    r = client.put("/api/cases/3/context", json=body)
+    assert r.json() == {"saved": True, "requeued": 2} and saved["ctx"]["ceiling_height"] == {"1F": 6.5} and saved["by"] == "amy"
+    assert client.put("/api/cases/3/context", json={"occupancy": "甲-99"}).status_code == 422
+    assert client.put("/api/cases/3/context", json={"ceiling_height": {"一樓": 3}}).status_code == 422
+    assert client.put("/api/cases/3/context", json={"ceiling_height": {"1F": 300}}).status_code == 422
+    assert client.put("/api/cases/3/context", json={"stories": 0}).status_code == 422
+
+
+def test_decisions_store_accept_reject_and_undo(client, monkeypatch):
+    client.cookies.set("fr_session", "good-token")
+    calls = []
+    monkeypatch.setattr(api, "_one", lambda sql, *a: {"ok": 1} if a == (7, 3) else None)
+    monkeypatch.setattr(api.DS, "decide", lambda c, fid, key, dec, note, u: calls.append((fid, key, dec, note, u)))
+    assert client.post("/api/cases/3/files/7/decisions", json={"key": "0123456789ab", "decision": "reject", "note": " 圖上已註明免設 "}).status_code == 200
+    assert client.post("/api/cases/3/files/7/decisions", json={"key": "0123456789ab", "decision": None}).status_code == 200
+    assert calls == [(7, "0123456789ab", "reject", "圖上已註明免設", "amy"), (7, "0123456789ab", None, None, "amy")]
+    assert client.post("/api/cases/3/files/7/decisions", json={"key": "x", "decision": "accept"}).status_code == 422
+    assert client.post("/api/cases/3/files/7/decisions", json={"key": "0123456789ab", "decision": "maybe"}).status_code == 422
+    assert client.post("/api/cases/3/files/8/decisions", json={"key": "0123456789ab", "decision": "accept"}).status_code == 404
+
+
+def test_report_html_and_csv(client, monkeypatch, tmp_path):
+    client.cookies.set("fr_session", "good-token")
+    rev = tmp_path / "3" / "001.dxf.review"
+    rev.mkdir(parents=True)
+    (rev / "1F.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"><title>plan</title></svg>', encoding="utf-8")
+    f1 = {"no": 1, "key": "aaaaaaaaaaaa", "rule": "HYD-34", "severity": "RED", "category": "距離超過", "floor": "1F",
+          "title": "辦公室有 30 ㎡ 不在消防栓 25 m 內", "why": "水平距離 25 m", "fix": "增設", "law": ["D0120029/34/1/1/1"],
+          "missing": [], "rooms": ["辦公室"]}
+    f2 = dict(f1, no=2, key="bbbbbbbbbbbb", severity="YELLOW", title="探測器需補資料", missing=["1F 天花板高度"])
+    f3 = dict(f1, no=3, key="cccccccccccc", title="已退回的缺失")
+    result = {"floors": [{"label": "1F", "number": "F-101", "title": "壹層", "area": 450, "equipment": {"hydrant": 1},
+                          "findings": [f1, f2, f3], "notes": []}],
+              "building": {"profile": None, "requirements": [{"key": "15", "equipment": "室內消防栓設備", "kinds": ["hydrant"],
+                           "status": "REQUIRED", "why": "五層以下…", "law": ["D0120029/15/1/1"], "floors": None, "missing": [], "notes": []}],
+                           "findings": [], "notes": []}}
+    monkeypatch.setattr(api, "_one", lambda sql, *a: {"id": 3, "name": "測試案", "created_by": "amy", "created_at": "t"})
+    monkeypatch.setattr(api, "_all", lambda sql, *a: [{"file_id": 7, "name": "F.dxf", "status": "done", "error": None,
+                                                       "result": result, "svg_dir": str(rev), "created_at": "t"}]
+                        if "file_review" in sql else ([{"code": "丁-2", "text": "中度危險工作場所。"}] if "occupancy_code" in sql else []))
+    monkeypatch.setattr(api.DS, "get_context", lambda c, cid: {"occupancy": "丁-2", "ceiling_height": {"1F": 3.2}})
+    monkeypatch.setattr(api.DS, "decisions", lambda c, cid: {"7": {"aaaaaaaaaaaa": {"decision": "accept", "note": "確認"},
+                                                                   "cccccccccccc": {"decision": "reject", "note": None}}})
+    html = client.get("/api/cases/3/report").text
+    assert "消防安全設備圖說自審報告" in html and "丁-2　中度危險工作場所" in html and "<title>plan</title>" in html
+    assert "辦公室有 30 ㎡" in html and "已退回的缺失" not in html and "1F 天花板高度" in html and "室內消防栓設備" in html
+    csv = client.get("/api/cases/3/report.csv")
+    assert csv.headers["content-disposition"].startswith("attachment") and csv.content.startswith("\ufeff".encode())
+    text = csv.content.decode("utf-8-sig")
+    assert text.count("\n") == 4 and "退回" in text and "接受" in text and "未審核" in text

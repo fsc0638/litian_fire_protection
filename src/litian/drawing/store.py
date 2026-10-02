@@ -55,6 +55,15 @@ CREATE TABLE IF NOT EXISTS case_context (
   updated_by text,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS finding_decision (
+  file_id bigint NOT NULL REFERENCES case_file ON DELETE CASCADE,
+  key text NOT NULL,                    -- review.engine.finding_key
+  decision text NOT NULL,               -- accept（接受，列入報告）｜reject（退回，不列入）
+  note text,
+  decided_by text,
+  decided_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (file_id, key)
+);
 CREATE TABLE IF NOT EXISTS file_review (
   file_id bigint PRIMARY KEY REFERENCES case_file ON DELETE CASCADE,
   status text NOT NULL,                 -- done（已檢核）｜failed（檢核失敗）
@@ -166,6 +175,26 @@ def requeue_reviews(conn, case_id: int) -> int:
         "UPDATE case_file SET status = 'queued', review_only = true, attempts = 0, updated_at = now() "
         "WHERE case_id = %s AND status IN ('done', 'failed') AND id IN (SELECT file_id FROM file_review)",
         (case_id,)).rowcount
+
+
+def decide(conn, file_id: int, key: str, decision: str | None, note: str | None, user: str | None) -> None:
+    """decision 為 None：撤回審核（回到未處理）。"""
+    if decision is None:
+        conn.execute("DELETE FROM finding_decision WHERE file_id = %s AND key = %s", (file_id, key))
+        return
+    conn.execute("INSERT INTO finding_decision (file_id, key, decision, note, decided_by) VALUES (%s, %s, %s, %s, %s) "
+                 "ON CONFLICT (file_id, key) DO UPDATE SET decision = EXCLUDED.decision, note = EXCLUDED.note, "
+                 "decided_by = EXCLUDED.decided_by, decided_at = now()", (file_id, key, decision, note, user))
+
+
+def decisions(conn, case_id: int) -> dict:
+    rows = conn.execute("SELECT d.file_id, d.key, d.decision, d.note, d.decided_by, d.decided_at FROM finding_decision d "
+                        "JOIN case_file f ON f.id = d.file_id WHERE f.case_id = %s", (case_id,)).fetchall()
+    out: dict = {}
+    for r in rows:
+        out.setdefault(str(r["file_id"]), {})[r["key"]] = {"decision": r["decision"], "note": r["note"],
+                                                           "by": r["decided_by"], "at": r["decided_at"].isoformat()}
+    return out
 
 
 def load_ir(conn, file_id: int) -> dict | None:
