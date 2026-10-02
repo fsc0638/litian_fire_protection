@@ -16,11 +16,11 @@ import re
 from dataclasses import dataclass, field
 
 import numpy as np
-
+import shapely
 from shapely.geometry import Point, Polygon
 from shapely.ops import unary_union
 
-from litian.plan.floor import Floor, Room
+from litian.plan.floor import ROOM_KINDS, Floor, Room, _parts
 from litian.review import coverage as C
 from litian.review.equipment import Equipment
 
@@ -128,6 +128,24 @@ def _sev_for(rooms: list[Room], base: str) -> str:
     return base
 
 
+# 房名分類的「電梯」樣式排在走廊、機房前面，電梯廳、電梯前室、電梯間、電梯機房也會判成 elevator；這些是有人停留的樓地板
+NOT_HOISTWAY = re.compile(r"廳|前室|機房|機械|間|室")
+
+
+def _hoistway(r: Room) -> bool:
+    """昇降機道、管道間（無樓地板、無人員停留）。標示含廳、前室、間、室、機房的電梯類房間不算；名稱衝突的不算。"""
+    if r.conflict:
+        return False
+    return r.kind == "shaft" or (r.kind == "elevator" and not any(NOT_HOISTWAY.search(s) for s in r.labels))
+
+
+def _storage(r: Room) -> bool:
+    """儲藏室：房名標示（能判斷種類的標示，去重）全部含「儲藏」才算。辦公室＋儲藏室連成一間、廠房裡「成品儲藏區」
+    之類的分區標示都不算；「儲藏櫃」等家具註記不是房名，不列入判斷。倉庫是居室，不算。名稱衝突的不算。"""
+    named = [s for s in dict.fromkeys(r.labels) if any(re.search(p, s) for _, p in ROOM_KINDS)]
+    return not r.conflict and bool(named) and all("儲藏" in s for s in named)
+
+
 # ── 撒水頭：第 46 條水平距離；第 49 條免設處所 ─────────────────────────────
 
 def _sprinkler_radius(room: Room, response: str | None, fireproof: bool | None, lenient: bool) -> tuple[float, str]:
@@ -152,10 +170,12 @@ def _sprinkler_exempt(room: Room, fireproof: bool | None) -> str | None:
         return "D0120029/49/1/1"
     if room.kind == "stair" and re.search(r"安全梯|排煙室", names):
         return "D0120029/49/1/2"                 # 只限室內安全梯間、特別安全梯間（一般樓梯不免設）
-    if room.kind in ("elevator", "shaft") and fireproof:
+    if _hoistway(room) and fireproof:
         return "D0120029/49/1/3"
     if room.kind == "machine" and re.search(r"昇降機|升降機|電梯|通風|換氣|空調", names):
         return "D0120029/49/1/4"
+    if room.kind == "elevator" and re.search(r"機房|機械", names):
+        return "D0120029/49/1/4"                 # 電梯機房（房名分類歸在 elevator）
     if room.kind == "electrical":
         return "D0120029/49/1/5" if re.search(r"電信|電腦", names) else "D0120029/49/1/6"
     return None
@@ -240,37 +260,132 @@ def _farthest(g, eqs: list[Equipment], max_samples: int = 4000) -> float:
     return float(best.max())
 
 
+# ── 檢核範圍：樓地板上的房間＋沒圍成房間的開放樓地板（不含牆厚帶）─────────────
+
+OPEN_GAP = 0.6         # 開放樓地板：離所有房間這個距離以外才算（房間之間、外牆的牆厚帶不算）
+OPEN_MIN = 5.0         # 開放樓地板最小面積（㎡）；更小的多半是牆角、柱邊空隙
+MARGIN = 0.3           # 邊際超出：最遠點只超出半徑這麼多以內、且面積不到 1 ㎡（圖面誤差等級）
+
+
+def _floor_rooms(floor: Floor) -> list[Room]:
+    """逐房檢核的房間：算樓地板的（屋突層屋頂碎塊不算）、不是挑空或室外。"""
+    return [r for r in floor.rooms if r.kind not in ("void", "outdoor") and floor.in_region(r)]
+
+
+def _open_floor(floor: Floor) -> list:
+    """沒圍成房間的開放樓地板：樓地板扣掉所有房間（外擴 0.6 m）後，寬 0.6 m 以上、5 ㎡ 以上的部分。"""
+    cut = unary_union([r.hole or r.polygon for r in floor.rooms])
+    rest = floor.region.difference(cut.buffer(OPEN_GAP)) if not cut.is_empty else floor.region
+    return [p for p in _parts(rest) if p.area >= OPEN_MIN and not p.buffer(-0.3).is_empty]
+
+
+def _check_area(floor: Floor, rooms: list[Room]):
+    return unary_union([r.polygon.intersection(floor.region) for r in rooms] + _open_floor(floor))
+
+
+def _list(items: list[str], n: int = 8) -> str:
+    return "、".join(items[:n]) + (f" 等 {len(items)} 處" if len(items) > n else "")
+
+
+OPEN_WHY = "；此範圍沒有圍成房間、也沒有房名（可能是開放空間、梯廳或挑空邊緣），請確認是否為樓地板"
+
+
+def _sev_at(rooms: list[Room], base: str) -> str:
+    """同 _sev_for；沒圍成房間的開放樓地板比照名稱不明的房間，降為需確認。"""
+    return (ORANGE if base == RED else base) if not rooms else _sev_for(rooms, base)
+
+
 # ── 水平距離（消防栓 25 m、揚聲器 10 m）──────────────────────────────────
 
+def _proviso_limit(r: Room) -> float:
+    """第 133 條第 2 款第 4 目但書的面積上限：居室、主要走廊通道 6 ㎡，其他非居室 30 ㎡。
+    名稱衝突的房間（例：男廁＋辦公室連成一間）可能是居室，以 6 ㎡ 計。"""
+    if r.conflict:
+        return 6.0
+    if r.kind in ("stair", "toilet", "shaft", "electrical", "machine") or _hoistway(r) or _storage(r):
+        return 30.0
+    return 6.0
+
+
+def _stair_core(rooms: list[Room], stairs: list[Room]) -> bool:
+    """未涵蓋塊只在樓梯間，或在緊鄰（0.5 m 內）未涵蓋樓梯間、不到 10 ㎡ 的附屬小房間（梯內儲藏室等）。"""
+    return bool(rooms) and all((r.kind == "stair" and not r.conflict) or
+                               (r.area < 10 and any(s.polygon.distance(r.polygon) <= 0.5 for s in stairs)) for r in rooms)
+
+
 def _horizontal(rule: str, label: str, kind: str, radius: float, law: list[str], floor: Floor,
-                eq: list[Equipment], small_room_rule: bool = False):
+                eq: list[Equipment], ctx: Context, speaker: bool = False):
+    """量測範圍＝樓地板上的房間內部＋開放樓地板（不含牆厚帶）。未涵蓋塊依所在房間分流：
+    管道間、昇降機道（解讀設定）→ 說明；揚聲器遇樓梯間（第 5 目另計）→ 說明；
+    消防栓只差在樓梯核 → 需確認；揚聲器小房間符合但書（實算 8 m）→ 說明；其餘列缺失。"""
     items = _of(eq, kind)
     if not items:
         return [], []
-    findings = []
-    for p in C.uncovered(floor.region, [(e.x, e.y) for e in items], radius):
-        rooms = _rooms_touching(floor, p)
-        sev = _sev_for(rooms, RED)
-        note = ""
-        if small_room_rule and rooms and all(r.area <= (6 if r.kind in ("room", "corridor", "unknown", "mixed") else 30) for r in rooms):
-            sev, note = ORANGE, "；此範圍屬小面積房間，若相鄰區域揚聲器在 8 m 內得免設（第 133 條第 2 款第 4 目但書），請確認"
+    pts = np.array([(e.x, e.y) for e in items])
+    nearest = lambda g: min(g.distance(Point(x, y)) for x, y in pts)  # noqa: E731
+    pieces = [(p, _rooms_touching(floor, p)) for p in C.uncovered(_check_area(floor, _floor_rooms(floor)), pts.tolist(), radius)]
+    plain = lambda rs, kinds: rs and all(r.kind in kinds and not r.conflict for r in rs)  # noqa: E731
+    stairs_hit = [r for _, rs in pieces for r in rs if r.kind == "stair" and not r.conflict]
+    findings, shafts, stairs, proviso = [], [], [], []
+    for p, rooms in pieces:
+        far = _farthest(p, items)
+        desc = f"{'、'.join(_room_names(rooms)[:3])} {_fmt(p.area)} ㎡（最遠 {_fmt(far)} m）"
+        if rooms and all(_hoistway(r) for r in rooms) and not ctx.rule("shaft_in_coverage"):
+            shafts.append(desc)
+            continue
+        if speaker and plain(rooms, ("stair",)) and ctx.rule("stair_speaker_vertical"):
+            stairs.append(desc)
+            continue
+        if speaker and rooms and all(r.area <= _proviso_limit(r) for r in rooms):
+            gap = max(nearest(r.polygon) for r in rooms)
+            if gap <= 8.0:
+                proviso.append(f"{desc}，離相鄰揚聲器 {_fmt(gap)} m")
+                continue
+        sev, why_extra = _sev_at(rooms, RED), ("" if rooms else OPEN_WHY)
         c = p.representative_point()
         near = floor.room_at(c.x, c.y)
-        far = _farthest(p, items)
+        fix = f"在 {near.name if near else '標示範圍'} 附近增設{label}，或調整既有{label}位置，使標示範圍在 {_fmt(radius)} m 內"
+        if not speaker and _stair_core(rooms, stairs_hit):
+            sev = ORANGE if sev == RED else sev
+            why_extra = ("。此範圍為樓梯間（或附屬於樓梯間的小房間），有兩種讀法：（一）嚴格：各層任一點都要在同層消防栓 25 m 內，"
+                         "則不符；（二）實務：樓梯間（例如挑空層中的樓梯核）由上下層消防栓經樓梯取用，視為涵蓋。請確認採用哪一種讀法")
+            fix = ("採嚴格讀法時，在樓梯間附近增設室內消防栓；採實務讀法時，請在圖上註明由上下層哪一支消防栓涵蓋此樓梯核，"
+                   "並確認其水平距離在 25 m 以下")
+        where = "、".join(_room_names(rooms)[:3]) or "未圍成房間的樓地板"
+        marginal = far <= radius + MARGIN and p.area < 1.0
+        title = f"{where} 有 {_fmt(p.area)} ㎡ 不在任何{label} {_fmt(radius)} m 範圍內" + (f"（邊際超出，最遠 {_fmt(far)} m）" if marginal else "")
+        cite = list(law)
+        if marginal:
+            fix = f"超出幅度很小：將相鄰的{label}移動約 0.3 m（或在附近增設），使標示範圍在 {_fmt(radius)} m 內"
+            if speaker:
+                fix += "；或依第 133 條第 3 款以音壓計算替代（廣播區域內距樓地板 1 m 處音壓在 75 分貝以上）"
+                cite.append("D0120029/133/1/3")
         findings.append(Finding(
-            rule, sev, "距離超過", floor.label or "", f"{'、'.join(_room_names(rooms)[:3]) or '標示範圍'} 有 {_fmt(p.area)} ㎡ 不在任何{label} {_fmt(radius)} m 範圍內",
-            f"各層任一點至{label}之水平距離應在 {_fmt(radius)} m 以下；範圍內最遠點離最近{label}約 {_fmt(far)} m{note}",
-            f"在 {near.name if near else '標示範圍'} 附近增設{label}，或調整既有{label}位置，使標示範圍在 {_fmt(radius)} m 內",
-            law, rooms=_room_names(rooms), area=p.area, geom=p, metrics={"radius": radius, "farthest": round(far, 2)}))
-    return findings, []
+            rule, sev, "距離超過", floor.label or "", title,
+            f"各層任一點至{label}之水平距離應在 {_fmt(radius)} m 以下；範圍內最遠點離最近{label}約 {_fmt(far)} m{why_extra}",
+            fix, cite, rooms=_room_names(rooms), area=p.area, geom=p,
+            metrics={"radius": radius, "farthest": round(far, 2), **({"marginal": True} if marginal else {})}))
+    notes = []
+    if shafts:
+        other = "廣播區域" if speaker else "「各層任一點」"
+        notes.append(Note(rule, f"管道間、昇降機道無樓地板、無人員停留，未納入{label} {_fmt(radius)} m 水平距離檢討：{_list(shafts)}。"
+                                f"另一種讀法：管道間、昇降機道也屬{other}，則上列範圍超出 {_fmt(radius)} m，請確認", law))
+    if stairs:
+        notes.append(Note(rule, f"樓梯間不套揚聲器水平 10 m（依第 133 條第 2 款第 5 目，樓梯垂直距離每 15 m 設一個 L 級揚聲器，"
+                                f"由建築物層級規則 SPKR-133-5 檢核）；本層超出 10 m 的樓梯間：{_list(stairs)}。"
+                                f"另一種讀法：樓梯間也屬廣播區域，需符合水平 10 m，請確認", ["D0120029/133/1/2/5"]))
+    if proviso:
+        notes.append(Note(rule, f"小面積房間（居室、走廊 6 ㎡ 以下，其他非居室 30 ㎡ 以下）且與相鄰區域揚聲器相距 8 m 以下，"
+                                f"依第 133 條第 2 款第 4 目但書得免設：{_list(proviso)}", law))
+    return findings, notes
 
 
 def hydrant_distance(floor, eq, ctx, grid=None):
-    return _horizontal("HYD-34", "室內消防栓", "hydrant", 25.0, ["D0120029/34/1/1/1", "D0120029/34/1/2/1"], floor, eq)
+    return _horizontal("HYD-34", "室內消防栓", "hydrant", 25.0, ["D0120029/34/1/1/1", "D0120029/34/1/2/1"], floor, eq, ctx)
 
 
 def speaker_distance(floor, eq, ctx, grid=None):
-    return _horizontal("SPKR-133", "揚聲器", "speaker", 10.0, ["D0120029/133/1/2/4"], floor, eq, small_room_rule=True)
+    return _horizontal("SPKR-133", "揚聲器", "speaker", 10.0, ["D0120029/133/1/2/4"], floor, eq, ctx, speaker=True)
 
 
 # ── 滅火器：第 31 條 ─────────────────────────────────────────────────────
@@ -278,44 +393,153 @@ def speaker_distance(floor, eq, ctx, grid=None):
 EXT_LIMIT = 20.0
 
 
+OUTSIDE_RING = 5.0     # 避難層、屋突層：外框外這個寬度的屋外當作可通行的連接路徑
+
+
+def _non_habitable(r: Room) -> bool:
+    """第 31 條第 3 款「樓面居室」以外的房間：樓梯間、廁所、管道間、儲藏室（房名全是儲藏；倉庫是居室，不算）。名稱衝突的不算。"""
+    return not r.conflict and (r.kind in ("stair", "toilet", "shaft") or _storage(r))
+
+
+def _cells_in(grid: C.WalkGrid, g) -> tuple[tuple[slice, slice], np.ndarray] | None:
+    """可走格中、中心點落在 g 內的格子，只取 g 外接矩形那一塊：回傳（切片, 子遮罩）；沒有格子回 None。
+    逐房只存子遮罩：記憶體與房間外接矩形的總面積成正比，不是「房間數 × 整層格點數」。"""
+    if g.is_empty:
+        return None
+    x0, y0, x1, y1 = g.bounds
+    c0, c1 = max(0, int((x0 - grid.x0) / grid.cell)), min(grid.nx, int((x1 - grid.x0) / grid.cell) + 1)
+    r0, r1 = max(0, int((y0 - grid.y0) / grid.cell)), min(grid.ny, int((y1 - grid.y0) / grid.cell) + 1)
+    if c0 >= c1 or r0 >= r1:
+        return None
+    shapely.prepare(g)
+    sub = grid.free[r0:r1, c0:c1] & shapely.contains_xy(g, grid.gx[r0:r1, c0:c1], grid.gy[r0:r1, c0:c1])
+    return ((slice(r0, r1), slice(c0, c1)), sub) if sub.any() else None
+
+
+def _sub_polygons(grid: C.WalkGrid, sl: tuple[slice, slice], sub: np.ndarray) -> list[Polygon]:
+    """子遮罩轉回多邊形（與 WalkGrid.cells_to_polygons 相同：逐列合併成長條再聯集），只處理外接矩形那一塊。"""
+    if not sub.any():
+        return []
+    edge = np.diff(np.pad(sub, ((0, 0), (1, 1))).astype(np.int8), axis=1)
+    rows, starts = np.nonzero(edge == 1)                  # 每列的長條起點、終點（不含）依列、行排序，一一對應
+    _, ends = np.nonzero(edge == -1)
+    r0, c0, s = sl[0].start, sl[1].start, grid.cell
+    boxes = shapely.box(grid.x0 + (c0 + starts) * s, grid.y0 + (r0 + rows) * s,
+                        grid.x0 + (c0 + ends) * s, grid.y0 + (r0 + rows + 1) * s)
+    return C.pieces(shapely.union_all(boxes))
+
+
+def _outdoor_link(floor: Floor) -> bool:
+    """避難層（1F）與屋突層：樓梯間常只能從屋外、屋頂進出，室內走不到的範圍允許經屋外、屋頂走到滅火器。"""
+    lab = floor.label or ""
+    return lab == "1F" or lab.startswith("R")
+
+
+def _outdoor_distances(floor: Floor, grid: C.WalkGrid, pts, d: np.ndarray, todo: np.ndarray) -> np.ndarray:
+    """室內走不到的格子（todo）改用「室內＋外框外 5 m 屋外（屋突層再加屋頂面）」的步行距離；仍走不到為 inf。
+    只補室內走不到的格子，不拿屋外路徑縮短室內距離。"""
+    extra = floor.outline.buffer(OUTSIDE_RING).difference(floor.outline)
+    if (floor.label or "").startswith("R"):
+        extra = extra.union(floor.outline.difference(floor.region))         # 屋頂面
+    out = C.WalkGrid(floor.walkable.union(extra.difference(floor.walls)), grid.cell)
+    de = out.distances(pts)
+    de[np.isnan(de)] = np.inf
+    rr, cc = np.nonzero(todo)
+    ci = np.clip(((grid.gx[rr, cc] - out.x0) / out.cell).astype(int), 0, out.nx - 1)
+    ri = np.clip(((grid.gy[rr, cc] - out.y0) / out.cell).astype(int), 0, out.ny - 1)
+    d = d.copy()
+    d[rr, cc] = de[ri, ci]
+    return d
+
+
+def _unreachable_why(floor: Floor, room: Room | None) -> tuple[str, str]:
+    """走不進去的原因說明（依房間類型）與改善方式。"""
+    if room is None:
+        return ("這塊未圍成房間的樓地板與滅火器之間沒有可走的路徑，可能只能從挑空、電梯進出，或是牆線、門畫法造成的封閉範圍",
+                "確認此範圍的出入口；若門畫在其他圖層，請設定圖層對應後重新檢核")
+    if room.kind == "stair":
+        return ("樓梯間在本層的門外不屬本層樓地板（挑空、屋外或屋頂），或門沒畫在門圖層，本層算不出步行路徑",
+                "確認樓梯間在本層的出入口；若只能從上下層或屋外進出，請確認經樓梯、屋外至最近滅火器的步行距離")
+    edge = [r.polygon for r in floor.rooms if r.kind in ("void", "outdoor")]
+    if not _outdoor_link(floor):
+        edge.append(floor.outline.exterior)
+    if any(room.polygon.distance(g) <= OPEN_GAP for g in edge):
+        return ("此房間緊鄰挑空或外牆，可能只能從挑空、屋外或上下層進出；若有通往本層的門，可能是門沒畫在門圖層",
+                "確認此房間的出入口；若門畫在其他圖層，請設定圖層對應後重新檢核")
+    return ("此房間與滅火器之間沒有可走的路徑，通常是門沒畫在門圖層，或房間沒有開口",
+            "確認此房間的出入口；若門畫在其他圖層，請設定圖層對應後重新檢核")
+
+
 def extinguisher_walk(floor: Floor, eq: list[Equipment], ctx: Context, grid: C.WalkGrid | None = None):
+    """樓地板上的房間逐房檢核（昇降機道、管道間不檢核）＋開放樓地板；每個房間各列一條。
+    走不進去的範圍寬度不到 0.6 m 或不到 1 ㎡ 的是牆縫，不列。避難層、屋突層室內走不到的範圍改算經屋外、屋頂的距離。
+    解讀設定 habitable_only_extinguisher：樓梯間、廁所、儲藏室等非居室只列說明，不列缺失。
+    逐房的格子只存外接矩形那一塊（大樓層、數百間房時，整層遮罩逐房各存一張會吃掉數 GB 記憶體）。"""
     ext = _of(eq, "extinguisher")
     if not ext:
         return [], []
+    pts = [(e.x, e.y) for e in ext]
     grid = grid or C.WalkGrid(floor.walkable)
-    d = grid.distances([(e.x, e.y) for e in ext])
-    skip = unary_union([r.polygon for r in floor.rooms if r.kind in ("elevator", "shaft")])
-    region = floor.region.difference(skip) if not skip.is_empty else floor.region
-    cells = grid.region_cells(region)
-    findings = []
+    d = grid.distances(pts)
+    zones = [(r, r.polygon.intersection(floor.region)) for r in _floor_rooms(floor) if not _hoistway(r)]
+    zones = [(r, z) for r, g in zones + [(None, p) for p in _open_floor(floor)] if (z := _cells_in(grid, g))]
+    todo = np.zeros_like(grid.free)
+    for _, (sl, sub) in zones:
+        todo[sl] |= sub
+    todo &= np.isinf(d)
+    via_out = None
+    if _outdoor_link(floor) and todo.any():
+        d = _outdoor_distances(floor, grid, pts, d, todo)
+        via_out = todo & np.isfinite(d)
+    del todo
     hard_lim = EXT_LIMIT * (1 + C.WALK_TOL)
-    for sev, mask, desc in (
-        (RED, cells & (d > hard_lim) & ~np.isinf(d), "超過"),
-        (ORANGE, cells & (d > EXT_LIMIT) & (d <= hard_lim), "略超過（在計算誤差範圍內）"),
-    ):
-        for p in grid.cells_to_polygons(mask):
-            rooms = _rooms_touching(floor, p)
-            sub = grid.region_cells(p) & mask
-            dmax = float(d[sub].max()) if sub.any() else float("nan")
-            findings.append(Finding(
-                "EXT-31-3", _sev_for(rooms, sev), "距離超過", floor.label or "",
-                f"{'、'.join(_room_names(rooms)[:3]) or '標示範圍'} 有 {_fmt(p.area)} ㎡ 步行到最近滅火器{desc} {EXT_LIMIT:.0f} m",
-                f"樓面居室任一點至滅火器之步行距離應在 {EXT_LIMIT:.0f} m 以下；範圍內最遠點沿走道約需走 {_fmt(dmax)} m"
-                + ("（格點近似誤差約 ±4%，請人工量測確認）" if sev == ORANGE else ""),
-                "在標示範圍附近（走道或出入口旁）增設滅火器，或移動既有滅火器，使任一點步行 20 m 內可取得",
-                ["D0120029/31/1/3"], rooms=_room_names(rooms), area=p.area, geom=p, metrics={"max_walk": dmax}))
-    unreachable = cells & np.isinf(d)
-    if unreachable.any():
-        polys = grid.cells_to_polygons(unreachable)
-        rooms = sorted({r.name for p in polys for r in _rooms_touching(floor, p)})
-        if polys:
+    habitable_only = ctx.rule("habitable_only_extinguisher")
+    findings, skipped = [], []
+    for room, (sl, cells) in zones:
+        ds = d[sl]
+        rooms = [room] if room else []
+        where = room.name if room else "未圍成房間的樓地板"
+        reference = habitable_only and room is not None and _non_habitable(room)
+        for sev, mask, desc in (
+            (RED, cells & (ds > hard_lim) & ~np.isinf(ds), "超過"),
+            (ORANGE, cells & (ds > EXT_LIMIT) & (ds <= hard_lim), "略超過（在計算誤差範圍內）"),
+        ):
+            polys = _sub_polygons(grid, sl, mask)
+            if not polys:
+                continue
             g = unary_union(polys)
+            dmax = float(ds[mask].max())
+            outside = via_out is not None and bool((mask & via_out[sl]).any())
+            if reference:
+                skipped.append(f"{where} {_fmt(g.area)} ㎡ 步行約 {_fmt(dmax)} m" + ("（經屋外）" if outside else "")
+                               + ("（誤差內）" if sev == ORANGE else ""))
+                continue
             findings.append(Finding(
-                "EXT-31-3", YELLOW, "資料不足", floor.label or "", f"{_fmt(g.area)} ㎡ 無法計算步行距離（走不進去）",
-                "這些範圍與滅火器之間沒有可走的路徑，通常是門沒畫在門圖層，或房間沒有開口",
-                "確認標示房間的出入口；若門畫在其他圖層，請設定圖層對應後重新檢核",
-                ["D0120029/31/1/3"], missing=["標示房間的出入口（門）"], rooms=rooms[:10], area=g.area, geom=g))
-    return findings, []
+                "EXT-31-3", _sev_at(rooms, sev), "距離超過", floor.label or "",
+                f"{where} 有 {_fmt(g.area)} ㎡ 步行到最近滅火器{desc} {EXT_LIMIT:.0f} m",
+                f"樓面居室任一點至滅火器之步行距離應在 {EXT_LIMIT:.0f} m 以下；範圍內最遠點沿走道約需走 {_fmt(dmax)} m"
+                + ("（本層室內走不到，此為經屋外、屋頂繞行的距離；若有室內出入口沒畫出，請補正後重新檢核）" if outside else "")
+                + ("（格點近似誤差約 ±4%，請人工量測確認）" if sev == ORANGE else "") + ("" if rooms else OPEN_WHY),
+                "在標示範圍附近（走道或出入口旁）增設滅火器，或移動既有滅火器，使任一點步行 20 m 內可取得",
+                ["D0120029/31/1/3"], rooms=_room_names(rooms), area=g.area, geom=g,
+                metrics={"max_walk": round(dmax, 2), **({"via_outdoor": True} if outside else {})}))
+        # 走不進去：寬度不到 0.6 m 或不到 1 ㎡ 的是牆縫、窗邊縫，不列
+        polys = [p for p in _sub_polygons(grid, sl, cells & np.isinf(ds)) if p.area >= 1.0 and not p.buffer(-0.3).is_empty]
+        if not polys:
+            continue
+        g = unary_union(polys)
+        if reference:
+            skipped.append(f"{where} {_fmt(g.area)} ㎡ 走不進去")
+            continue
+        why, fix = _unreachable_why(floor, room)
+        findings.append(Finding(
+            "EXT-31-3", YELLOW, "資料不足", floor.label or "", f"{where} 有 {_fmt(g.area)} ㎡ 無法計算步行距離（走不進去）",
+            why, fix, ["D0120029/31/1/3"], missing=["標示房間的出入口（門）"], rooms=_room_names(rooms), area=g.area, geom=g))
+    notes = []
+    if skipped:
+        notes.append(Note("EXT-31-3", f"非居室（樓梯間、廁所、儲藏室），依第 31 條第 3 款「樓面居室任一點」屬參考，未列缺失：{_list(skipped)}。"
+                                      "另一種讀法：整層樓面都要在步行 20 m 內，則上列範圍需人工確認", ["D0120029/31/1/3"]))
+    return findings, notes
 
 
 def extinguisher_count(floor: Floor, eq: list[Equipment], ctx: Context, grid=None):
@@ -406,25 +630,47 @@ def _eff_area(dtype: str, dclass: str, band: str, fp: bool) -> float | None:
 
 
 def detector_count(floor: Floor, eq: list[Equipment], ctx: Context, grid=None):
+    """逐房比對探測器數量（第 120、122 條面積表）。探測器歸房間用 room_near（壓在牆線、門弧、標籤缺口上也算，每個只歸一間）；
+    engine 從上層挑空投影來的探測器（spec 的 projected_from）照常計入。火焰式不適用面積表，另列第 124 條的資料要求。"""
     dets = [e for e in _of(eq, "detector") if "detector_type" in e.spec]
-    if not dets:
+    flames = _of(eq, "flame_detector")
+    if not dets and not flames:
         return [], []
     fp = _fireproof(floor, ctx)
     h = ctx.ceiling_height.get(floor.label or "")
-    findings, exempt = [], []
+    local_ids = {id(d) for d in dets}
+    by_room: dict[int, list[Equipment]] = {}
+    for d in dets + flames:
+        r = floor.room_near(d.x, d.y, 0.3)
+        if r is not None:
+            by_room.setdefault(r.id, []).append(d)
+    findings, exempt, projected = [], [], []
     for room in floor.rooms:
-        if room.kind in ("void", "outdoor", "elevator", "shaft", "stair"):
-            continue                                   # 樓梯、昇降路、管道間依第 122 條第 6、7 款另計
+        if not floor.in_region(room):
+            continue                                   # 屋突層屋頂碎塊、天溝等不算樓地板
+        if room.kind in ("void", "outdoor", "stair") or _hoistway(room):
+            continue                                   # 樓梯、昇降路、管道間依第 122 條第 6、7 款另計（電梯廳、電梯機房照常檢核）
+        mine = by_room.get(room.id, [])
+        local = [d for d in mine if id(d) in local_ids]
+        flame = [d for d in mine if "flame_detector" in d.kinds]
+        srcs = sorted({str(d.spec["projected_from"]) for d in mine if d.spec.get("projected_from")})
+        src = f"（含上層挑空範圍內的探測器，圖號 {'、'.join(srcs)}）" if srcs else ""
+        if srcs:
+            projected.append(f"{room.name} {sum(1 for d in mine if d.spec.get('projected_from'))} 個（圖號 {'、'.join(srcs)}）")
         if room.kind == "corridor" and re.search(r"走廊|通道|走道", " ".join(room.labels)):
-            inside_heat = [d for d in dets if d.spec["detector_type"] != "偵煙式" and room.polygon.covers(Point(d.x, d.y))]
-            if not inside_heat:
+            if not any(d.spec["detector_type"] != "偵煙式" for d in local):
                 continue                               # 走廊、通道的偵煙式依第 122 條第 5 款步行距離另計
         if room.kind == "toilet" and not room.conflict:
             exempt.append(room)
             continue
         if room.area < 2:
             continue
-        inside = [d for d in dets if room.polygon.covers(Point(d.x, d.y))]
+        if not local and flame:
+            continue                                   # 只設火焰式：依第 124 條以監視距離涵蓋（另列資料要求）
+        inside = local
+        # 房內另有火焰式：局限型數量不足時，若火焰式監視範圍涵蓋全室可不計，降為需確認
+        with_flame = (f"；房內另設火焰式探測器 {len(flame)} 個，若其標稱監視距離涵蓋全室（第 124 條），局限型數量可不計，請確認"
+                      if flame else "")
         if not inside:
             findings.append(Finding(
                 "DET-120", _sev_for([room], RED), "未設置", floor.label or "", f"{room.name}（{_fmt(room.area)} ㎡）未設探測器",
@@ -447,8 +693,8 @@ def detector_count(floor: Floor, eq: list[Equipment], ctx: Context, grid=None):
         invalid = any(_eff_area(dtype, dclass, b, f) is None for b in bands for f in fps)
         if not effs:
             findings.append(Finding(
-                "DET-120", RED, "規格不符", floor.label or "", f"{room.name} 的{dtype}{dclass}種探測器不適用此裝置面高度",
-                f"裝置面高度 {h} m 時，{dtype}局限型{dclass}種不得使用（第 114 條選用表）",
+                "DET-120", ORANGE if flame else RED, "規格不符", floor.label or "", f"{room.name} 的{dtype}{dclass}種探測器不適用此裝置面高度",
+                f"裝置面高度 {h} m 時，{dtype}局限型{dclass}種不得使用（第 114 條選用表）{src}{with_flame}",
                 "改用適用該高度的探測器種類（8 m 以上用差動式分布型、光電式等；15 m 以上限偵煙式一種、光電式分離型或火焰式）",
                 [law, "D0120029/114/1"], rooms=[room.name], area=room.area, geom=room.polygon))
             continue
@@ -460,11 +706,13 @@ def detector_count(floor: Floor, eq: list[Equipment], ctx: Context, grid=None):
         why = (f"{room.name} 約 {_fmt(room.area)} ㎡，{dtype}局限型{dclass}種，{hdesc}，"
                f"{'防火構造' if fp else ('非防火構造' if fp is False else '構造未知')}；"
                f"有效探測範圍 {_fmt(max(effs))}{'' if max(effs) == min(effs) else f'～{_fmt(min(effs))}'} ㎡，"
-               f"需 {need_l}{'' if need_l == need_s else f'～{need_s}'} 個，現有 {have} 個")
+               f"需 {need_l}{'' if need_l == need_s else f'～{need_s}'} 個，現有 {have} 個{src}")
         if have < need_l:
+            sev = _sev_for([room], RED)
             findings.append(Finding(
-                "DET-120", _sev_for([room], RED), "數量不足", floor.label or "", f"{room.name} 探測器不足（需 {need_l} 個，現有 {have} 個）",
-                why, f"在 {room.name} 增設 {need_l - have} 個探測器，並平均配置於探測區域", [law],
+                "DET-120", ORANGE if flame and sev == RED else sev, "數量不足", floor.label or "",
+                f"{room.name} 探測器不足（需 {need_l} 個，現有 {have} 個）", why + with_flame,
+                f"在 {room.name} 增設 {need_l - have} 個探測器，並平均配置於探測區域", [law],
                 rooms=[room.name], area=room.area, geom=room.polygon, metrics={"need": [need_l, need_s], "have": have}))
         else:
             missing = []
@@ -473,12 +721,27 @@ def detector_count(floor: Floor, eq: list[Equipment], ctx: Context, grid=None):
             if fp is None:
                 missing.append("建築物是否為防火構造")
             findings.append(Finding(
-                "DET-120", YELLOW, "資料不足", floor.label or "", f"{room.name} 探測器數量需補資料才能判定", why,
+                "DET-120", YELLOW, "資料不足", floor.label or "", f"{room.name} 探測器數量需補資料才能判定", why + with_flame,
                 f"補齊資料後重新檢核；若條件較嚴格，需增設至 {need_s} 個", [law], missing=missing,
                 rooms=[room.name], area=room.area, geom=room.polygon, metrics={"need": [need_l, need_s], "have": have}))
+    if flames:
+        # 標示範圍：火焰式所在的房間（挑空裡的只標設備位置；挑空下方的房間由投影到下層的設備另列）
+        rooms = [r for r in floor.rooms if r.kind not in ("void", "outdoor") and floor.in_region(r)
+                 and any("flame_detector" in d.kinds for d in by_room.get(r.id, []))]
+        srcs = sorted({str(d.spec["projected_from"]) for d in flames if d.spec.get("projected_from")})
+        g = unary_union([r.polygon for r in rooms] + [Point(d.x, d.y).buffer(1.0) for d in flames])
+        findings.append(Finding(
+            "DET-124", BLUE, "需檢附資料", floor.label or "", f"火焰式探測器 {len(flames)} 個：請檢附標稱監視距離與視角",
+            "火焰式探測器不適用局限型的有效探測面積表；依第 124 條第 2 款，距樓地板面 1.2 m 範圍內之空間應在探測器標稱監視距離範圍內，"
+            "監視範圍無法由平面圖判定" + (f"（含上層挑空範圍內的火焰式探測器，圖號 {'、'.join(srcs)}）" if srcs else ""),
+            f"檢附火焰式探測器型錄（標稱監視距離、視角），並在圖上繪出監視範圍，確認{'、'.join(_room_names(rooms)[:3]) or '設置處所'}"
+            "距樓地板 1.2 m 內的空間都在監視範圍內", ["D0120029/124/1/2"],
+            rooms=_room_names(rooms), area=None, geom=g, metrics={"count": len(flames)}))
     notes = []
     if exempt:
         notes.append(Note("DET-120", "免設探測器處所（廁所、浴室）：" + "、".join(r.name for r in exempt), ["D0120029/116/1/3"]))
+    if projected:
+        notes.append(Note("DET-120", f"下列房間計入上層挑空範圍內的探測器（依樓層對位投影）：{_list(projected)}", ["D0120029/120/1/2"]))
     return findings, notes
 
 
