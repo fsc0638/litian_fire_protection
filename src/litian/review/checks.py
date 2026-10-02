@@ -28,6 +28,16 @@ RED, ORANGE, YELLOW, BLUE = "RED", "ORANGE", "YELLOW", "BLUE"
 SEVERITY_LABEL = {RED: "不符", ORANGE: "需確認", YELLOW: "資料不足", BLUE: "建議"}
 UNSURE_KINDS = ("unknown", "mixed")
 
+# 法規解讀的預設（條文沒寫死、實務有不同讀法的地方）。事務所可在案件條件 policy 覆寫；
+# 預設只降嚴重度並在缺失裡寫明兩種讀法，不直接刪除缺失。
+DEFAULT_POLICY = {
+    "shaft_in_coverage": False,              # 管道間、昇降機道算不算水平距離檢討範圍（無樓地板、無人員停留）
+    "stair_speaker_vertical": True,          # 樓梯間廣播依第 133 條第 2 款第 5 目（垂直每 15 m 一個 L 級），不套水平 10 m
+    "habitable_only_extinguisher": True,     # 滅火器步行距離只檢討居室（第 31 條第 3 款「樓面居室任一點」）
+    "exit_sign_counts_for_direction": True,  # 出口標示燈有效範圍併入走廊避難方向指示燈涵蓋（結果標需確認）
+    "voluntary_signs_note": True,            # 依第 23 條非應設的標示設備（自主設置），涵蓋缺失改為建議
+}
+
 
 @dataclass
 class Context:
@@ -41,6 +51,11 @@ class Context:
     site_area: float | None = None            # 基地面積 ㎡
     no_opening: list[str] = field(default_factory=list)              # 無開口樓層（樓層代號）
     floor_area: dict[str, float] = field(default_factory=dict)       # 樓地板面積覆寫（面積計算表數字）
+    policy: dict = field(default_factory=dict)                       # 法規解讀覆寫（鍵見 DEFAULT_POLICY）
+
+    def rule(self, key: str) -> bool:
+        """法規解讀設定：案件有覆寫用覆寫值，否則用預設。"""
+        return bool(self.policy.get(key, DEFAULT_POLICY[key]))
 
     def __post_init__(self):
         if self.occupancy_group is None and self.occupancy:
@@ -58,7 +73,8 @@ class Context:
             stories=int(d["stories"]) if d.get("stories") not in (None, "") else None,
             height=num(d.get("height")), site_area=num(d.get("site_area")),
             no_opening=list(d.get("no_opening") or []),
-            floor_area={k: float(v) for k, v in (d.get("floor_area") or {}).items() if v not in (None, "")})
+            floor_area={k: float(v) for k, v in (d.get("floor_area") or {}).items() if v not in (None, "")},
+            policy={k: bool(v) for k, v in (d.get("policy") or {}).items() if k in DEFAULT_POLICY})
 
 
 @dataclass
