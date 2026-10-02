@@ -78,6 +78,7 @@ def test_analyze_finds_rooms_names_and_areas():
     assert got["辦公室"][1] == pytest.approx(14.7 * 14.6, rel=0.01)
     assert got["男廁"][1] == pytest.approx(14.7 * 4.7, rel=0.01)
     assert fl.area == pytest.approx(30 * 15, rel=0.01)
+    assert all(r.polygon.difference(fl.outline).area < 0.01 for r in fl.rooms)      # 房間一定在樓層外框內
     assert fl.walkable.area < fl.area and fl.walkable.contains(box(15, 6.2, 15.05, 6.8))   # 門洞可走
 
 

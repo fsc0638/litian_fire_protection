@@ -312,8 +312,11 @@ def extinguisher_count(floor: Floor, eq: list[Equipment], ctx: Context):
 
 
 def extinguisher_electrical(floor: Floor, eq: list[Equipment], ctx: Context):
-    """第 31 條第 2 款：電氣設備使用之處所，每 100 ㎡（含未滿）另設一滅火器（放在該室內或出入口外 3 m 內）。"""
+    """第 31 條第 2 款：電氣設備使用之處所，每 100 ㎡（含未滿）另設一滅火器（放在該室內或出入口外 3 m 內）。
+    本層圖上完全沒有滅火器時不跑（多半不是消防設備圖；是否應設由場所判定規則處理）。"""
     ext = _of(eq, "extinguisher")
+    if not ext:
+        return [], []
     findings = []
     for room in floor.rooms:
         if room.kind != "electrical":

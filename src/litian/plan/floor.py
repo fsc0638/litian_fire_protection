@@ -228,10 +228,11 @@ def analyze(layers: dict[str, list], texts: list[dict], *, scale: float, title: 
         raise ValueError("牆線無法圍出任何範圍")
 
     closed = U.buffer(CLOSE_R, join_style="mitre").buffer(-CLOSE_R, join_style="mitre")
-    outline = max((_filled(p) for p in _parts(closed)), key=lambda p: p.area)
+    outline0 = max((_filled(p) for p in _parts(closed)), key=lambda p: p.area)
 
-    # 房間：外框內每個聯集部分的洞；洞裡若有另一個部分（獨立的柱、隔間），扣掉它的外輪廓
-    inner = [p for p in parts if outline.contains(p.representative_point())]
+    # 房間：外框附近每個聯集部分的洞；洞裡若有另一個部分（獨立的柱、隔間），扣掉它的外輪廓
+    zone = outline0.buffer(CLOSE_R)
+    inner = [p for p in parts if zone.contains(p.representative_point())]
     islands = [_filled(p) for p in inner]
     name_pts = [(Point(t["x"] * scale, t["y"] * scale), t["t"].strip()) for t in texts if is_room_name(t["t"])]
     rooms: list[Room] = []
@@ -252,6 +253,9 @@ def analyze(layers: dict[str, list], texts: list[dict], *, scale: float, title: 
     rooms.sort(key=lambda r: -r.area)
     for i, r in enumerate(rooms, 1):
         r.id = i
+    # 外框輪廓若在某處只以一點相接，會「凹」進房間把整間排除；圍得出來的房間一定是樓地板，併回外框
+    merged = unary_union([outline0] + [r.polygon.buffer(2 * SEAL, join_style="mitre") for r in rooms])
+    outline = max((_filled(p) for p in _parts(merged)), key=lambda p: p.area)
     conflicts = [r.name for r in rooms if r.conflict]
     if conflicts:
         warnings.append(f"{len(conflicts)} 個範圍內有不同種類的房間名稱（可能門沒畫、房間連在一起）：" + "、".join(conflicts[:5]))
