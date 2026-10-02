@@ -48,6 +48,13 @@ CREATE TABLE IF NOT EXISTS case_sheet (
   bbox double precision[],
   UNIQUE (file_id, idx)
 );
+ALTER TABLE case_file ADD COLUMN IF NOT EXISTS review_only boolean NOT NULL DEFAULT false;
+CREATE TABLE IF NOT EXISTS case_context (
+  case_id bigint PRIMARY KEY REFERENCES review_case ON DELETE CASCADE,
+  context jsonb NOT NULL,               -- review.checks.Context 的欄位（場所類別、天花板高度…）
+  updated_by text,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS file_review (
   file_id bigint PRIMARY KEY REFERENCES case_file ON DELETE CASCADE,
   status text NOT NULL,                 -- done（已檢核）｜failed（檢核失敗）
@@ -66,7 +73,7 @@ MAX_ATTEMPTS = 3
 CLAIM_SQL = """
 UPDATE case_file SET status = 'processing', attempts = attempts + 1, updated_at = now()
 WHERE id = (SELECT id FROM case_file WHERE status = 'queued' ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1)
-RETURNING id, case_id, name, kind, path, attempts
+RETURNING id, case_id, name, kind, path, attempts, review_only
 """
 # 處理中卻超過時間沒更新（worker 當掉）：還有次數就退回排隊，否則記失敗
 RECOVER_SQL = """
@@ -125,9 +132,13 @@ def save_result(conn, file_id: int, ir: dict, stats: dict, status: str = "done")
     mark(conn, file_id, status, stats)
 
 
-def mark(conn, file_id: int, status: str, stats: dict) -> None:
-    conn.execute("UPDATE case_file SET status = %s, error = NULL, stats = %s::jsonb, updated_at = now() "
-                 "WHERE id = %s", (status, json.dumps(stats, ensure_ascii=False), file_id))
+def mark(conn, file_id: int, status: str, stats: dict | None = None) -> None:
+    if stats is None:
+        conn.execute("UPDATE case_file SET status = %s, error = NULL, review_only = false, updated_at = now() "
+                     "WHERE id = %s", (status, file_id))
+        return
+    conn.execute("UPDATE case_file SET status = %s, error = NULL, review_only = false, stats = %s::jsonb, "
+                 "updated_at = now() WHERE id = %s", (status, json.dumps(stats, ensure_ascii=False), file_id))
 
 
 def save_review(conn, file_id: int, status: str, result: dict | None, error: str | None, svg_dir: str | None) -> None:
@@ -136,6 +147,30 @@ def save_review(conn, file_id: int, status: str, result: dict | None, error: str
                  "error = EXCLUDED.error, svg_dir = EXCLUDED.svg_dir, created_at = now()",
                  (file_id, status, json.dumps(result, ensure_ascii=False) if result is not None else None,
                   error[:500] if error else None, svg_dir))
+
+
+def get_context(conn, case_id: int) -> dict:
+    row = conn.execute("SELECT context FROM case_context WHERE case_id = %s", (case_id,)).fetchone()
+    return row["context"] if row else {}
+
+
+def save_context(conn, case_id: int, context: dict, user: str | None) -> None:
+    conn.execute("INSERT INTO case_context (case_id, context, updated_by) VALUES (%s, %s::jsonb, %s) "
+                 "ON CONFLICT (case_id) DO UPDATE SET context = EXCLUDED.context, updated_by = EXCLUDED.updated_by, "
+                 "updated_at = now()", (case_id, json.dumps(context, ensure_ascii=False), user))
+
+
+def requeue_reviews(conn, case_id: int) -> int:
+    """檢核條件改了：已檢核過的檔案只重跑檢核（不重新轉檔、抽取）。"""
+    return conn.execute(
+        "UPDATE case_file SET status = 'queued', review_only = true, attempts = 0, updated_at = now() "
+        "WHERE case_id = %s AND status IN ('done', 'failed') AND id IN (SELECT file_id FROM file_review)",
+        (case_id,)).rowcount
+
+
+def load_ir(conn, file_id: int) -> dict | None:
+    row = conn.execute("SELECT ir FROM file_ir WHERE file_id = %s", (file_id,)).fetchone()
+    return row["ir"] if row else None
 
 
 def save_failure(conn, file_id: int, error: str, retry: bool) -> None:

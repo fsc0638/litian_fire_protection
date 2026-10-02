@@ -354,7 +354,9 @@ def test_worker_runs_review_after_extraction(tmp_path, monkeypatch):
     dxf = tmp_path / "001_F-101.dxf"
     make_fire_dxf(dxf)
     saved, reviews, failed = [], [], []
-    monkeypatch.setattr(W.ST, "claim", lambda conn: {"id": 7, "name": "F-101.dxf", "kind": "dxf", "path": str(dxf), "attempts": 1})
+    monkeypatch.setattr(W.ST, "claim", lambda conn: {"id": 7, "case_id": 1, "name": "F-101.dxf", "kind": "dxf", "path": str(dxf),
+                                                    "attempts": 1, "review_only": False})
+    monkeypatch.setattr(W.ST, "get_context", lambda conn, cid: {"occupancy": "乙-6", "ceiling_height": {"1F": 3.0}})
     monkeypatch.setattr(W.ST, "save_result", lambda conn, fid, ir, stats, status="done": saved.append((fid, status)))
     marks = []
     monkeypatch.setattr(W.ST, "mark", lambda conn, fid, status, stats: marks.append((fid, status, stats.get("review"))))
@@ -383,3 +385,32 @@ def test_farthest_point_is_found_inside_the_gap():
     heads = sprinklers(fl, 3.2, skip=box(3, 3, 10, 10))
     f, _ = K.sprinkler_distance(fl, heads, K.Context())
     assert f[0].metrics["farthest"] == pytest.approx(5.0, abs=0.3)            # 7 m 見方的洞中間，不是邊界上的 2.3 m
+
+
+def test_worker_review_only_rerun_uses_saved_ir_and_context(tmp_path, monkeypatch):
+    from litian.drawing import ir as IR
+    from litian.drawing import worker as W
+    from tests.test_drawing_pipeline import FakeConn
+    dxf = tmp_path / "001_F-101.dxf"
+    make_fire_dxf(dxf)
+    ir = IR.extract(dxf)
+    marks, reviews = [], []
+    monkeypatch.setattr(W.ST, "claim", lambda conn: {"id": 7, "case_id": 1, "name": "F-101.dxf", "kind": "dxf", "path": str(dxf),
+                                                    "attempts": 1, "review_only": True})
+    monkeypatch.setattr(W.ST, "load_ir", lambda conn, fid: ir)
+    monkeypatch.setattr(W.ST, "get_context", lambda conn, cid: {"occupancy": "乙-6"})
+    monkeypatch.setattr(W.ST, "mark", lambda conn, fid, status, stats=None: marks.append(status))
+    monkeypatch.setattr(W.ST, "save_review", lambda conn, fid, status, result, error, svg_dir: reviews.append((status, result)))
+    monkeypatch.setattr(W, "extract_in_subprocess", lambda *a: (_ for _ in ()).throw(AssertionError("不應重新抽取")))
+    monkeypatch.setattr(W.ST, "save_failure", lambda conn, fid, err, retry: (_ for _ in ()).throw(AssertionError(err)))
+    assert W.run_once(FakeConn(), tmp_path) is True
+    assert marks == ["reviewing", "done"] and reviews[0][0] == "done"
+    assert reviews[0][1]["floors"][0]["label"] == "1F"
+
+
+def test_context_from_dict_and_group():
+    c = K.Context.from_dict({"occupancy": "丁-2", "ceiling_height": {"1F": "4.5", "2F": ""}, "fireproof": True,
+                             "stories": "3", "height": "", "no_opening": ["B1"]})
+    assert c.occupancy_group == "2-4" and c.ceiling_height == {"1F": 4.5} and c.fireproof is True
+    assert c.stories == 3 and c.height is None and c.no_opening == ["B1"]
+    assert K.Context(occupancy="甲-5").occupancy_group == "1-5" and K.Context().occupancy_group is None

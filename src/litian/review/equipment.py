@@ -22,14 +22,19 @@ LEGEND_JSON = Path("data/lawdb/legend.json")
 # 檢核用的設備種類 ← 圖例名稱（一個圖例可以同時是兩種，例：綜合消防栓箱含連結送水管出水口）
 KIND_RULES = [
     ("extinguisher", r"^(乾粉滅火器|大型滅火器)$"),
-    ("hydrant", r"^室內消防栓$|^綜合消防栓箱"),
+    ("hydrant", r"^室內消防栓$|^綜合消防栓"),
+    ("outdoor_hydrant", r"^室外消防栓"),
     ("standpipe_outlet", r"連結送水管出水口"),
     ("sprinkler", r"^密閉式撒水頭|^撒水頭（附防護板）$"),
     ("sprinkler_sidewall", r"^撒水頭（側壁式）$"),
     ("detector", r"[局侷]限型探測器"),
+    ("manual_alarm", r"^手動警報機$"),
+    ("end_test_valve", r"^末端查驗閥$"),
+    ("alarm_valve", r"^自動警報逆止閥"),
+    ("emergency_outlet", r"緊急電源插座"),
     ("speaker", r"^揚聲器"),
     ("exit_sign", r"^出口標示燈$"),
-    ("direction_light", r"^避難方向指示燈"),
+    ("direction_light", r"^避難方向指示燈|兼樓梯避難方向指示燈"),
     ("emergency_light", r"^緊急照明燈"),
     ("smoke_vent", r"^排煙口"),
 ]
@@ -37,7 +42,8 @@ KIND_LABEL = {
     "extinguisher": "滅火器", "hydrant": "室內消防栓", "standpipe_outlet": "連結送水管出水口",
     "sprinkler": "撒水頭", "sprinkler_sidewall": "側壁型撒水頭", "detector": "探測器", "speaker": "揚聲器",
     "exit_sign": "出口標示燈", "direction_light": "避難方向指示燈", "emergency_light": "緊急照明燈",
-    "smoke_vent": "排煙口",
+    "smoke_vent": "排煙口", "outdoor_hydrant": "室外消防栓", "manual_alarm": "手動警報機",
+    "end_test_valve": "末端查驗閥", "alarm_valve": "自動警報逆止閥", "emergency_outlet": "緊急電源插座",
 }
 DETECTOR_RE = re.compile(r"(差動式|定溫式|補償式|偵煙式)[局侷]限型探測器（(特種|[123])")
 

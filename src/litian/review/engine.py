@@ -20,6 +20,7 @@ from litian.plan import geometry as G
 from litian.review import checks as K
 from litian.review import coverage as C
 from litian.review import equipment as E
+from litian.review import required as RQ
 
 EQUIP_MARGIN = 2.0      # 外框外 2 m 內的設備（送水口、壁掛）仍算這層；更遠的多半是圖例表
 
@@ -39,6 +40,9 @@ class FloorResult:
 @dataclass
 class Result:
     floors: list[FloorResult] = field(default_factory=list)
+    profile: RQ.Profile | None = None
+    requirements: list[RQ.Requirement] = field(default_factory=list)
+    building_findings: list[K.Finding] = field(default_factory=list)
     unknown_blocks: Counter = field(default_factory=Counter)
     warnings: list[str] = field(default_factory=list)
     seconds: float = 0.0
@@ -54,9 +58,49 @@ def review_floor(fl: F.Floor, eq: list[E.Equipment], ctx: K.Context):
             f, n = fn(fl, eq, ctx)
         findings.extend(f)
         notes.extend(n)
+    sort_findings(findings)
+    return findings, notes
+
+
+def sort_findings(findings: list[K.Finding]) -> None:
     order = {K.RED: 0, K.ORANGE: 1, K.YELLOW: 2, K.BLUE: 3}
     findings.sort(key=lambda x: (order[x.severity], -(x.area or 0)))
-    return findings, notes
+
+
+def presence_findings(res: Result) -> None:
+    """應設設備（第 14～30-1 條）vs 圖面：應設卻整層沒有該設備 → 缺失。"""
+    plan_floors = [fr for fr in res.floors if RQ._level(fr.floor.label or "")[0] in ("above", "base")]
+    if not plan_floors:
+        return
+    required = [r for r in res.requirements if r.status == RQ.REQUIRED and r.kinds]
+    if not any(fr.equipment for fr in res.floors):
+        if required:
+            res.building_findings.append(K.Finding(
+                "REQ", K.YELLOW, "資料不足", "全棟", "圖面未認出任何消防設備，無法比對應設設備",
+                "依場所判定應設：" + "、".join(r.equipment for r in required) + "；但圖上沒有認得的消防設備符號"
+                "（可能上傳的是建築圖，或設備圖塊名稱不在圖例字典中）",
+                "上傳消防設備平面圖；若已上傳，請確認設備圖塊名稱並補進圖塊字典",
+                sorted({law for r in required for law in r.law}), missing=["消防設備平面圖"]))
+        return
+    for r in required:
+        targets = [fr for fr in plan_floors if r.floors is None or fr.floor.label in r.floors]
+        for fr in targets:
+            if any(k in e.kinds for e in fr.equipment for k in r.kinds):
+                continue
+            sev, extra, law = K.RED, "", list(r.law)
+            has_spk = any("sprinkler" in e.kinds for e in fr.equipment)
+            if r.key == "15" and has_spk:
+                sev, extra = K.ORANGE, "；本層設有自動撒水設備，若在其有效範圍內得免設（第 15 條第 2 項），請確認"
+                law.append("D0120029/15/2")
+            if r.key == "19" and has_spk and any("第 19 條第 2 項" in n for n in r.notes):
+                sev, extra = K.ORANGE, "；本層設有自動撒水設備，符合條件者在其有效範圍內得免設（第 19 條第 2 項），請確認"
+                law.append("D0120029/19/2")
+            fr.findings.append(K.Finding(
+                f"REQ-{r.key}", sev, "未設置", fr.floor.label or "", f"依規定應設{r.equipment}，本層圖上未見",
+                f"判定理由：{r.why}{extra}", f"於本層配置{r.equipment}，並依相關設置規定檢討位置與數量",
+                law, metrics={"equipment": r.equipment}))
+    for fr in res.floors:
+        sort_findings(fr.findings)
 
 
 def review_dxf(path: str | Path, *, ctx: K.Context | None = None, dictionary: E.Dictionary | None = None,
@@ -92,6 +136,10 @@ def review_dxf(path: str | Path, *, ctx: K.Context | None = None, dictionary: E.
         inside = [e for e in eq if zone.covers(Point(e.x, e.y))]
         findings, notes = review_floor(fl, inside, ctx)
         res.floors.append(FloorResult(s["idx"], number, title, fl, inside, findings, notes, len(eq) - len(inside)))
+    if res.floors:
+        res.profile = RQ.build_profile(res.floors, ctx)
+        res.requirements = RQ.evaluate(res.profile)
+        presence_findings(res)
     res.seconds = round(time.time() - t0, 1)
     return res
 
@@ -129,15 +177,35 @@ def to_dict(res: Result, geom: bool = True) -> dict:
                           **({"geom": _geo(f.geom)} if geom else {})}
                          for i, f in enumerate(fr.findings, 1)],
         })
-    return {"floors": floors, "unknown_blocks": dict(res.unknown_blocks.most_common(50)),
+    building = None
+    if res.profile is not None:
+        p = res.profile
+        building = {
+            "profile": {"occupancy": p.occupancy, "stories": p.stories, "height": p.height, "site_area": p.site_area,
+                        "total_area": round(p.total_area, 2), "roof_area": round(p.roof_area, 2),
+                        "floors": [{"label": f.label, "level": f.level, "area": round(f.area, 2), "no_opening": f.no_opening}
+                                   for f in p.floors],
+                        "high_rise": p.high_rise, "notes": p.notes},
+            "requirements": [{"key": r.key, "equipment": r.equipment, "kinds": list(r.kinds), "status": r.status,
+                              "why": r.why, "law": r.law, "floors": r.floors, "missing": r.missing, "notes": r.notes}
+                             for r in res.requirements],
+            "findings": [{"no": i, "rule": f.rule, "severity": f.severity, "category": f.category, "floor": f.floor,
+                          "title": f.title, "why": f.why, "fix": f.fix, "law": f.law, "missing": f.missing,
+                          "rooms": f.rooms, "area": None, "metrics": f.metrics, "bbox": None}
+                         for i, f in enumerate(res.building_findings, 1)],
+        }
+    return {"floors": floors, "building": building, "unknown_blocks": dict(res.unknown_blocks.most_common(50)),
             "warnings": res.warnings, "seconds": res.seconds}
 
 
 def main(argv: list[str]) -> int:
-    """python -m litian.review.engine <in.dxf> <out.json> [--ir ir.json] [--svg 資料夾] [--no-geom]"""
+    """python -m litian.review.engine <in.dxf> <out.json> [--ir ir.json] [--ctx 條件.json] [--svg 資料夾] [--no-geom]"""
     src, dst = argv[1], argv[2]
     ir = json.loads(Path(argv[argv.index("--ir") + 1]).read_text(encoding="utf-8")) if "--ir" in argv else None
-    res = review_dxf(src, ir=ir)
+    ctx = None
+    if "--ctx" in argv:
+        ctx = K.Context.from_dict(json.loads(Path(argv[argv.index("--ctx") + 1]).read_text(encoding="utf-8")))
+    res = review_dxf(src, ir=ir, ctx=ctx)
     Path(dst).write_text(json.dumps(to_dict(res, geom="--no-geom" not in argv), ensure_ascii=False), encoding="utf-8")
     if "--svg" in argv:
         from litian.review import render

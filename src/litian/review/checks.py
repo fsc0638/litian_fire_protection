@@ -31,10 +31,34 @@ UNSURE_KINDS = ("unknown", "mixed")
 
 @dataclass
 class Context:
-    """建物條件（M2 建物資料完成後由面積計算表等填入；None＝未知）。"""
-    occupancy_group: str | None = None        # 第 12 條款別："1-5"（第一、五款）或 "2-4"（第二至四款）
+    """建物條件：審圖人員在工作台補填（之後也可由面積計算表帶入）；None＝未知。"""
+    occupancy: str | None = None              # 第 12 條場所代碼，例："丁-2"、"乙-6"
+    occupancy_group: str | None = None        # 第 12 條款別："1-5"（第一、五款）或 "2-4"（第二至四款）；未給時由 occupancy 推得
     ceiling_height: dict[str, float] = field(default_factory=dict)   # 樓層代號 → 天花板（裝置面）高度 m
     fireproof: bool | None = None             # 覆寫圖上判讀
+    stories: int | None = None                # 地上層數；未給時由平面圖樓層推得
+    height: float | None = None               # 建築物高度 m
+    site_area: float | None = None            # 基地面積 ㎡
+    no_opening: list[str] = field(default_factory=list)              # 無開口樓層（樓層代號）
+    floor_area: dict[str, float] = field(default_factory=dict)       # 樓地板面積覆寫（面積計算表數字）
+
+    def __post_init__(self):
+        if self.occupancy_group is None and self.occupancy:
+            cls = self.occupancy.split("-")[0]
+            self.occupancy_group = "1-5" if cls in ("甲", "戊") else ("2-4" if cls in ("乙", "丙", "丁") else None)
+
+    @classmethod
+    def from_dict(cls, d: dict | None) -> "Context":
+        d = d or {}
+        num = lambda v: float(v) if v not in (None, "") else None  # noqa: E731
+        return cls(
+            occupancy=d.get("occupancy") or None,
+            ceiling_height={k: float(v) for k, v in (d.get("ceiling_height") or {}).items() if v not in (None, "")},
+            fireproof=d.get("fireproof") if d.get("fireproof") in (True, False) else None,
+            stories=int(d["stories"]) if d.get("stories") not in (None, "") else None,
+            height=num(d.get("height")), site_area=num(d.get("site_area")),
+            no_opening=list(d.get("no_opening") or []),
+            floor_area={k: float(v) for k, v in (d.get("floor_area") or {}).items() if v not in (None, "")})
 
 
 @dataclass

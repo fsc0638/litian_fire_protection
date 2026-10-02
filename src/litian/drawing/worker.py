@@ -59,20 +59,50 @@ def has_floor_plans(ir: dict) -> bool:
     return any(floor_label(sheet_title(s["meta"])) for s in ir["sheets"])
 
 
-def review_in_subprocess(dxf: Path, workdir: Path, svg_dir: Path) -> dict:
+def review_in_subprocess(dxf: Path, workdir: Path, svg_dir: Path, context: dict | None = None) -> dict:
     out = workdir / "review.json"
+    ctx = workdir / "context.json"
+    ctx.write_text(json.dumps(context or {}, ensure_ascii=False), encoding="utf-8")
     _run(["litian.review.engine", str(dxf), str(out), "--ir", str(workdir / "ir.json"), "--svg", str(svg_dir),
-          "--no-geom"], REVIEW_TIMEOUT, "檢核")
+          "--ctx", str(ctx), "--no-geom"], REVIEW_TIMEOUT, "檢核")
     return json.loads(out.read_text(encoding="utf-8"))
+
+
+def run_review(conn, job: dict, src: Path, work: Path, stats: dict | None) -> None:
+    """檢核失敗不影響抽取結果（文字、圖紙照常可看），只記下原因。"""
+    path = Path(job["path"])
+    svg_dir = path.with_name(path.name + ".review")
+    try:
+        result = review_in_subprocess(src, work, svg_dir, ST.get_context(conn, job["case_id"]))
+        ST.save_review(conn, job["id"], "done", result, None, str(svg_dir))
+        if stats is not None:
+            stats["review"] = {"floors": len(result["floors"]),
+                               "findings": sum(len(f["findings"]) for f in result["floors"])}
+    except Exception as e:
+        ST.save_review(conn, job["id"], "failed", None, f"{type(e).__name__}: {e}", None)
+        log.warning("review failed file=%s error=%s", job["id"], e)
+    ST.mark(conn, job["id"], "done", stats)
 
 
 def process(conn, job: dict, spool: Path) -> dict:
     path = Path(job["path"])
+    converted = path.with_name(path.stem + ".converted.dxf")
+    if job.get("review_only"):
+        # 只重跑檢核（檢核條件改了）：用已存的中介資料與轉好的 DXF
+        ir = ST.load_ir(conn, job["id"])
+        src = converted if job["kind"] == "dwg" else path
+        if ir is not None and src.exists():
+            with tempfile.TemporaryDirectory() as d:
+                work = Path(d)
+                (work / "ir.json").write_text(json.dumps(ir, ensure_ascii=False), encoding="utf-8")
+                ST.mark(conn, job["id"], "reviewing")
+                run_review(conn, job, src, work, None)
+            return {"review_only": True}
     if job["kind"] == "dwg":
         jid = f"f{job['id']}"
         CC.submit(spool, jid, path)
         dxf, _ = CC.wait(spool, jid, CONVERT_TIMEOUT)
-        src = path.with_name(path.stem + ".converted.dxf")   # 保留轉好的 DXF，之後重新抽取不必再轉
+        src = converted                                      # 保留轉好的 DXF，之後重新抽取、重跑檢核不必再轉
         shutil.move(str(dxf), src)
         CC.cleanup(spool, jid)
     else:
@@ -84,17 +114,7 @@ def process(conn, job: dict, spool: Path) -> dict:
         with conn.transaction():
             ST.save_result(conn, job["id"], ir, stats, status="reviewing" if review else "done")
         if review:
-            # 檢核失敗不影響抽取結果（文字、圖紙照常可看），只記下原因
-            svg_dir = path.with_name(path.name + ".review")
-            try:
-                result = review_in_subprocess(src, work, svg_dir)
-                ST.save_review(conn, job["id"], "done", result, None, str(svg_dir))
-                stats["review"] = {"floors": len(result["floors"]),
-                                   "findings": sum(len(f["findings"]) for f in result["floors"])}
-            except Exception as e:
-                ST.save_review(conn, job["id"], "failed", None, f"{type(e).__name__}: {e}", None)
-                log.warning("review failed file=%s error=%s", job["id"], e)
-            ST.mark(conn, job["id"], "done", stats)
+            run_review(conn, job, src, work, stats)
     return stats
 
 
@@ -104,7 +124,8 @@ def run_once(conn, spool: Path) -> bool:
         return False
     try:
         stats = process(conn, job, spool)
-        log.info("done file=%s name=%s sheets=%s texts=%s", job["id"], job["name"], stats["sheets"], stats["texts"])
+        log.info("done file=%s name=%s %s", job["id"], job["name"],
+                 "review-only" if stats.get("review_only") else f"sheets={stats['sheets']} texts={stats['texts']}")
     except Exception as e:
         # 只有「等轉檔逾時」值得重試（轉檔服務可能剛好在重啟）；其他錯誤重試結果相同
         retry = isinstance(e, CC.ConvertError) and "逾時" in str(e) and job["attempts"] < ST.MAX_ATTEMPTS
