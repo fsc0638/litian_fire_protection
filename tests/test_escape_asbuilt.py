@@ -81,9 +81,15 @@ def test_refuge_exterior_door_without_sign_is_red():
 
 
 def test_exterior_doors_are_not_targets_above_refuge_floor():
+    """非避難層外牆上的門不當目標，但兩類都要寫進說明（畫在連續牆線上的門不能無聲略過）。"""
     fl = hall("貳層平面圖", in_wall=True)
     f, notes = ESC.exit_signs(fl, [exit_sign(19.5, 7.5)], K.Context())
-    assert f == [] and any("不是避難層" in n.text and "1 處" in n.text for n in notes)
+    upper = [n for n in notes if "不是避難層" in n.text]
+    assert f == [] and len(upper) == 1
+    assert "通往屋外的門 1 處" in upper[0].text and "連續外牆線上的門 1 處" in upper[0].text and "作業場" in upper[0].text
+    _, notes = ESC.exit_signs(hall("貳層平面圖"), [exit_sign(19.5, 7.5)], K.Context())
+    upper = [n.text for n in notes if "不是避難層" in n.text]
+    assert len(upper) == 1 and "通往屋外的門 1 處" in upper[0] and "連續外牆線" not in upper[0]
 
 
 def test_stair_door_serving_whole_floor_is_red():
@@ -112,9 +118,11 @@ def test_huge_room_named_stair_is_not_a_stair():
     def plan(w):
         walls = [rect(0, 0, 20 + w, 15), [(20, 0), (20, 7)], [(20, 8), (20, 15)]]
         return build("貳層平面圖", walls, [door((20, 8), (20, 7), (-1, 0))], [("作業場", 10, 5), ("樓梯", 20 + w / 2, 5)])
-    assert ESC.exit_signs(plan(20), [exit_sign(2, 2)], K.Context()) == ([], [])
-    f, _ = ESC.exit_signs(plan(10), [exit_sign(2, 2)], K.Context())               # 150 ㎡ 仍當樓梯
-    assert [x.severity for x in f] == [K.RED]
+    f, notes = ESC.exit_signs(plan(20), [exit_sign(2, 2)], K.Context())
+    assert f == [] and [n.law for n in notes] == [["D0120029/146-3/1/2"]]           # 不當樓梯，但要寫進說明
+    assert "超過 200 ㎡" in notes[0].text and "（樓梯 29" in notes[0].text and "人工確認" in notes[0].text
+    f, notes = ESC.exit_signs(plan(10), [exit_sign(2, 2)], K.Context())             # 150 ㎡ 仍當樓梯
+    assert [x.severity for x in f] == [K.RED] and not any("超過 200 ㎡" in n.text for n in notes)
 
 
 # ── 屋突層：外框是整片屋頂；樓地板只有梯間、電氣室 ──
@@ -170,6 +178,39 @@ def test_conflict_room_with_only_exempt_names_is_exempt():
     f, notes = ESC.emergency_lights(fl, [lamp(25, 25)], K.Context())
     assert [(x.severity, x.rooms) for x in f] == [(K.RED, ["辦公室／儲藏室"])]   # 混了辦公室就不能整間免設
     assert any(n.law == ["D0120029/179/1/6"] and "客貨梯／機械室" in n.text for n in notes)
+
+
+def strip(*names, title="貳層平面圖"):
+    """一排 10 m × 10 m 的房間，房間之間沒有門；names 每項是一間房的標示（多個標示＝名稱衝突）。"""
+    n = len(names)
+    walls = [rect(0, 0, 10 * n, 10)] + [[(10 * i, 0), (10 * i, 10)] for i in range(1, n)]
+    texts = [(s, 10 * i + 2 + 6 * j / max(len(ls) - 1, 1), 5) for i, ls in enumerate(names) for j, s in enumerate(ls)]
+    return build(title, walls, texts=texts)
+
+
+def test_elevator_hall_and_conflict_rooms_are_not_exempt():
+    """反例：電梯廳、電梯前室是走廊類樓地板（不是昇降機道）；昇降機道、管道間與一般房名連成一間也不能整間免設。"""
+    fl = strip(["電梯廳", "男廁"], ["電梯前室", "機械室"], ["客貨梯", "辦公室"], ["管道間", "茶水間"], ["客貨梯", "機械室"])
+    f, notes = ESC.emergency_lights(fl, [lamp(100, 100)], K.Context())
+    by = {x.rooms[0]: x for x in f}
+    assert set(by) == {"電梯廳／男廁", "電梯前室／機械室", "客貨梯／辦公室", "管道間／茶水間"}
+    for n in ("電梯廳／男廁", "電梯前室／機械室"):                       # 廁所入口沒畫門，和電梯廳連成一間
+        x = by[n]
+        assert x.severity == K.ORANGE and "走廊／通道" in x.title and x.law[0] == "D0120029/24/1/5" and "不能整間免設" in x.why
+    for n in ("客貨梯／辦公室", "管道間／茶水間"):
+        assert by[n].severity == K.ORANGE and "居室" in by[n].title and "不能整間免設" in by[n].why
+    assert any(n.law == ["D0120029/179/1/6"] and "客貨梯／機械室" in n.text for n in notes)   # 仍免設
+
+
+def test_pure_hoistway_skipped_elevator_hall_checked():
+    fl = strip(["電梯廳"], ["電梯間"], ["客梯"], ["管道間"], ["電梯管道間"], ["電梯機房"])
+    f, notes = ESC.emergency_lights(fl, [lamp(100, 100)], K.Context())
+    assert sorted((x.severity, x.rooms[0], x.law[0]) for x in f) == [
+        (K.RED, "電梯廳", "D0120029/24/1/5"), (K.RED, "電梯間", "D0120029/24/1/5")]
+    ex = [n.text for n in notes if n.law == ["D0120029/179/1/6"]]
+    assert len(ex) == 1 and "電梯機房" in ex[0] and "客梯" not in ex[0] and "管道間" not in ex[0]  # 昇降機道、管道間照舊不列
+    f, _ = ESC.emergency_lights(fl, [lamp(5, 5), lamp(15, 5)], K.Context())
+    assert f == []
 
 
 def test_refuge_exemption_ignores_interior_door_near_outline():

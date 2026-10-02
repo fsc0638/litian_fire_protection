@@ -99,22 +99,22 @@ def exit_signs(floor: Floor, eq: list[Equipment], ctx: Context, grid=None):
         if side == "inside":
             inner.append(d)
         elif not refuge:
-            if side == "open":
-                upper.append(d)
+            upper.append((d, side))
         else:
             ext.append((d, side))
     targets = [(d, "通往戶外之出入口", "D0120029/146-3/1/1", side) for d, side in ext]
     seen = [d for d, _ in ext]
-    # 通往直通樓梯之出入口：名稱無衝突、面積合理的樓梯間
+    # 通往直通樓梯之出入口：名稱無衝突、面積合理的樓梯間；標示樓梯卻過大的（樓梯沒圍成獨立房間）另在說明列出
     stairs = [r for r in floor.rooms if r.kind == "stair" and not r.conflict and r.area <= STAIR_MAX]
+    huge = [r for r in floor.rooms if r.kind == "stair" and not r.conflict and r.area > STAIR_MAX]
     stair_doors = [d for d in floor.doors if any(s.polygon.boundary.distance(Point(d)) <= 1.5 for s in stairs)]
     targets += [(d, "通往直通樓梯之出入口", "D0120029/146-3/1/2", "stair") for d in _dedupe(stair_doors)
                 if all(abs(d[0] - q[0]) > 1 or abs(d[1] - q[1]) > 1 for q in seen)]
     stair_zone = unary_union([s.polygon for s in stairs]) if stairs else None
     level = _level(floor.label or "")[0]
-    # 非避難層通往屋外的門只在說明列出；屋突層的外框是整片屋頂，不列；樓梯間的門已另外檢查
-    upper = [] if level == "roof" else [d for d in upper if all(abs(d[0] - q[0]) > 1 or abs(d[1] - q[1]) > 1
-                                                             for q, *_ in targets)]
+    # 非避難層外牆上的門只在說明列出（通往屋外、畫在連續牆線上分開計數）；屋突層的外框是整片屋頂，不列；樓梯間的門已另外檢查
+    upper = [] if level == "roof" else [(d, side) for d, side in upper
+                                        if all(abs(d[0] - q[0]) > 1 or abs(d[1] - q[1]) > 1 for q, *_ in targets)]
     # 第 146 條第 1 項第 1 款的主要出入口：避難層為通往戶外之出入口，其他樓層為通往直通樓梯之出入口；地下層、無開口樓層不適用
     exemptable = level != "base" and (floor.label or "") not in ctx.no_opening
     findings = []
@@ -152,10 +152,20 @@ def exit_signs(floor: Floor, eq: list[Equipment], ctx: Context, grid=None):
     notes = [Note("EXIT-146-3", f"已檢查 {len(targets)} 處通往戶外或直通樓梯的出入口（依門圖塊位置判讀；通往戶外之出入口只檢查避難層）",
                   ["D0120029/146-3/1"])] if targets else []
     if upper:
-        near = sorted({n for d in upper for n in _room_names(_rooms_touching(floor, Point(d).buffer(1.2)))})
-        notes.append(Note("EXIT-146-3", f"本層不是避難層，外牆上通往屋外的門 {len(upper)} 處未列為出口標示燈設置處"
-                          + (f"（{'、'.join(near[:3])}旁）" if near else "")
-                          + "；若通往室外直通樓梯，應設出口標示燈", ["D0120029/146-3/1/2"]))
+        def near(ds):
+            names = sorted({n for d in ds for n in _room_names(_rooms_touching(floor, Point(d).buffer(1.2)))})
+            return f"（{'、'.join(names[:3])}旁）" if names else ""
+        out = [d for d, side in upper if side == "open"]
+        wall = [d for d, side in upper if side == "wall"]
+        parts = ([f"通往屋外的門 {len(out)} 處{near(out)}"] if out else []) + \
+                ([f"畫在連續外牆線上的門 {len(wall)} 處{near(wall)}，可能是大型拉門、鐵捲門或門沒畫開口"] if wall else [])
+        notes.append(Note("EXIT-146-3", f"本層不是避難層，外牆上的門未列為出口標示燈設置處：{'；'.join(parts)}。"
+                          "若通往室外直通樓梯，應設出口標示燈", ["D0120029/146-3/1/2"]))
+    if huge:
+        notes.append(Note("EXIT-146-3", f"{len(huge)} 個標示樓梯的範圍面積超過 {STAIR_MAX:.0f} ㎡（"
+                          + "、".join(f"{r.name} {_fmt(r.area)} ㎡" for r in huge[:3])
+                          + "；樓梯可能沒有圍成獨立房間），其門未當作通往直通樓梯之出入口檢查，請人工確認樓梯間出入口的出口標示燈",
+                          ["D0120029/146-3/1/2"]))
     if inner and refuge:
         notes.append(Note("EXIT-146-3", f"{len(inner)} 處貼近外牆的門四周都有牆，判讀為室內門，未當作通往戶外之出入口",
                           ["D0120029/146-3/1/1"]))
@@ -244,17 +254,26 @@ def direction_lights(floor: Floor, eq: list[Equipment], ctx: Context, grid=None)
 EML_EXEMPT_LABEL = r"廁|洗手間|浴室|盥洗|儲藏|機械室|機房"
 EML_EXEMPT_KINDS = ("toilet", "machine", "elevator", "shaft")
 WARDROBE = r"衣帽間"
+# 房名分類的「電梯」樣式排在梯廳前面，電梯廳、電梯前室、電梯間也會判成 elevator；這些是有人通行的樓地板（第 24 條第 1 項
+# 第 5 款的走廊、通道），不是昇降機道（與逐項檢核的昇降機道判斷同一取向）。電梯機房、電梯機械室依第 179 條第 6 款免設；
+# 「電梯管道間」「電梯室」等仍當昇降機道（不論是機房或昇降機道都不必設緊急照明）
+ELEVATOR_HALL = r"廳|前室|(?<!管道)間"
 
 
 def _label_class(labels: list[str]) -> set[str]:
-    """逐個標示判斷：'exempt'（第 179 條第 6 款處所、昇降機道、管道間）、'wardrobe'（衣帽間）、'other'（其他房名）。
+    """逐個標示判斷：'exempt'（第 179 條第 6 款處所、昇降機道、管道間）、'wardrobe'（衣帽間）、
+    'passage'（走廊、通道、梯廳，含電梯廳、電梯前室、電梯間）、'other'（其他房名）。
     判斷不了種類的註記（「位移」「增設」等）不計。"""
     out = set()
     for s in labels:
         k, _ = room_kind([s])
         if k == "unknown":
             continue
-        if k in EML_EXEMPT_KINDS or re.search(EML_EXEMPT_LABEL, s):
+        if re.search(EML_EXEMPT_LABEL, s):
+            out.add("exempt")
+        elif k == "corridor" or (k == "elevator" and re.search(ELEVATOR_HALL, s)):
+            out.add("passage")
+        elif k in EML_EXEMPT_KINDS:
             out.add("exempt")
         elif re.search(WARDROBE, s):
             out.add("wardrobe")
@@ -283,8 +302,12 @@ def emergency_lights(floor: Floor, eq: list[Equipment], ctx: Context, grid=None)
     findings, exempt, refuge_ok, housing, outside = [], [], [], [], []
     stairs_in = [r for r in floor.rooms if r.kind == "stair" and not r.conflict and floor.in_region(r)]
     for room in floor.rooms:
-        if room.kind in ("void", "outdoor", "shaft", "elevator") or room.area < 2:
+        if room.kind in ("void", "outdoor") or room.area < 2:
             continue
+        cls = _label_class(room.labels)
+        if (room.kind in ("shaft", "elevator") and not room.conflict and cls <= {"exempt"}
+                and not any(re.search(EML_EXEMPT_LABEL, s) for s in room.labels)):
+            continue          # 昇降機道、管道間：不是居室、走廊或樓梯間（電梯廳等歸 'passage' 照常檢核；電梯機房列入免設說明）
         if not floor.in_region(room):
             # 不在樓地板範圍（屋突層未標示名稱的屋頂、天溝等）：不檢核；但不貼外框（不是屋頂周邊）、
             # 又緊鄰樓梯間的未命名範圍可能是梯廳、樓梯平台，列資料不足
@@ -302,27 +325,31 @@ def emergency_lights(floor: Floor, eq: list[Equipment], ctx: Context, grid=None)
             else:
                 outside.append(room)
             continue
-        cls = _label_class(room.labels)
         if cls == {"exempt"}:                          # 名稱衝突（例：客貨梯＋機械室）但每個標示都是免設處所，照樣免設
             exempt.append(room)
             continue
         if lit(room):
             continue
-        if d_ext is not None and room.kind not in ("corridor", "stair"):
+        # 種類：電梯廳、電梯前室與廁所等連成一間（廁所入口常不畫門）時，以走廊、通道計（第 24 條第 1 項第 5 款）
+        what = ("樓梯間" if room.kind == "stair" else
+                "走廊／通道" if room.kind == "corridor" or cls - {"exempt"} == {"passage"} else "居室")
+        if d_ext is not None and what == "居室":
             sub = grid.region_cells(room.polygon)
             vals = d_ext[sub]
             if vals.size and np.isfinite(vals).all() and vals.max() <= REFUGE_EXIT:
                 refuge_ok.append(room)
                 continue
-        what = {"corridor": "走廊／通道", "stair": "樓梯間"}.get(room.kind, "居室")
         if what == "居室" and ctx.occupancy == "乙-7":
             housing.append(room)                       # 集合住宅之居室得免設（第 179 條第 1 項第 3 款）
             continue
         sev = _sev_for([room], RED)
         extra = ""
+        if "exempt" in cls:                            # 名稱衝突：免設處所與其他用途連成一間（例：電梯廳＋廁所、客貨梯＋辦公室）
+            extra = ("；此範圍的標示混有免設處所（洗手間、儲藏室、機械室、昇降機道等）與"
+                     + ("走廊、電梯廳等通道" if what == "走廊／通道" else "其他用途") + "，不能整間免設")
         if what == "居室" and ctx.occupancy in ("戊-1", "戊-2") and sev == RED:
             sev = ORANGE                               # 複合用途：住宅部分之居室得免設，需確認用途
-        if what == "居室" and "wardrobe" in cls and "other" not in cls:
+        if what == "居室" and "wardrobe" in cls and cls <= {"wardrobe", "exempt"}:
             sev = ORANGE                               # 衣帽間：建築技術規則不視為居室（法規庫未收錄該條，不引用節點）
             extra = ("；衣帽間有兩種讀法：依建築技術規則建築設計施工編第 1 條第 4 款，衣帽間不視為居室（法規庫未收錄該條，請核對條文），照此讀法得免設；"
                      "若當作有人使用的空間，則應設置")
@@ -331,7 +358,7 @@ def emergency_lights(floor: Floor, eq: list[Equipment], ctx: Context, grid=None)
             f"本層設有緊急照明設備，{what}應設置（自居室通達避難層之走廊、樓梯間亦同）；此範圍內沒有緊急照明燈{extra}",
             f"在 {room.name} 設置緊急照明燈，並以照度計算確認地面水平照度達 2 lx 以上；"
             "若屬第 179 條得免設處所（設有固定機械之工作場所部分等），請在圖上註明",
-            ["D0120029/24/1/5" if room.kind in ("corridor", "stair") else "D0120029/24/1", "D0120029/179/1"],
+            ["D0120029/24/1/5" if what != "居室" else "D0120029/24/1", "D0120029/179/1"],
             rooms=[room.name], area=room.area, geom=room.polygon))
     notes = [Note("EML-178", "緊急照明燈地面水平照度應達 2 lx 以上（地下建築物地下通道 10 lx），走廊曲折點應增設；"
                              "照度無法由平面圖判定，請檢附照度計算", ["D0120029/178/1"])]
