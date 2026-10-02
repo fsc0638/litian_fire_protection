@@ -56,9 +56,13 @@ def _block_profile(doc, name: str) -> tuple[int, int]:
     return lines, texts
 
 
+TEXTLIKE = {"TEXT", "MTEXT", "ATTRIB", "ATTDEF"}
+
+
 def _bbox(entities):
+    """圖框範圍只看線條：文字範圍要字型資料，伺服器容器沒有字型時 ezdxf 會整個失敗；圖框外框本來就是線。"""
     from ezdxf import bbox
-    ext = bbox.extents(entities, fast=True)
+    ext = bbox.extents((e for e in entities if e.dxftype() not in TEXTLIKE), fast=True)
     if not ext.has_data:
         return None
     return [_r(ext.extmin.x), _r(ext.extmin.y), _r(ext.extmax.x), _r(ext.extmax.y)]
