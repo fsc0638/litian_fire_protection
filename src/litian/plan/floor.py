@@ -172,6 +172,17 @@ class Floor:
     walkable: shapely.Geometry
     fireproof: bool | None              # 圖上註記「防火構造」→ True；查無 → None（未知）
     warnings: list[str] = field(default_factory=list)
+    doors: list[tuple[float, float]] = field(default_factory=list)   # 門圖塊插入點（公尺）
+
+    def exterior_doors(self, tol: float = 1.5) -> list[tuple[float, float]]:
+        """通往戶外的門：貼著樓層外框。"""
+        ring = self.outline.exterior
+        return [d for d in self.doors if ring.distance(Point(d)) <= tol]
+
+    def stair_doors(self, tol: float = 1.5) -> list[tuple[float, float]]:
+        """通往樓梯的門：貼著樓梯間的邊界。"""
+        stairs = [r.polygon for r in self.rooms if r.kind == "stair" and not r.conflict]
+        return [d for d in self.doors if any(s.exterior.distance(Point(d)) <= tol for s in stairs)]
 
     @property
     def area(self) -> float:
@@ -206,8 +217,9 @@ def is_room_name(s: str) -> bool:
 
 
 def analyze(layers: dict[str, list], texts: list[dict], *, scale: float, title: str = "",
-            profile: LayerProfile | None = None) -> Floor:
-    """layers：geometry.by_bbox 的輸出（圖面單位）；texts：IR 文字（圖面單位）；scale：圖面單位 → 公尺。"""
+            profile: LayerProfile | None = None, doors: list[tuple[float, float]] = ()) -> Floor:
+    """layers：geometry.by_bbox 的輸出（圖面單位）；texts：IR 文字（圖面單位）；scale：圖面單位 → 公尺；
+    doors：門圖塊插入點（圖面單位）。"""
     profile = profile or LayerProfile()
     warnings: list[str] = []
     roles: dict[str, list] = {"wall": [], "column": [], "door": [], "window": []}
@@ -277,4 +289,5 @@ def analyze(layers: dict[str, list], texts: list[dict], *, scale: float, title: 
                                        WALK_R, cap_style="square", join_style="mitre"))
     walkable = region.difference(walls)
     fireproof = True if any("防火構造" in t["t"] for t in texts) else None
-    return Floor(label, title, scale, outline, rooms, region, walls, walkable, fireproof, warnings)
+    return Floor(label, title, scale, outline, rooms, region, walls, walkable, fireproof, warnings,
+                 [(x * scale, y * scale) for x, y in doors])

@@ -104,6 +104,18 @@ def specs(legend: str, attrs: dict) -> dict:
     s = _attr(attrs, "效能值", "EFF")
     if s and (m := re.search(r"A\s*[-－]?\s*(\d+)", s.upper())):
         out["a_value"] = int(m.group(1))
+    if re.match(r"室內消防栓|綜合消防栓", legend):
+        s = _attr(attrs, "種類", "CLASS", "TYPE")
+        if s and (m := re.search(r"第?\s*([一二12])\s*種", s)):
+            out["hydrant_class"] = {"一": "1", "二": "2"}.get(m.group(1), m.group(1))
+    s = _attr(attrs, "開口面積", "面積", "AREA")
+    if s and (m := re.search(r"(\d+(?:\.\d+)?)", s)):
+        out["open_area"] = float(m.group(1))                      # ㎡
+    s = _attr(attrs, "尺寸", "SIZE")
+    if "open_area" not in out and s and (m := re.search(r"(\d+(?:\.\d+)?)\s*[xX×*＊]\s*(\d+(?:\.\d+)?)", s)):
+        a, b = float(m.group(1)), float(m.group(2))
+        k = 0.001 if max(a, b) > 20 else (0.01 if max(a, b) > 5 else 1.0)    # mm／cm／m
+        out["open_area"] = round(a * k * b * k, 4)
     return out
 
 

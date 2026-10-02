@@ -145,7 +145,7 @@ def _sprinkler_exempt(room: Room, fireproof: bool | None) -> str | None:
     return None
 
 
-def sprinkler_distance(floor: Floor, eq: list[Equipment], ctx: Context):
+def sprinkler_distance(floor: Floor, eq: list[Equipment], ctx: Context, grid=None):
     heads = _of(eq, "sprinkler")
     if not heads:
         return [], []
@@ -249,11 +249,11 @@ def _horizontal(rule: str, label: str, kind: str, radius: float, law: list[str],
     return findings, []
 
 
-def hydrant_distance(floor, eq, ctx):
+def hydrant_distance(floor, eq, ctx, grid=None):
     return _horizontal("HYD-34", "室內消防栓", "hydrant", 25.0, ["D0120029/34/1/1/1", "D0120029/34/1/2/1"], floor, eq)
 
 
-def speaker_distance(floor, eq, ctx):
+def speaker_distance(floor, eq, ctx, grid=None):
     return _horizontal("SPKR-133", "揚聲器", "speaker", 10.0, ["D0120029/133/1/2/4"], floor, eq, small_room_rule=True)
 
 
@@ -302,7 +302,7 @@ def extinguisher_walk(floor: Floor, eq: list[Equipment], ctx: Context, grid: C.W
     return findings, []
 
 
-def extinguisher_count(floor: Floor, eq: list[Equipment], ctx: Context):
+def extinguisher_count(floor: Floor, eq: list[Equipment], ctx: Context, grid=None):
     ext = _of(eq, "extinguisher")
     if not ext:
         return [], []
@@ -335,7 +335,7 @@ def extinguisher_count(floor: Floor, eq: list[Equipment], ctx: Context):
                     metrics={"need": [need_l, need_s], "have": [p_min, None if p_max == math.inf else p_max]})], []
 
 
-def extinguisher_electrical(floor: Floor, eq: list[Equipment], ctx: Context):
+def extinguisher_electrical(floor: Floor, eq: list[Equipment], ctx: Context, grid=None):
     """第 31 條第 2 款：電氣設備使用之處所，每 100 ㎡（含未滿）另設一滅火器（放在該室內或出入口外 3 m 內）。
     本層圖上完全沒有滅火器時不跑（多半不是消防設備圖；是否應設由場所判定規則處理）。"""
     ext = _of(eq, "extinguisher")
@@ -383,7 +383,7 @@ def _eff_area(dtype: str, dclass: str, band: str, fp: bool) -> float | None:
     return None if v is None else v[0 if fp else 1]
 
 
-def detector_count(floor: Floor, eq: list[Equipment], ctx: Context):
+def detector_count(floor: Floor, eq: list[Equipment], ctx: Context, grid=None):
     dets = [e for e in _of(eq, "detector") if "detector_type" in e.spec]
     if not dets:
         return [], []

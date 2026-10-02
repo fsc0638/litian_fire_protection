@@ -296,9 +296,10 @@ def test_detector_unknown_height_is_yellow():
 
 def test_every_cited_law_node_exists():
     nodes = {json.loads(line)["node_id"] for line in Path("data/lawdb/nodes.jsonl").read_text(encoding="utf-8").splitlines()}
-    src = Path(K.__file__).read_text(encoding="utf-8")
+    from litian.review import escape, piping, rescue
+    src = "".join(Path(m.__file__).read_text(encoding="utf-8") for m in (K, escape, rescue, piping))
     cited = set(re.findall(r"D0120029(?:/[0-9-]+)+", src))
-    assert len(cited) >= 15 and cited <= nodes, cited - nodes
+    assert len(cited) >= 30 and cited <= nodes, cited - nodes
 
 
 # ── 整條流程：DXF → 檢核 ─────────────────────────────────────────────────

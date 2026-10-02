@@ -20,6 +20,9 @@ from litian.plan import geometry as G
 from litian.review import checks as K
 from litian.review import coverage as C
 from litian.review import equipment as E
+from litian.review import escape as ESC
+from litian.review import piping as PIPE
+from litian.review import rescue as RES
 from litian.review import required as RQ
 
 EQUIP_MARGIN = 2.0      # 外框外 2 m 內的設備（送水口、壁掛）仍算這層；更遠的多半是圖例表
@@ -43,19 +46,24 @@ class Result:
     profile: RQ.Profile | None = None
     requirements: list[RQ.Requirement] = field(default_factory=list)
     building_findings: list[K.Finding] = field(default_factory=list)
+    building_notes: list[K.Note] = field(default_factory=list)
     unknown_blocks: Counter = field(default_factory=Counter)
     warnings: list[str] = field(default_factory=list)
     seconds: float = 0.0
 
 
+ALL_RULES = K.RULES + ESC.RULES + RES.RULES + PIPE.RULES
+WALK_KINDS = {"extinguisher", "direction_light", "emergency_light"}      # 這些規則要算步行距離
+
+
 def review_floor(fl: F.Floor, eq: list[E.Equipment], ctx: K.Context):
     findings, notes = [], []
-    grid = C.WalkGrid(fl.walkable) if any("extinguisher" in e.kinds for e in eq) and not fl.walkable.is_empty else None
-    for rid, _title, fn in K.RULES:
-        if fn is K.extinguisher_walk:
-            f, n = fn(fl, eq, ctx, grid=grid) if grid else ([], [])
-        else:
-            f, n = fn(fl, eq, ctx)
+    need_grid = any(k in WALK_KINDS for e in eq for k in e.kinds) and not fl.walkable.is_empty
+    grid = C.WalkGrid(fl.walkable) if need_grid else None
+    for rid, _title, fn in ALL_RULES:
+        if fn is K.extinguisher_walk and grid is None:
+            continue
+        f, n = fn(fl, eq, ctx, grid=grid)
         findings.extend(f)
         notes.extend(n)
     sort_findings(findings)
@@ -124,9 +132,11 @@ def review_dxf(path: str | Path, *, ctx: K.Context | None = None, dictionary: E.
         if scale is None:
             res.warnings.append(f"{number or title}：無法判斷圖面單位（圖框沒有「單位」欄、DXF 也沒設），未檢核")
             continue
+        prof = profile or F.LayerProfile()
+        doors = [(i["x"], i["y"]) for i in ir["inserts"] if i["f"] == s["idx"] and prof.role(i.get("layer", "")) == "door"]
         try:
             fl = F.analyze(G.by_bbox(prims, s["bbox"]), [t for t in ir["texts"] if t["f"] == s["idx"]],
-                           scale=scale, title=title, profile=profile)
+                           scale=scale, title=title, profile=profile, doors=doors)
         except ValueError as e:
             res.warnings.append(f"{number or title}：{e}")
             continue
@@ -140,6 +150,10 @@ def review_dxf(path: str | Path, *, ctx: K.Context | None = None, dictionary: E.
         res.profile = RQ.build_profile(res.floors, ctx)
         res.requirements = RQ.evaluate(res.profile)
         presence_findings(res)
+    pf, pn = PIPE.check_texts(ir, [e for fr in res.floors for e in fr.equipment], ctx)
+    res.building_findings.extend(pf)
+    res.building_notes.extend(pn)
+    sort_findings(res.building_findings)
     res.seconds = round(time.time() - t0, 1)
     return res
 
@@ -178,14 +192,16 @@ def to_dict(res: Result, geom: bool = True) -> dict:
                          for i, f in enumerate(fr.findings, 1)],
         })
     building = None
-    if res.profile is not None:
+    if res.profile is not None or res.building_findings:
         p = res.profile
         building = {
-            "profile": {"occupancy": p.occupancy, "stories": p.stories, "height": p.height, "site_area": p.site_area,
-                        "total_area": round(p.total_area, 2), "roof_area": round(p.roof_area, 2),
-                        "floors": [{"label": f.label, "level": f.level, "area": round(f.area, 2), "no_opening": f.no_opening}
-                                   for f in p.floors],
-                        "high_rise": p.high_rise, "notes": p.notes},
+            "profile": None if p is None else {
+                "occupancy": p.occupancy, "stories": p.stories, "height": p.height, "site_area": p.site_area,
+                "total_area": round(p.total_area, 2), "roof_area": round(p.roof_area, 2),
+                "floors": [{"label": f.label, "level": f.level, "area": round(f.area, 2), "no_opening": f.no_opening}
+                           for f in p.floors],
+                "high_rise": p.high_rise, "notes": p.notes},
+            "notes": [{"rule": n.rule, "text": n.text, "law": n.law} for n in res.building_notes],
             "requirements": [{"key": r.key, "equipment": r.equipment, "kinds": list(r.kinds), "status": r.status,
                               "why": r.why, "law": r.law, "floors": r.floors, "missing": r.missing, "notes": r.notes}
                              for r in res.requirements],
