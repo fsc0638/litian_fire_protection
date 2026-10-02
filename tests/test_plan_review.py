@@ -234,7 +234,7 @@ def test_hydrant_distance():
     fl = plan()
     assert K.hydrant_distance(fl, [eq("室內消防栓", 15, 7.5)], K.Context())[0] == []
     f, _ = K.hydrant_distance(fl, [eq("室內消防栓", 1, 1)], K.Context())
-    assert len(f) == 1 and f[0].severity == K.RED and "男廁" in f[0].rooms
+    assert {x.rooms[0] for x in f} == {"會議室", "男廁"} and all(x.severity == K.RED for x in f)   # 逐房（不含牆厚帶）
     assert f[0].law == ["D0120029/34/1/1/1", "D0120029/34/1/2/1"]
 
 
@@ -250,14 +250,15 @@ def test_extinguisher_walking_distance():
     assert K.extinguisher_walk(fl, [eq("乾粉滅火器", 15.5, 6.5)], K.Context())[0] == []
     f, _ = K.extinguisher_walk(fl, [eq("乾粉滅火器", 1, 1)], K.Context())
     red = [x for x in f if x.severity == K.RED]
-    assert red and "男廁" in red[0].rooms and red[0].metrics["max_walk"] > 20
+    assert red and "會議室" in red[0].rooms and red[0].metrics["max_walk"] > 20       # 男廁非居室：預設只列說明
     assert red[0].law == ["D0120029/31/1/3"]
 
 
 def test_extinguisher_unreachable_room_is_yellow():
     closed = [[(3, 3), (6, 3), (6, 6), (3, 6), (3, 3)], [(3.2, 3.2), (5.8, 3.2), (5.8, 5.8), (3.2, 5.8), (3.2, 3.2)]]
     fl = plan(extra_texts=[("儲藏室", 4.5, 4.5)], extra_walls=closed)
-    f, _ = K.extinguisher_walk(fl, [eq("乾粉滅火器", 15.5, 6.5)], K.Context())
+    strict = K.Context(policy={"habitable_only_extinguisher": False})      # 儲藏室非居室：整層檢討的讀法才列缺失
+    f, _ = K.extinguisher_walk(fl, [eq("乾粉滅火器", 15.5, 6.5)], strict)
     assert [x.severity for x in f] == [K.YELLOW] and "儲藏室" in f[0].rooms
 
 
@@ -459,11 +460,11 @@ def test_lobbies_need_detectors_but_corridors_follow_walking_rule():
 def test_speaker_proviso_for_small_corridor_uses_6_square_metres():
     r = F.Room(1, box(0, 0, 2, 2.5), ["走廊"], "corridor", False)
     fl = F.Floor("1F", "", 1.0, box(0, 0, 2, 2.5), [r], box(0, 0, 2, 2.5), box(0, 0, 0, 0), box(0, 0, 2, 2.5), True)
-    f, _ = K.speaker_distance(fl, [eq("揚聲器（嵌頂式）", 30, 30)], K.Context())
-    assert f[0].severity == K.ORANGE                                          # 5 ㎡ ≤ 6 ㎡：但書可能適用
+    f, notes = K.speaker_distance(fl, [eq("揚聲器（嵌頂式）", 10, 0)], K.Context())
+    assert f == [] and "但書" in notes[0].text                                # 5 ㎡ ≤ 6 ㎡、相鄰揚聲器 8 m：得免設
     r.polygon = box(0, 0, 4, 3)
     fl2 = F.Floor("1F", "", 1.0, box(0, 0, 4, 3), [r], box(0, 0, 4, 3), box(0, 0, 0, 0), box(0, 0, 4, 3), True)
-    assert K.speaker_distance(fl2, [eq("揚聲器（嵌頂式）", 30, 30)], K.Context())[0][0].severity == K.RED   # 12 ㎡ 走廊
+    assert K.speaker_distance(fl2, [eq("揚聲器（嵌頂式）", 12, 0)], K.Context())[0][0].severity == K.RED   # 12 ㎡ 走廊
 
 
 def test_article_18_rooms_need_special_suppression():
