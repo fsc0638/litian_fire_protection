@@ -23,7 +23,7 @@ def conn():
     c = psycopg.connect(URL, row_factory=dict_row, autocommit=True)
     db = c.execute("SELECT current_database() AS d").fetchone()["d"]
     assert db.endswith("_test"), f"拒絕在非測試資料庫 {db} 上執行"
-    c.execute("DROP TABLE IF EXISTS case_sheet, file_ir, case_file, review_case, app_session, app_user CASCADE")
+    c.execute("DROP TABLE IF EXISTS file_review, case_sheet, file_ir, case_file, review_case, app_session, app_user CASCADE")
     ST.ensure_schema(c)
     AU.ensure_schema(c)
     yield c

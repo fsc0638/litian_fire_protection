@@ -684,3 +684,39 @@ def cases_sheet_texts(case_id: int, sheet_id: int, user: dict = Depends(current_
                 "WHERE i.file_id = %s AND t->>'f' IS NOT NULL AND (t->>'f')::int = %s", s["file_id"], s["idx"])
     rows.sort(key=lambda r: (-r["y"], r["x"]))
     return {"sheet": s, "texts": rows}
+
+
+# ---------- 檢核結果（review.engine 由 worker 產生）----------
+REVIEW_LABEL = re.compile(r"^[0-9A-Z]{1,6}$")
+
+
+@app.get("/api/cases/{case_id}/reviews")
+def cases_reviews(case_id: int, user: dict = Depends(current_user)):
+    _case_or_404(case_id)
+    rows = _all("SELECT r.file_id, f.name, r.status, r.error, r.result, r.created_at FROM file_review r "
+                "JOIN case_file f ON f.id = r.file_id WHERE f.case_id = %s ORDER BY f.name", case_id)
+    ids = set()
+    for r in rows:
+        for fl in (r["result"] or {}).get("floors", []):
+            fl["svg"] = f"/api/cases/{case_id}/files/{r['file_id']}/review/{fl['label']}.svg"
+            for item in fl["findings"] + fl["notes"]:
+                ids.update(item["law"])
+    laws = {}
+    if ids:
+        for x in _all("SELECT node_id, citation, text FROM law_node WHERE node_id = ANY(%s)", sorted(ids)):
+            laws[x["node_id"]] = {"citation": x["citation"], "text": (x["text"] or "")[:600]}
+    return {"reviews": rows, "laws": laws}
+
+
+@app.get("/api/cases/{case_id}/files/{file_id}/review/{label}.svg", include_in_schema=False)
+def cases_review_svg(case_id: int, file_id: int, label: str, user: dict = Depends(current_user)):
+    r = _one("SELECT r.svg_dir FROM file_review r JOIN case_file f ON f.id = r.file_id "
+             "WHERE r.file_id = %s AND f.case_id = %s", file_id, case_id)
+    if not REVIEW_LABEL.match(label) or not r or not r["svg_dir"]:
+        raise HTTPException(404, "沒有這張標示圖")
+    p = (Path(r["svg_dir"]) / f"{label}.svg").resolve()
+    if CASES_DIR.resolve() not in p.parents or not p.is_file():
+        raise HTTPException(404, "沒有這張標示圖")
+    return FileResponse(p, media_type="image/svg+xml", headers={
+        "Cache-Control": "private, no-cache", "X-Content-Type-Options": "nosniff",
+        "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"})

@@ -1,6 +1,6 @@
 # 消防圖審系統
 
-目前進度：**第 0 期 法規庫**（2026-10-01 上線測試版）。
+目前進度：第 0 期法規庫已上線測試；**第 1 期自審**進行中——圖面管線、審核工作台、平面理解（認房間）與第一批逐項檢核（撒水頭、室內消防栓、揚聲器的水平距離，滅火器步行距離與數量，探測器數量）已完成，尚待真實消防設備圖校正。
 
 ## 目錄
 
@@ -8,6 +8,9 @@
 |---|---|
 | `src/litian/lawdb/` | 法規庫：消防署行政規則與附件（nfa）、下載（fetch）、解析（parse）、場所代碼（occupancy）、交叉引用（xref）、建置（build）、載入（store）、檢索（search）、評測（evaluate） |
 | `src/litian/api.py` | FastAPI 服務 |
+| `src/litian/drawing/` | 圖面管線：DWG 轉檔佇列、圖面中介資料抽取（文字、圖塊、圖紙）、背景處理程序 |
+| `src/litian/plan/` | 平面理解：展開圖塊幾何、由牆柱門窗圍出房間、判斷房間種類（廁所、樓梯、機電室、挑空…）、樓地板範圍、可走區域 |
+| `src/litian/review/` | 逐項檢核：設備辨識（附件三圖例＋圖塊字典）、水平／步行距離涵蓋、規則（每條綁法規節點）、缺失與標示圖 |
 | `data/lawdb/` | 建置產物（納入版控，部署直接用）：laws.json、nodes.jsonl、occupancy.json、xrefs.jsonl、legend.json、tables.json、build_report.json |
 | `data/lawdb/legend/` | 附件三「消防圖說圖示範例」284 個圖例的符號圖（PNG） |
 | `data/tables/` | 法定表格結構化檔（YAML，人工審閱的唯一來源）：第 18 條選設表、第 157 條避難器具表；`status: draft` 表示尚未經消防設備師校對 |
@@ -17,6 +20,7 @@
 | `tests/` | 單元測試 |
 | `deploy/oracle/` | Oracle 主機架設腳本（見該目錄 README） |
 | `tools/dwg2dxf/` | DWG 轉檔與看圖工具 |
+| `tools/synth_fire/` | 合成測試用消防設備圖（在建築平面上自動配置設備並埋入已知缺失；輸出只放私人資料夾） |
 | `tools/tables/` | 2026-10-01 產生表格 YAML 的轉錄腳本（紀錄用；之後校對直接改 YAML） |
 
 ## 本機開發

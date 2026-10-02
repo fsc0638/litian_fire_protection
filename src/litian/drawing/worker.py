@@ -1,4 +1,5 @@
-"""處理程序：從 case_file 佇列取檔 →（DWG 交給轉檔服務）→ 子行程抽取中介資料（限時、限記憶體）→ 存資料庫。
+"""處理程序：從 case_file 佇列取檔 →（DWG 交給轉檔服務）→ 子行程抽取中介資料（限時、限記憶體）→ 存資料庫
+→ 有平面圖的檔案再用子行程跑逐項檢核（review.engine），結果與各樓層標示圖存起來。
 
 啟動：python -m litian.drawing.worker
 環境變數：DATABASE_URL、CONVERT_SPOOL（預設 /data/convert）
@@ -23,7 +24,10 @@ from .ir import summary
 
 log = logging.getLogger("litian.worker")
 EXTRACT_TIMEOUT = 300                 # 秒
+REVIEW_TIMEOUT = 300
 EXTRACT_MEM = 1200 * 1024 * 1024      # 子行程位址空間上限
+# 數值函式庫預設會開多執行緒、預留大量位址空間；子行程限記憶體時改單執行緒
+SUBPROC_ENV = {**os.environ, "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
 CONVERT_TIMEOUT = 420                 # 等轉檔服務（含排隊）
 IDLE_S = 2
 
@@ -33,17 +37,33 @@ def _limit_memory():                  # 只在 Linux 子行程裡執行
     resource.setrlimit(resource.RLIMIT_AS, (EXTRACT_MEM, EXTRACT_MEM))
 
 
-def extract_in_subprocess(dxf: Path) -> tuple[dict, dict]:
-    with tempfile.TemporaryDirectory() as d:
-        out = Path(d) / "ir.json"
-        r = subprocess.run([sys.executable, "-m", "litian.drawing.ir", str(dxf), str(out)],
-                           capture_output=True, text=True, encoding="utf-8", errors="replace",
-                           timeout=EXTRACT_TIMEOUT, preexec_fn=_limit_memory if os.name == "posix" else None)
-        if r.returncode != 0 or not out.exists():
-            last = (r.stderr.strip().splitlines() or ["未知錯誤"])[-1]
-            raise RuntimeError(f"抽取失敗：{last[:300]}")
-        ir = json.loads(out.read_text(encoding="utf-8"))
+def _run(args: list[str], timeout: int, what: str) -> None:
+    r = subprocess.run([sys.executable, "-m", *args], capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=timeout, env=SUBPROC_ENV,
+                       preexec_fn=_limit_memory if os.name == "posix" else None)
+    if r.returncode != 0:
+        last = (r.stderr.strip().splitlines() or ["未知錯誤"])[-1]
+        raise RuntimeError(f"{what}失敗：{last[:300]}")
+
+
+def extract_in_subprocess(dxf: Path, workdir: Path) -> tuple[dict, dict]:
+    out = workdir / "ir.json"
+    _run(["litian.drawing.ir", str(dxf), str(out)], EXTRACT_TIMEOUT, "抽取")
+    ir = json.loads(out.read_text(encoding="utf-8"))
     return ir, summary(ir)
+
+
+def has_floor_plans(ir: dict) -> bool:
+    from litian.plan.floor import floor_label
+    from .ir import sheet_title
+    return any(floor_label(sheet_title(s["meta"])) for s in ir["sheets"])
+
+
+def review_in_subprocess(dxf: Path, workdir: Path, svg_dir: Path) -> dict:
+    out = workdir / "review.json"
+    _run(["litian.review.engine", str(dxf), str(out), "--ir", str(workdir / "ir.json"), "--svg", str(svg_dir),
+          "--no-geom"], REVIEW_TIMEOUT, "檢核")
+    return json.loads(out.read_text(encoding="utf-8"))
 
 
 def process(conn, job: dict, spool: Path) -> dict:
@@ -57,9 +77,22 @@ def process(conn, job: dict, spool: Path) -> dict:
         CC.cleanup(spool, jid)
     else:
         src = path
-    ir, stats = extract_in_subprocess(src)
-    with conn.transaction():
-        ST.save_result(conn, job["id"], ir, stats)
+    with tempfile.TemporaryDirectory() as d:
+        work = Path(d)
+        ir, stats = extract_in_subprocess(src, work)
+        with conn.transaction():
+            ST.save_result(conn, job["id"], ir, stats)
+        if has_floor_plans(ir):
+            # 檢核失敗不影響抽取結果（文字、圖紙照常可看），只記下原因
+            svg_dir = path.with_name(path.name + ".review")
+            try:
+                result = review_in_subprocess(src, work, svg_dir)
+                ST.save_review(conn, job["id"], "done", result, None, str(svg_dir))
+                stats["review"] = {"floors": len(result["floors"]),
+                                   "findings": sum(len(f["findings"]) for f in result["floors"])}
+            except Exception as e:
+                ST.save_review(conn, job["id"], "failed", None, f"{type(e).__name__}: {e}", None)
+                log.warning("review failed file=%s error=%s", job["id"], e)
     return stats
 
 

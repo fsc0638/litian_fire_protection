@@ -99,3 +99,39 @@ def test_sheet_texts_sorted_top_to_bottom(client, monkeypatch):
                                                        {"t": "左上", "x": 1, "y": 5, "layer": "0"}])
     r = client.get("/api/cases/1/sheets/2/texts")
     assert [t["t"] for t in r.json()["texts"]] == ["左上", "右上", "下"]
+
+
+def test_reviews_require_login_and_attach_svg_urls_and_laws(client, monkeypatch):
+    assert client.get("/api/cases/3/reviews").status_code == 401
+    assert client.get("/api/cases/3/files/7/review/1F.svg").status_code == 401
+    client.cookies.set("fr_session", "good-token")
+    result = {"floors": [{"label": "1F", "findings": [{"law": ["D0120029/34/1/1/1"]}], "notes": [{"law": ["D0120029/49/1/1"]}]}],
+              "warnings": []}
+
+    def fake_all(sql, *a):
+        if "FROM file_review" in sql:
+            return [{"file_id": 7, "name": "F-101.dxf", "status": "done", "error": None, "result": result, "created_at": "t"}]
+        assert "law_node" in sql and a[0] == ["D0120029/34/1/1/1", "D0120029/49/1/1"]
+        return [{"node_id": "D0120029/34/1/1/1", "citation": "設置標準第34條第1項第1款第1目", "text": "各層任一點…"}]
+    monkeypatch.setattr(api, "_all", fake_all)
+    d = client.get("/api/cases/3/reviews").json()
+    assert d["reviews"][0]["result"]["floors"][0]["svg"] == "/api/cases/3/files/7/review/1F.svg"
+    assert d["laws"]["D0120029/34/1/1/1"]["citation"].startswith("設置標準第34條")
+
+
+def test_review_svg_served_only_from_cases_dir(client, monkeypatch, tmp_path):
+    client.cookies.set("fr_session", "good-token")
+    rev = tmp_path / "3" / "001_F.dxf.review"
+    rev.mkdir(parents=True)
+    (rev / "1F.svg").write_text("<svg/>", encoding="utf-8")
+    outside = tmp_path.parent / "elsewhere"
+    outside.mkdir(exist_ok=True)
+    (outside / "1F.svg").write_text("<svg/>", encoding="utf-8")
+    svg_dir = {"v": str(rev)}
+    monkeypatch.setattr(api, "_one", lambda sql, *a: {"svg_dir": svg_dir["v"]})
+    r = client.get("/api/cases/3/files/7/review/1F.svg")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("image/svg+xml")
+    assert "default-src 'none'" in r.headers["content-security-policy"]
+    assert client.get("/api/cases/3/files/7/review/x.svg").status_code == 404          # 樓層代號格式不符
+    svg_dir["v"] = str(outside)                                                       # 資料庫裡的路徑不在案件資料夾內
+    assert client.get("/api/cases/3/files/7/review/1F.svg").status_code == 404

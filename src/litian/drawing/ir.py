@@ -79,6 +79,16 @@ def sheet_number(meta: dict) -> str | None:
     return next((v for k, v in meta.items() if SHEET_KEY_RE.search(k) and v), None)
 
 
+def meta_field(meta: dict, word: str) -> str | None:
+    """圖框欄位名稱各事務所不同（「中文圖名<一>」「圖名」「比例」「SCALE」…），取第一個含 word 且有值的欄位。"""
+    keys = sorted((k for k in meta if word in k and meta[k]), key=lambda k: ("中文" not in k, len(k), k))
+    return meta[keys[0]] if keys else None
+
+
+def sheet_title(meta: dict) -> str:
+    return meta_field(meta, "圖名") or ""
+
+
 def extract(path: str | Path) -> dict:
     from ezdxf import recover
 

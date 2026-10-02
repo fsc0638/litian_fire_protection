@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 
+from . import ir as IR
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS review_case (
   id bigserial PRIMARY KEY,
@@ -45,6 +47,14 @@ CREATE TABLE IF NOT EXISTS case_sheet (
   meta jsonb NOT NULL,
   bbox double precision[],
   UNIQUE (file_id, idx)
+);
+CREATE TABLE IF NOT EXISTS file_review (
+  file_id bigint PRIMARY KEY REFERENCES case_file ON DELETE CASCADE,
+  status text NOT NULL,                 -- done（已檢核）｜failed（檢核失敗）
+  result jsonb,                         -- review.engine.to_dict（不含缺失範圍幾何，只留外框座標）
+  error text,
+  svg_dir text,                         -- 各樓層標示圖 <樓層>.svg 所在資料夾
+  created_at timestamptz NOT NULL DEFAULT now()
 );
 """
 
@@ -110,10 +120,18 @@ def save_result(conn, file_id: int, ir: dict, stats: dict) -> None:
         conn.execute("INSERT INTO case_sheet (file_id, idx, number, title, scale, unit, meta, bbox) "
                       "VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s)",
                       (file_id, s["idx"], stats["sheet_numbers"][s["idx"]],
-                       m.get("中文圖名") or m.get("圖名"), m.get("比例"), m.get("單位"),
+                       IR.sheet_title(m) or None, IR.meta_field(m, "比例"), IR.meta_field(m, "單位"),
                        json.dumps(m, ensure_ascii=False), s["bbox"]))
     conn.execute("UPDATE case_file SET status = 'done', error = NULL, stats = %s::jsonb, updated_at = now() "
                  "WHERE id = %s", (json.dumps(stats, ensure_ascii=False), file_id))
+
+
+def save_review(conn, file_id: int, status: str, result: dict | None, error: str | None, svg_dir: str | None) -> None:
+    conn.execute("INSERT INTO file_review (file_id, status, result, error, svg_dir) VALUES (%s, %s, %s::jsonb, %s, %s) "
+                 "ON CONFLICT (file_id) DO UPDATE SET status = EXCLUDED.status, result = EXCLUDED.result, "
+                 "error = EXCLUDED.error, svg_dir = EXCLUDED.svg_dir, created_at = now()",
+                 (file_id, status, json.dumps(result, ensure_ascii=False) if result is not None else None,
+                  error[:500] if error else None, svg_dir))
 
 
 def save_failure(conn, file_id: int, error: str, retry: bool) -> None:
