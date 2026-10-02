@@ -56,16 +56,35 @@ def _block_profile(doc, name: str) -> tuple[int, int]:
     return lines, texts
 
 
-TEXTLIKE = {"TEXT", "MTEXT", "ATTRIB", "ATTDEF"}
-
-
 def _bbox(entities):
-    """圖框範圍只看線條：文字範圍要字型資料，伺服器容器沒有字型時 ezdxf 會整個失敗；圖框外框本來就是線。"""
-    from ezdxf import bbox
-    ext = bbox.extents((e for e in entities if e.dxftype() not in TEXTLIKE), fast=True)
-    if not ext.has_data:
+    """圖框範圍只看線條（含巢狀圖塊）：文字、標註的範圍要字型資料，伺服器容器沒有字型時 ezdxf 會整個失敗；
+    圖框外框本來就是線。"""
+    from ezdxf import disassemble
+
+    from litian.plan.geometry import walk
+    x0 = y0 = float("inf")
+    x1 = y1 = float("-inf")
+    for e, _layer in walk(entities):
+        try:
+            pts = disassemble.make_primitive(e, max_flattening_distance=10).vertices()
+            for v in pts:
+                x0, y0, x1, y1 = min(x0, v.x), min(y0, v.y), max(x1, v.x), max(y1, v.y)
+        except Exception:
+            continue
+    if x0 == float("inf"):
         return None
-    return [_r(ext.extmin.x), _r(ext.extmin.y), _r(ext.extmax.x), _r(ext.extmax.y)]
+    return [_r(x0), _r(y0), _r(x1), _r(y1)]
+
+
+def _place(b, insert):
+    """圖塊座標的範圍 → 插入後的範圍（四角經插入點、比例、旋轉換算後取外框）。"""
+    if b is None:
+        return None
+    from ezdxf.math import Vec3
+    m = insert.matrix44()
+    base = insert.block().block.dxf.base_point if insert.block() is not None else Vec3()
+    pts = [m.transform(Vec3(x, y) - base) for x, y in ((b[0], b[1]), (b[2], b[1]), (b[2], b[3]), (b[0], b[3]))]
+    return [_r(min(p.x for p in pts)), _r(min(p.y for p in pts)), _r(max(p.x for p in pts)), _r(max(p.y for p in pts))]
 
 
 def _contains(b, x, y) -> bool:
@@ -103,6 +122,7 @@ def extract(path: str | Path) -> dict:
         raise ValueError(f"實體數 {n} 超過上限 {MAX_ENTITIES}")
 
     profiles: dict[str, tuple[int, int]] = {}
+    local: dict[str, list | None] = {}           # 圖塊定義（圖塊座標）的範圍：同一圖塊只算一次
     big, anchors = [], []
     for e in msp.query("INSERT"):
         name = e.dxf.name
@@ -110,7 +130,10 @@ def extract(path: str | Path) -> dict:
             profiles[name] = _block_profile(doc, name)
         lines, ntexts = profiles[name]
         if lines >= FRAME_MIN_LINES and ntexts >= FRAME_MIN_TEXTS:
-            b = _bbox(e.virtual_entities())
+            if name not in local:
+                blk = doc.blocks.get(name)
+                local[name] = _bbox(blk) if blk is not None else None
+            b = _place(local[name], e)
             if b:
                 big.append({"block": name, "bbox": b, "sheet": {}})
         if e.attribs and any(SHEET_KEY_RE.search(a.dxf.tag) for a in e.attribs):

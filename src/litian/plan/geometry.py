@@ -41,6 +41,11 @@ def _walk(entities, inherit: str | None, depth: int):
             yield e, layer
 
 
+def walk(entities):
+    """逐一走過實體（展開圖塊、略過文字與標註）：產出（實體, 圖層）。"""
+    yield from _walk(entities, None, 0)
+
+
 def explode(doc) -> list[tuple[str, list[tuple[float, float]]]]:
     """回傳 [(圖層, [(x, y), ...]), ...]；座標為圖面單位。"""
     from ezdxf import disassemble
