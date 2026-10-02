@@ -126,10 +126,10 @@ def _name(fr: FloorResult) -> str:
     return fr.number or fr.title
 
 
-def project_voids(res: Result, ctx: K.Context) -> None:
+def project_voids(res: Result, ctx: K.Context, aligner: ST.Aligner | None = None) -> None:
     """上層挑空範圍內（屋頂板下）、屋突層房間外的探測器，投影到下層實際保護的房間（見 stack.py）。"""
     projs, warns = ST.project_detectors([fr.floor for fr in res.floors], [_name(fr) for fr in res.floors],
-                                        [fr.equipment for fr in res.floors], ctx.stories)
+                                        [fr.equipment for fr in res.floors], ctx.stories, aligner)
     res.warnings.extend(warns)
     for p in projs:
         fr, src = res.floors[p.target], res.floors[p.source]
@@ -137,9 +137,99 @@ def project_voids(res: Result, ctx: K.Context) -> None:
         kinds = Counter(next(E.KIND_LABEL[k] for k in e.kinds if k in ST.DETECT_KINDS) for e in p.equipment)
         what = "、".join(f"{n} 個{k}" for k, n in kinds.items())
         where = f"{src.floor.label} 屋頂層房間外" if p.roof else f"{src.floor.label} 挑空範圍內"
-        fr.notes.append(K.Note("DET-120", f"{_name(src)} 圖上 {where}的 {what}裝在本層大空間上方的樓板下，已併入本層探測器檢核；"
+        if p.levels >= 2:
+            mount = (f"裝在{'屋頂板' if p.roof else '上層樓板'}下，裝置面自本層樓地板起約 {p.levels} 層樓高、高於本層天花板，"
+                     "已併入本層探測器檢核；但逐房的數量、種類是依本層天花板高度條件檢討，實際應依裝置面高度確認"
+                     "（第 114 條，同一室內高度不同以平均高度計），需確認者另列 DET-114")
+            law = ["D0120029/114/1"]
+        else:
+            mount, law = "裝在本層大空間上方的屋頂板下（即本層天花板），已併入本層探測器檢核", []
+        fr.notes.append(K.Note("DET-120", f"{_name(src)} 圖上 {where}的 {what}{mount}；"
                                           f"兩圖以共同的電梯、管道間、樓梯 {p.shift.anchors} 處對位（位移 dx {p.shift.dx:+.2f} m、"
-                                          f"dy {p.shift.dy:+.2f} m）。這些探測器畫在上層圖，不計入本圖設備數量"))
+                                          f"dy {p.shift.dy:+.2f} m）。這些探測器畫在上層圖，不計入本圖設備數量", law))
+
+
+SKIP_HEIGHT = ("void", "outdoor", "elevator", "shaft", "stair", "toilet")   # 逐房探測器規則不檢討的房間
+
+
+def void_heights(res: Result, ctx: K.Context) -> None:
+    """DET-114：挑空投影來的探測器裝在上層樓板（屋頂板）下，裝置面比本層天花板高（第 114 條依裝置面高度選種類、
+    有效探測範圍也隨高度變小），逐房規則以本層高度條件檢討的結果可能偏寬。裝置面兩層樓以上高的房間列需確認，
+    並以 4 m 以上（有建築物高度時以估算高度）試算需設數量；該房已列不符（紅色）的只在其說明補上高度前提。
+    唯一不另列的情形（高度再高也藏不住缺失）：本層未填天花板高度（逐房規則已含 4～8 m 的有效範圍）、房內全是
+    偵煙式且在可能的高度都適用（一種：4～20 m 有效範圍相同、20 m 以上得免設；二種：估算裝置面未達 15 m），
+    而且數量達到試算需設數。"""
+    stories = ctx.stories or (res.profile.stories if res.profile else None)
+    storey = ctx.height / stories if ctx.height and stories else None
+    for fr in res.floors:
+        fl = fr.floor
+        rooms = {r.id: r for r in fl.rooms}
+        groups: dict[int, list[E.Equipment]] = {}
+        for e in fr.projected:
+            if "detector" in e.kinds and e.spec.get("projected_levels", 1) >= 2 and (r := fl.room_near(e.x, e.y)) is not None:
+                groups.setdefault(r.id, []).append(e)
+        h = ctx.ceiling_height.get(fl.label or "")
+        changed = False
+        for rid, pe in groups.items():
+            room = rooms[rid]
+            if room.kind in SKIP_HEIGHT or room.area < 2:
+                continue
+            ids = {id(e) for e in pe}
+            dets = [e for e in fr.equipment + fr.projected if "detector" in e.kinds
+                    and (id(e) in ids or room.polygon.covers(Point(e.x, e.y)))]
+            kinds = Counter((e.spec["detector_type"], e.spec.get("detector_class")) for e in dets if "detector_type" in e.spec)
+            heat = any(t != "偵煙式" for t, _ in kinds)
+            levels = sorted({e.spec["projected_levels"] for e in pe})
+            est_lo = storey * levels[0] if storey else None
+            # 試算：房內數量最多的種類，裝置面取估算高度（無建築物高度時以 4 m 以上計）
+            need, trial = None, ""
+            hdesc = (f"以建築物高度 {K._fmt(ctx.height)} m ÷ {stories} 層估算裝置面約 {K._fmt(est_lo)} m" if est_lo is not None
+                     else "以裝置面 4 m 以上（至少兩層樓高）試算")
+            if kinds:
+                (dtype, dclass), _ = max(kinds.items(), key=lambda kv: kv[1])
+                band = K.height_band(est_lo) if est_lo is not None else "4to8"
+                fp = ctx.fireproof if ctx.fireproof is not None else fl.fireproof
+                effs = [K._eff_area(dtype, dclass, band, f) for f in ([fp] if fp is not None else [True, False])]
+                if band == "ge20":
+                    trial = f"{hdesc}，達 20 m 以上：局限型探測器不適用（得免設或改設火焰式等，第 114、116 條）"
+                elif None in effs:
+                    trial = f"{hdesc}，{dtype}局限型{dclass}種在此高度不得使用（第 114 條）"
+                else:
+                    need = math.ceil(room.area / min(effs))
+                    trial = (f"{hdesc}，{dtype}局限型{dclass}種有效探測範圍 {K._fmt(min(effs))} ㎡，"
+                             f"約 {K._fmt(room.area)} ㎡ 至少需 {need} 個，現有 {len(dets)} 個（含投影 {len(pe)} 個）")
+                if est_lo is None:
+                    trial += "；裝置面達 8 m 以上時熱式探測器不得使用、達 15 m 以上時偵煙式只有一種可用"
+            valid = kinds and all(t == "偵煙式" and (c == "1" or (storey is not None and storey * levels[-1] < 15))
+                                  for t, c in kinds)
+            if h is None and valid and need is not None and len(dets) >= need:
+                continue
+            src = Counter((e.spec["projected_from"], e.spec["projected_levels"]) for e in pe)
+            head = (f"{room.name} 有 {len(pe)} 個探測器取自上層圖的挑空範圍（"
+                    + "、".join(f"{s} 圖 {n} 個，約 {lv} 層樓高" for (s, lv), n in sorted(src.items()))
+                    + "），裝在上層樓板（屋頂板）下，實際裝置面高於本層"
+                    + (f"設定的天花板高度 {K._fmt(h)} m" if h is not None else "天花板（本層未填天花板高度）")
+                    + "；本系統以本層高度條件檢討的數量、種類僅供參考")
+            reds = [f for f in fr.findings if f.rule == "DET-120" and f.geom is room.polygon and f.severity == K.RED]
+            if reds:
+                for f in reds:
+                    f.why += f"；另：{head}，實際所需數量可能更多" + (f"（{trial}）" if trial else "") + "，請依實際裝置面高度確認"
+                    f.law = f.law + [x for x in ["D0120029/114/1"] if x not in f.law]
+                continue
+            count_law = "D0120029/122/1/4" if kinds and not heat else "D0120029/120/1/2"
+            short = need is not None and len(dets) < need
+            fr.findings.append(K.Finding(
+                "DET-114", K.ORANGE, "需確認", fl.label or "",
+                f"{room.name} 探測器可能不足（裝在上層樓板下，試算至少需 {need} 個，現有 {len(dets)} 個）" if short
+                else f"{room.name} 的探測器裝在上層樓板下，需依實際裝置面高度確認",
+                f"{head}。" + (f"{trial}。" if trial else "")
+                + "請依實際裝置面高度（同一室內天花板或屋頂板高度不同時以平均高度計）確認探測器種類與數量",
+                "以剖面圖確認挑空部分的裝置面高度，依第 114 條選用適用的探測器種類，並依該高度的有效探測範圍檢討數量",
+                ["D0120029/114/1", count_law], rooms=[room.name], area=room.area, geom=room.polygon,
+                metrics={"have": len(dets), "projected": len(pe), "need_est": need, "levels": levels}))
+            changed = True
+        if changed:
+            sort_findings(fr.findings)
 
 
 SIGNS = {"EXIT-146-3": ("23-1", "出口標示燈"), "DIR-146-3": ("23-2", "避難方向指示燈")}
@@ -147,7 +237,9 @@ SIGNS = {"EXIT-146-3": ("23-1", "出口標示燈"), "DIR-146-3": ("23-2", "避�
 
 def voluntary_signs(res: Result, ctx: K.Context) -> None:
     """依第 23 條非應設的出口標示燈、避難方向指示燈（自主設置）：位置、涵蓋缺失改為建議（法規解讀設定 voluntary_signs_note）。
-    整棟未達門檻 → 各層都改；只有部分樓層應設（地下層、無開口樓層、十一層以上）→ 其他地上樓層改。"""
+    整棟未達門檻 → 各層都改；只有部分樓層應設（地下層、無開口樓層、十一層以上）→ 其他地上樓層改。
+    說明寫明：判定前提（未勾選無開口樓層時視為全部非無開口）、另一種讀法（自主設置仍應符合第 146 條之 3），
+    方向指示燈另提醒第 23 條第 4 款的避難指標義務（系統不辨識避難指標）。"""
     if not ctx.rule("voluntary_signs_note"):
         return
     req = {r.key: r for r in res.requirements}
@@ -166,8 +258,17 @@ def voluntary_signs(res: Result, ctx: K.Context) -> None:
             else:
                 continue
             f.severity, changed = K.BLUE, True
-            f.why += f"；依第 23 條{scope}非應設{name}（自主設置），檢討結果僅供參考"
-            f.law += [x for x in r.law[:1] if x not in f.law]
+            why = f"；依第 23 條{scope}非應設{name}（自主設置），檢討結果僅供參考"
+            if not ctx.no_opening:
+                why += "（未勾選無開口樓層，以全部樓層皆非無開口樓層判定；若本層屬無開口樓層即為應設，應依第 146 條之 3 改善）"
+            law = list(r.law[:1])
+            if f.rule == "DIR-146-3":
+                why += ("；不在避難方向指示燈有效範圍內的走廊、通道，依第 23 條第 4 款仍應設避難指標"
+                        "（走廊、通道任一點至指標步行距離 7.5 m 以下，第 153 條第 2 款；圖上未辨識避難指標，請確認）")
+                law += ["D0120029/23/1/4", "D0120029/153/1/2"]
+            why += "；另一種讀法：若認定自主設置者亦應符合第 146 條之 3 的位置規定，本項仍為缺失"
+            f.why += why
+            f.law = f.law + [x for x in law if x not in f.law]
         if changed:
             sort_findings(fr.findings)
 
@@ -199,7 +300,7 @@ def _elevation(label: str, stories: int) -> float:
     return stories + (int(m.group(1)) if m else 1) - 1
 
 
-def _stairs(res: Result, stories: int) -> list[dict]:
+def _stairs(res: Result, stories: int, aligner: ST.Aligner) -> list[dict]:
     """各座樓梯（跨樓層配對）＋各層樓梯間內的揚聲器數。每個樓層代號取揚聲器最多的一張圖（同層各圖平面相同）。
     配對：字母相同（「A梯」「(A梯)」）、或完整名稱相同（同層有兩座以上同名的不配，例：屋突層好幾座「梯間」）；
     上下相鄰兩層對位得出時，位置重疊的樓梯間也算同一座（字母不同的不併）。配不起來的各自列出。"""
@@ -243,7 +344,7 @@ def _stairs(res: Result, stories: int) -> list[dict]:
     for lo, hi in zip(order, order[1:]):
         if _elevation(hi, stories) - _elevation(lo, stories) > 1:
             continue                                # 中間樓層沒有圖：不憑位置配對
-        sh = ST.align(res.floors[pick[hi]].floor, res.floors[pick[lo]].floor)
+        sh = aligner(pick[hi], pick[lo])
         if sh is None:
             continue
         for a, na in enumerate(nodes):
@@ -279,13 +380,13 @@ def _stairs(res: Result, stories: int) -> list[dict]:
     return out
 
 
-def stair_speakers(res: Result, ctx: K.Context) -> None:
+def stair_speakers(res: Result, ctx: K.Context, aligner: ST.Aligner | None = None) -> None:
     """SPKR-133-5：樓梯間的揚聲器依垂直距離每 15 m 至少一個 L 級（第 133 條第 2 款第 5 目），不套水平 10 m。
     樓高未知時只列各座樓梯各層有無揚聲器（資料不足）。法規解讀設定 stair_speaker_vertical。"""
     if not ctx.rule("stair_speaker_vertical") or not any("speaker" in e.kinds for fr in res.floors for e in fr.equipment):
         return
     stories = ctx.stories or (res.profile.stories if res.profile else None)
-    stairs = _stairs(res, stories or 1)
+    stairs = _stairs(res, stories or 1, aligner or ST.Aligner([fr.floor for fr in res.floors]))
     if not stairs:
         return
     law = ["D0120029/133/1/2/5"]
@@ -321,15 +422,24 @@ def stair_speakers(res: Result, ctx: K.Context) -> None:
                 f"（以建築物高度 {K._fmt(ctx.height)} m ÷ {stories} 層估算每層約 {K._fmt(h)} m），"
                 f"每 15 m 至少一個需 {need} 個；各層樓梯間內：" + "、".join(
                     f"{lab} {n} 個" if n else f"{lab} 無" for lab, n in g["floors"].items()))
-        # 整座樓梯在圖上連續兩層以上都認得出樓梯間才判不符；只認得部分樓層（其他層沒圍成樓梯間或名稱、位置對不上）→ 需確認
+        # 整座樓梯在圖上連續兩層以上都認得出樓梯間才判不符／通過；只認得部分樓層（其他層沒圍成樓梯間或名稱、位置對不上）
+        # → 不論數量一律需確認：垂直範圍只算到認得的樓層，數量「夠」也可能是少算了樓層
         idx = sorted(drawn.index(lab) for lab in g["floors"])
         whole = len(idx) >= 2 and idx[-1] - idx[0] + 1 == len(idx)
-        if have < need:
+        if not whole:
+            full = (_elevation(drawn[-1], stories) - _elevation(drawn[0], stories)) * h
             res.building_findings.append(K.Finding(
-                "SPKR-133-5", K.RED if whole else K.ORANGE, "數量不足" if whole else "需確認", "全棟",
-                f"{g['name']} 樓梯間揚聲器不足（需 {need} 個，現有 {have} 個）",
-                base + ("" if whole else f"；這座樓梯只在 {'、'.join(g['floors'])} 認得出樓梯間（其他樓層沒有圍成獨立的樓梯間，"
-                                         "或名稱、位置對不上），可能有樓層的揚聲器沒算到，請人工確認"),
+                "SPKR-133-5", K.ORANGE, "需確認", "全棟", f"{g['name']} 只在部分樓層認得出樓梯間，垂直配置需確認",
+                base + f"；這座樓梯只在 {'、'.join(g['floors'])} 認得出樓梯間（其他樓層沒有圍成獨立的樓梯間，或名稱、位置對不上），"
+                f"其他樓層的揚聲器沒算到；依認得出的樓層估算需 {need} 個、現有 {have} 個"
+                + (f"，若這座樓梯通達圖上 {drawn[0]}～{drawn[-1]}（約 {K._fmt(full)} m）則需 "
+                   f"{max(1, math.ceil(full / STAIR_VERTICAL - 1e-9))} 個" if full > span else "")
+                + "，請人工確認整座樓梯的垂直配置",
+                f"確認 {g['name']} 各層樓梯間的揚聲器，使垂直距離每 15 m 至少一個 L 級", law,
+                rooms=g["rooms"], metrics={"need": need, "have": have, "span": round(span, 2), "whole": False}))
+        elif have < need:
+            res.building_findings.append(K.Finding(
+                "SPKR-133-5", K.RED, "數量不足", "全棟", f"{g['name']} 樓梯間揚聲器不足（需 {need} 個，現有 {have} 個）", base,
                 f"於 {g['name']} 樓梯間增設 L 級揚聲器，使垂直距離每 15 m 至少一個", law,
                 rooms=g["rooms"], metrics={"need": need, "have": have, "span": round(span, 2)}))
         elif max(gaps) > STAIR_VERTICAL:
@@ -387,8 +497,9 @@ def review_dxf(path: str | Path, *, ctx: K.Context | None = None, dictionary: E.
         inside = [e for e in eq if zone.covers(Point(e.x, e.y))]
         res.floors.append(FloorResult(s["idx"], number, title, fl, inside, [], [], len(eq) - len(inside)))
     del prims
-    # 各層都理解完才投影（上層挑空內的探測器要併到下層），再逐層跑規則
-    project_voids(res, ctx)
+    # 各層都理解完才投影（上層挑空內的探測器要併到下層），再逐層跑規則；對位結果挑空投影與樓梯配對共用
+    aligner = ST.Aligner([fr.floor for fr in res.floors])
+    project_voids(res, ctx, aligner)
     for fr in res.floors:
         findings, notes = review_floor(fr.floor, fr.equipment + fr.projected, ctx)
         fr.findings = findings
@@ -396,9 +507,10 @@ def review_dxf(path: str | Path, *, ctx: K.Context | None = None, dictionary: E.
     if res.floors:
         res.profile = RQ.build_profile(res.floors, ctx)
         res.requirements = RQ.evaluate(res.profile)
+        void_heights(res, ctx)
         presence_findings(res)
         voluntary_signs(res, ctx)
-        stair_speakers(res, ctx)
+        stair_speakers(res, ctx, aligner)
     pf, pn = PIPE.check_texts(ir, [e for fr in res.floors for e in fr.equipment], ctx)
     res.building_findings.extend(pf)
     res.building_notes.extend(pn)
