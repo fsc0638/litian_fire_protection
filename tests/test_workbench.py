@@ -155,6 +155,20 @@ def test_context_validates_and_requeues(client, monkeypatch):
     assert client.put("/api/cases/3/context", json={"ceiling_height": {"一樓": 3}}).status_code == 422
     assert client.put("/api/cases/3/context", json={"ceiling_height": {"1F": 300}}).status_code == 422
     assert client.put("/api/cases/3/context", json={"stories": 0}).status_code == 422
+    r = client.put("/api/cases/3/context", json={"policy": {"shaft_in_coverage": True}})       # 法規解讀設定
+    assert r.status_code == 200 and saved["ctx"]["policy"] == {"shaft_in_coverage": True}
+    assert client.put("/api/cases/3/context", json={"policy": {"不存在": True}}).status_code == 422
+
+
+def test_workbench_policy_switches_match_defaults():
+    """工作台的法規解讀勾選項與檢核程式的預設一致（鍵、預設值）。"""
+    import re
+    from pathlib import Path
+
+    from litian.review.checks import DEFAULT_POLICY
+    html = (Path(api.__file__).parent / "web" / "workbench.html").read_text(encoding="utf-8")
+    boxes = dict(re.findall(r'data-k="(\w+)" data-def="([01])"', html))
+    assert boxes == {k: "1" if v else "0" for k, v in DEFAULT_POLICY.items()}
 
 
 def test_decisions_store_accept_reject_and_undo(client, monkeypatch):

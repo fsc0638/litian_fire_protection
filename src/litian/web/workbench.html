@@ -170,6 +170,15 @@ ol.findings li.rejected { opacity: .55; }
             <thead><tr><th>樓層</th><th>圖面判讀面積</th><th>面積覆寫（㎡）</th><th>天花板高度（m）</th><th>無開口樓層</th></tr></thead>
             <tbody id="c-floors"></tbody></table></div>
           <p id="c-floors-hint" class="muted small">上傳平面圖並完成檢核後，這裡會列出各樓層。</p>
+          <details id="c-policy"><summary>法規解讀設定（條文有不同讀法之處；預設只降低嚴重度，並在缺失裡寫明兩種讀法）</summary>
+            <div class="stack small">
+              <label><input type="checkbox" data-k="shaft_in_coverage" data-def="0"> 管道間、昇降機道也要在消防栓、揚聲器的水平距離內</label>
+              <label><input type="checkbox" data-k="stair_speaker_vertical" data-def="1"> 樓梯間廣播依垂直每 15 m 一個檢討（第 133 條第 2 款第 5 目），不套水平 10 m</label>
+              <label><input type="checkbox" data-k="habitable_only_extinguisher" data-def="1"> 滅火器步行距離只檢討居室（樓梯、廁所、管道間、儲藏室改列說明）</label>
+              <label><input type="checkbox" data-k="exit_sign_counts_for_direction" data-def="1"> 出口標示燈的有效範圍可併入走廊避難方向指示燈涵蓋（列為需確認）</label>
+              <label><input type="checkbox" data-k="voluntary_signs_note" data-def="1"> 依第 23 條非應設的標示設備（自主設置），涵蓋缺失改為建議</label>
+            </div>
+          </details>
           <div class="row"><button class="primary" type="submit">儲存並重新檢核</button><span id="ctx-msg" class="small muted"></span></div>
         </form>
       </div>
@@ -355,6 +364,10 @@ ol.findings li.rejected { opacity: .55; }
     $("#c-occ").value = c.occupancy || "";
     $("#c-fp").value = c.fireproof === true ? "1" : c.fireproof === false ? "0" : "";
     $("#c-stories").value = c.stories ?? ""; $("#c-height").value = c.height ?? ""; $("#c-site").value = c.site_area ?? "";
+    document.querySelectorAll("#c-policy input[data-k]").forEach((el) => {
+      const p = c.policy || {};
+      el.checked = el.dataset.k in p ? p[el.dataset.k] === true : el.dataset.def === "1";
+    });
     const m = new Map();
     bundle.reviews.forEach((r) => (r.result?.floors || []).forEach((fl) => { if (!m.has(fl.label)) m.set(fl.label, fl.area); }));
     $("#c-floors-hint").classList.toggle("hidden", m.size > 0);
@@ -369,7 +382,10 @@ ol.findings li.rejected { opacity: .55; }
     const num = (v) => (v === "" ? null : Number(v));
     const body = { occupancy: $("#c-occ").value || null, fireproof: $("#c-fp").value === "" ? null : $("#c-fp").value === "1",
       stories: num($("#c-stories").value), height: num($("#c-height").value), site_area: num($("#c-site").value),
-      ceiling_height: {}, floor_area: {}, no_opening: [] };
+      ceiling_height: {}, floor_area: {}, no_opening: [], policy: {} };
+    document.querySelectorAll("#c-policy input[data-k]").forEach((el) => {
+      if (el.checked !== (el.dataset.def === "1")) body.policy[el.dataset.k] = el.checked;     // 只存與預設不同的
+    });
     document.querySelectorAll("#c-floors tr").forEach((tr) => {
       const l = tr.dataset.l, a = tr.querySelector(".f-area").value, h = tr.querySelector(".f-h").value;
       if (a !== "") body.floor_area[l] = Number(a);

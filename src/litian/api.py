@@ -736,6 +736,7 @@ class ContextBody(BaseModel):
     ceiling_height: dict[str, float] = Field(default_factory=dict)
     no_opening: list[str] = Field(default_factory=list, max_length=200)
     floor_area: dict[str, float] = Field(default_factory=dict)
+    policy: dict[str, bool] = Field(default_factory=dict)          # 法規解讀設定（只存與預設不同的）
 
 
 FLOOR_LABEL = re.compile(r"^(\d{1,3}M?F|B\d{1,2}|R\d?F)$")
@@ -753,6 +754,9 @@ def cases_context(case_id: int, body: ContextBody, user: dict = Depends(current_
                 raise HTTPException(422, f"{what}格式不符：{k} = {v}")
     if any(not FLOOR_LABEL.match(k) for k in body.no_opening):
         raise HTTPException(422, "無開口樓層代號格式不符")
+    from .review.checks import DEFAULT_POLICY
+    if bad := [k for k in body.policy if k not in DEFAULT_POLICY]:
+        raise HTTPException(422, f"沒有這個法規解讀設定：{bad[0][:40]}")
     ctx = body.model_dump()
     with pool.connection() as c:
         DS.save_context(c, case_id, ctx, user["username"])
