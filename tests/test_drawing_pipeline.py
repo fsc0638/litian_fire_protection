@@ -93,6 +93,10 @@ class FakeConn:
             def __exit__(s, *a): return False
         return T()
 
+    def execute(self, *a, **k):                    # 查外部參考相依檔等：沒有資料
+        from types import SimpleNamespace
+        return SimpleNamespace(fetchall=lambda: [], fetchone=lambda: None, rowcount=0)
+
 
 def test_worker_processes_dwg_through_converter(tmp_path, monkeypatch):
     spool, case = tmp_path / "spool", tmp_path / "cases"
@@ -100,7 +104,7 @@ def test_worker_processes_dwg_through_converter(tmp_path, monkeypatch):
     dwg = case / "001_A1-05.dwg"
     dwg.write_bytes(b"AC1027")
     saved, failed = [], []
-    monkeypatch.setattr(W.ST, "claim", lambda conn: {"id": 5, "name": "A1-05.dwg", "kind": "dwg", "path": str(dwg), "attempts": 1})
+    monkeypatch.setattr(W.ST, "claim", lambda conn: {"id": 5, "case_id": 1, "name": "A1-05.dwg", "kind": "dwg", "path": str(dwg), "attempts": 1})
     monkeypatch.setattr(W.ST, "save_result", lambda conn, fid, ir, stats, status="done": saved.append((fid, stats)))
     monkeypatch.setattr(W.ST, "save_failure", lambda conn, fid, err, retry: failed.append((fid, err, retry)))
 

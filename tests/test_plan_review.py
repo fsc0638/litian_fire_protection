@@ -372,7 +372,8 @@ def test_worker_runs_review_after_extraction(tmp_path, monkeypatch):
     assert fl["label"] == "1F" and fl["equipment"] == {"hydrant": 1, "extinguisher": 1}
     hyd = next(f for f in fl["findings"] if f["rule"] == "HYD-34")
     assert "geom" not in hyd and len(hyd["bbox"]) == 4 and hyd["no"] >= 1
-    assert (Path(svg_dir) / "1F.svg").read_text(encoding="utf-8").startswith("<svg")
+    assert fl["svg_name"] == "1F-0"                                   # 樓層-圖紙序號（同層多張圖不互相覆蓋）
+    assert (Path(svg_dir) / "1F-0.svg").read_text(encoding="utf-8").startswith("<svg")
 
 
 def test_room_display_name_is_short():

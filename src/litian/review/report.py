@@ -52,10 +52,10 @@ def _rows(reviews: list[dict], decisions: dict):
         res = r.get("result") or {}
         b = res.get("building") or {}
         for f in b.get("findings", []):
-            yield r, f.get("floor") or "全棟", f, _decided(decisions, r["file_id"], f.get("key")), True
+            yield r, f.get("floor") or "全棟", f, _decided(decisions, r["file_id"], f.get("key")), True, None
         for fl in res.get("floors", []):
             for f in fl["findings"]:
-                yield r, fl["label"], f, _decided(decisions, r["file_id"], f.get("key")), False
+                yield r, fl["label"], f, _decided(decisions, r["file_id"], f.get("key")), False, fl
 
 
 def build_html(case: dict, context: dict, occupancy: dict, reviews: list[dict], decisions: dict, laws: dict,
@@ -117,7 +117,7 @@ def build_html(case: dict, context: dict, occupancy: dict, reviews: list[dict], 
 
     def table(items):
         out = ["<table><tr><th>#</th><th>嚴重度</th><th>缺失與判定理由</th><th>改善建議／要補的資料</th><th>依據</th><th>審核</th></tr>"]
-        for _r, _fl, f, d, _b in items:
+        for _r, _fl, f, d, _b, _sheet in items:
             miss = "<div><b>要補：</b>" + escape("；".join(f["missing"])) + "</div>" if f.get("missing") else ""
             note = f"<div class='small'>{escape(d.get('note') or '')}</div>" if d.get("note") else ""
             out.append(f"<tr class='nobreak'><td>{f['no']}</td><td class='sev' style='color:{SEV_COLOR[f['severity']]}'>{SEV[f['severity']]}</td>"
@@ -132,12 +132,12 @@ def build_html(case: dict, context: dict, occupancy: dict, reviews: list[dict], 
     o.append(table(bitems) if bitems else "<p class='muted'>無。</p>")
     for r in reviews:
         for fl in (r.get("result") or {}).get("floors", []):
-            items = [x for x in kept if x[0] is r and not x[4] and x[1] == fl["label"]]
+            items = [x for x in kept if x[0] is r and x[5] is fl]           # 同一樓層可能有好幾張圖
             if not fl["findings"] and not fl["equipment"]:
                 continue
             o.append(f"<section class='floor'><h2>{escape(fl['label'])}｜{escape(fl.get('number') or '')} {escape(fl['title'])}</h2>"
                      f"<div class='small muted'>{escape(r['name'])}｜樓地板約 {fl['area']:,.0f} ㎡</div>")
-            svg = svgs.get((r["file_id"], fl["label"]))
+            svg = svgs.get((r["file_id"], fl.get("svg_name") or fl["label"]))
             if svg:
                 o.append(f"<div class='plan'>{svg}</div>")
             o.append(table(items) if items else "<p class='muted'>本層未列缺失。</p>")
@@ -156,7 +156,7 @@ def build_csv(case: dict, reviews: list[dict], decisions: dict, laws: dict) -> s
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(["案件", "檔案", "樓層", "編號", "嚴重度", "類別", "缺失", "判定理由", "改善建議", "要補的資料", "依據", "審核", "審核備註", "識別碼"])
-    for r, fl, f, d, _b in _rows(reviews, decisions):
+    for r, fl, f, d, _b, _sheet in _rows(reviews, decisions):
         w.writerow([case["name"], r["name"], fl, f["no"], SEV[f["severity"]], f["category"], f["title"], f["why"], f["fix"],
                     "；".join(f.get("missing", [])), "、".join(laws.get(i, {}).get("citation", i) for i in f["law"]),
                     DECISION[d.get("decision")], d.get("note") or "", f.get("key", "")])

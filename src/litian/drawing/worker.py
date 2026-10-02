@@ -20,12 +20,15 @@ from pathlib import Path
 
 from . import convert_client as CC
 from . import store as ST
+from . import xref as XR
 from .ir import summary
 
 log = logging.getLogger("litian.worker")
-EXTRACT_TIMEOUT = 300                 # 秒
-REVIEW_TIMEOUT = 300
-EXTRACT_MEM = 1200 * 1024 * 1024      # 子行程位址空間上限
+# 竣工圖等大型圖（轉出 50 MB 以上、綁定外部參考）在 ARM 主機上要數分鐘；記憶體上限可用環境變數調整
+EXTRACT_TIMEOUT = 600                 # 秒
+REVIEW_TIMEOUT = 900
+BIND_TIMEOUT = 600
+EXTRACT_MEM = int(os.environ.get("SUBPROC_MEM_MB", "2400")) * 1024 * 1024      # 子行程位址空間上限
 # 數值函式庫預設會開多執行緒、預留大量位址空間；子行程限記憶體時改單執行緒
 SUBPROC_ENV = {**os.environ, "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
 CONVERT_TIMEOUT = 420                 # 等轉檔服務（含排隊）
@@ -37,20 +40,65 @@ def _limit_memory():                  # 只在 Linux 子行程裡執行
     resource.setrlimit(resource.RLIMIT_AS, (EXTRACT_MEM, EXTRACT_MEM))
 
 
-def _run(args: list[str], timeout: int, what: str) -> None:
+def _run(args: list[str], timeout: int, what: str) -> str:
     r = subprocess.run([sys.executable, "-m", *args], capture_output=True, text=True, encoding="utf-8",
                        errors="replace", timeout=timeout, env=SUBPROC_ENV,
                        preexec_fn=_limit_memory if os.name == "posix" else None)
     if r.returncode != 0:
         last = (r.stderr.strip().splitlines() or ["未知錯誤"])[-1]
         raise RuntimeError(f"{what}失敗：{last[:300]}")
+    return r.stdout
 
 
-def extract_in_subprocess(dxf: Path, workdir: Path) -> tuple[dict, dict]:
+def extract_in_subprocess(dxf: Path, workdir: Path, expand: list[str] | tuple = ()) -> tuple[dict, dict]:
     out = workdir / "ir.json"
-    _run(["litian.drawing.ir", str(dxf), str(out)], EXTRACT_TIMEOUT, "抽取")
+    args = ["litian.drawing.ir", str(dxf), str(out)] + (["--expand", ",".join(expand)] if expand else [])
+    _run(args, EXTRACT_TIMEOUT, "抽取")
     ir = json.loads(out.read_text(encoding="utf-8"))
     return ir, summary(ir)
+
+
+def _convert(spool: Path, jid: str, dwg: Path, dst: Path) -> Path:
+    CC.submit(spool, jid, dwg)
+    dxf, _ = CC.wait(spool, jid, CONVERT_TIMEOUT)
+    shutil.move(str(dxf), dst)
+    CC.cleanup(spool, jid)
+    return dst
+
+
+def bind_xrefs(job: dict, src: Path, spool: Path) -> tuple[Path, dict]:
+    """主圖的外部參考（建築底圖等）在同一案件裡有上傳的話，綁定後另存 <檔名>.bound.dxf 供抽取與檢核。
+    參考檔還沒轉檔的先送轉檔服務。讀 DXF 一律在子行程（限時、限記憶體）。"""
+    path = Path(job["path"])
+    try:
+        refs = json.loads(_run(["litian.drawing.xref", "list", str(src)], BIND_TIMEOUT, "外部參考讀取") or "[]")
+    except Exception:
+        return src, {}                    # 讀不了的圖讓後面的抽取步驟回報真正原因
+    if not refs:
+        return src, {}
+    cands = XR.case_candidates(path.parent, exclude=path)
+    for k, (_name, _ref, key) in enumerate(refs):
+        cand = cands.get(key)
+        if cand is not None and cand.suffix.lower() == ".dwg":
+            conv = cand.with_name(cand.stem + ".converted.dxf")
+            if not conv.exists():
+                _convert(spool, f"f{job['id']}x{k}", cand, conv)
+    out = path.with_name(path.stem + ".bound.dxf")
+    info = json.loads(_run(["litian.drawing.xref", "bind", str(src), str(path.parent), str(out), str(path)],
+                           BIND_TIMEOUT, "外部參考綁定"))
+    return Path(info["path"]), {"bound": info["bound"], "missing": info["missing"]}
+
+
+def requeue_xref_dependents(conn, job: dict) -> int:
+    """剛處理完的檔若是別的檔缺的外部參考，把那些檔重新排入處理（完整重跑，才能綁定）。"""
+    key = XR.UPLOAD_PREFIX.sub("", Path(job["path"]).stem).lower()
+    rows = conn.execute("SELECT id, stats FROM case_file WHERE case_id = %s AND id <> %s AND status IN ('done', 'failed') "
+                        "AND stats ? 'xref'", (job["case_id"], job["id"])).fetchall()
+    ids = [r["id"] for r in rows if any(XR.ref_key(m) == key for m in (r["stats"]["xref"].get("missing") or []))]
+    for i in ids:
+        conn.execute("UPDATE case_file SET status = 'queued', review_only = false, attempts = 0, updated_at = now() "
+                     "WHERE id = %s", (i,))
+    return len(ids)
 
 
 def has_floor_plans(ir: dict) -> bool:
@@ -87,10 +135,11 @@ def run_review(conn, job: dict, src: Path, work: Path, stats: dict | None) -> No
 def process(conn, job: dict, spool: Path) -> dict:
     path = Path(job["path"])
     converted = path.with_name(path.stem + ".converted.dxf")
+    bound = path.with_name(path.stem + ".bound.dxf")
     if job.get("review_only"):
-        # 只重跑檢核（檢核條件改了）：用已存的中介資料與轉好的 DXF
+        # 只重跑檢核（檢核條件改了）：用已存的中介資料與轉好（或已綁定外部參考）的 DXF
         ir = ST.load_ir(conn, job["id"])
-        src = converted if job["kind"] == "dwg" else path
+        src = bound if bound.exists() else (converted if job["kind"] == "dwg" else path)
         if ir is not None and src.exists():
             with tempfile.TemporaryDirectory() as d:
                 work = Path(d)
@@ -99,17 +148,15 @@ def process(conn, job: dict, spool: Path) -> dict:
                 run_review(conn, job, src, work, None)
             return {"review_only": True}
     if job["kind"] == "dwg":
-        jid = f"f{job['id']}"
-        CC.submit(spool, jid, path)
-        dxf, _ = CC.wait(spool, jid, CONVERT_TIMEOUT)
-        src = converted                                      # 保留轉好的 DXF，之後重新抽取、重跑檢核不必再轉
-        shutil.move(str(dxf), src)
-        CC.cleanup(spool, jid)
+        src = _convert(spool, f"f{job['id']}", path, converted)   # 保留轉好的 DXF，之後重新抽取、重跑檢核不必再轉
     else:
         src = path
+    src, xinfo = bind_xrefs(job, src, spool)
     with tempfile.TemporaryDirectory() as d:
         work = Path(d)
-        ir, stats = extract_in_subprocess(src, work)
+        ir, stats = extract_in_subprocess(src, work, expand=xinfo.get("bound", []))
+        if xinfo:
+            stats["xref"] = xinfo
         review = has_floor_plans(ir)
         with conn.transaction():
             ST.save_result(conn, job["id"], ir, stats, status="reviewing" if review else "done")
@@ -126,6 +173,8 @@ def run_once(conn, spool: Path) -> bool:
         stats = process(conn, job, spool)
         log.info("done file=%s name=%s %s", job["id"], job["name"],
                  "review-only" if stats.get("review_only") else f"sheets={stats['sheets']} texts={stats['texts']}")
+        if not stats.get("review_only") and (n := requeue_xref_dependents(conn, job)):
+            log.info("requeued %s file(s) referencing %s", n, job["name"])
     except Exception as e:
         # 只有「等轉檔逾時」值得重試（轉檔服務可能剛好在重啟）；其他錯誤重試結果相同
         retry = isinstance(e, CC.ConvertError) and "逾時" in str(e) and job["attempts"] < ST.MAX_ATTEMPTS

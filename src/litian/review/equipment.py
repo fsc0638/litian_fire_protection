@@ -52,8 +52,13 @@ KIND_LABEL = {
 DETECTOR_RE = re.compile(r"(差動式|定溫式|補償式|偵煙式)[局侷]限型探測器（(特種|[123])")
 
 
+BLOCKS_YAML = Path("data/review/blocks.yaml")
+
+
 def norm(s: str) -> str:
-    return re.sub(r"\s+", "", s or "").replace("(", "（").replace(")", "）")
+    """名稱比對用：去空白、括號與逗號全半形一致、「侷／局」一致（圖例與事務所寫法常混用）。"""
+    s = re.sub(r"\s+", "", s or "").replace("(", "（").replace(")", "）")
+    return s.replace("，", "、").replace(",", "、").replace("侷", "局")
 
 
 def kinds_of(legend: str) -> tuple[str, ...]:
@@ -64,23 +69,54 @@ def load_legend(path: Path = LEGEND_JSON) -> list[str]:
     return [it["name"] for it in json.loads(Path(path).read_text(encoding="utf-8"))]
 
 
+def load_blocks(path: Path = BLOCKS_YAML) -> tuple[list, list]:
+    """圖塊字典檔 → (圖塊名稱規則, 圖層名稱規則)；每條 (正規表示式, 圖例名稱, 預設規格)。檔案不存在回空。"""
+    import yaml
+    p = Path(path)
+    if not p.exists():
+        return [], []
+    d = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    conv = lambda items: [(it["match"], it["legend"], dict(it.get("spec") or {})) for it in items or []]  # noqa: E731
+    return conv(d.get("blocks")), conv(d.get("layers"))
+
+
 @dataclass
 class Dictionary:
-    """圖塊名稱 → 圖例名稱。legend：附件三名稱；blocks：事務所圖塊字典 [(正規表示式, 圖例名稱)]。"""
+    """圖塊 → 圖例名稱（＋預設規格）。
+    legend：附件三名稱（名稱正規化後相同即認得）；blocks／layers：事務所圖塊字典，(正規表示式, 圖例名稱[, 規格])。
+    圖塊名稱認不出時（例：匿名圖塊 A$C…）再用所在圖層的名稱辨識。"""
     legend: list[str]
-    blocks: list[tuple[str, str]] = field(default_factory=list)
+    blocks: list[tuple] = field(default_factory=list)
+    layers: list[tuple] = field(default_factory=list)
 
     def __post_init__(self):
         self._exact = {norm(n): n for n in self.legend}
+        self.blocks = [(b[0], b[1], b[2] if len(b) > 2 else {}) for b in self.blocks]
+        self.layers = [(b[0], b[1], b[2] if len(b) > 2 else {}) for b in self.layers]
+        bad = [b[1] for b in self.blocks + self.layers if b[1] not in set(self.legend)]
+        if bad:
+            raise ValueError(f"圖塊字典裡有不在附件三圖例中的名稱：{bad[:5]}")
+
+    @classmethod
+    def default(cls) -> "Dictionary":
+        blocks, layers = load_blocks()
+        return cls(load_legend(), blocks, layers)
+
+    def _by(self, rules, name: str):
+        n = norm(name)
+        if n in self._exact:
+            return self._exact[n], {}
+        for pat, legend, spec in rules:
+            if re.search(pat, name):
+                return legend, spec
+        return None
 
     def lookup(self, block: str) -> str | None:
-        n = norm(block)
-        if n in self._exact:
-            return self._exact[n]
-        for pat, legend in self.blocks:
-            if re.search(pat, block):
-                return legend
-        return None
+        hit = self._by(self.blocks, block)
+        return hit[0] if hit else None
+
+    def match(self, block: str, layer: str = "") -> tuple[str, dict] | None:
+        return self._by(self.blocks, block) or (self._by(self.layers, layer) if layer else None)
 
 
 def _attr(attrs: dict, *keys: str) -> str | None:
@@ -144,13 +180,15 @@ def recognize(inserts: list[dict], scale: float, dictionary: Dictionary) -> tupl
     認得但不屬於檢核種類的圖例（閥、幫浦等）不列入設備，也不算認不出。"""
     found, unknown = [], Counter()
     for ins in inserts:
-        legend = dictionary.lookup(ins["name"])
-        if legend is None:
+        hit = dictionary.match(ins["name"], ins.get("layer", ""))
+        if hit is None:
             unknown[ins["name"]] += 1
             continue
+        legend, defaults = hit
         kinds = kinds_of(legend)
         if not kinds:
             continue
+        spec = {**defaults, **specs(legend, ins.get("attribs") or {})}     # 圖塊屬性優先於字典預設
         found.append(Equipment(ins.get("h", ""), ins["name"], legend, kinds, ins["x"] * scale, ins["y"] * scale,
-                               ins.get("layer", ""), specs(legend, ins.get("attribs") or {})))
+                               ins.get("layer", ""), spec))
     return found, unknown

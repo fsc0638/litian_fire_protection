@@ -687,7 +687,11 @@ def cases_sheet_texts(case_id: int, sheet_id: int, user: dict = Depends(current_
 
 
 # ---------- 檢核結果（review.engine 由 worker 產生）----------
-REVIEW_LABEL = re.compile(r"^[0-9A-Z]{1,6}$")
+REVIEW_LABEL = re.compile(r"^[0-9A-Z]{1,6}(-\d{1,4})?$")       # 樓層代號或「樓層-圖紙序號」
+
+
+def _svg_name(fl: dict) -> str:
+    return fl.get("svg_name") or fl["label"]
 
 
 def _review_bundle(case_id: int) -> dict:
@@ -701,7 +705,7 @@ def _review_bundle(case_id: int) -> dict:
         for item in b.get("findings", []) + b.get("requirements", []) + b.get("notes", []):
             ids.update(item["law"])
         for fl in res.get("floors", []):
-            fl["svg"] = f"/api/cases/{case_id}/files/{r['file_id']}/review/{fl['label']}.svg"
+            fl["svg"] = f"/api/cases/{case_id}/files/{r['file_id']}/review/{_svg_name(fl)}.svg"
             for item in fl["findings"] + fl["notes"]:
                 ids.update(item["law"])
     laws = {}
@@ -779,10 +783,10 @@ def _report_inputs(case_id: int):
     root = CASES_DIR.resolve()
     for r in b["reviews"]:
         for fl in (r["result"] or {}).get("floors", []):
-            if r.get("svg_dir") and REVIEW_LABEL.match(fl["label"] or ""):
-                p = (Path(r["svg_dir"]) / f"{fl['label']}.svg").resolve()
+            if r.get("svg_dir") and REVIEW_LABEL.match(_svg_name(fl) or ""):
+                p = (Path(r["svg_dir"]) / f"{_svg_name(fl)}.svg").resolve()
                 if root in p.parents and p.is_file():
-                    svgs[(r["file_id"], fl["label"])] = p.read_text(encoding="utf-8")
+                    svgs[(r["file_id"], _svg_name(fl))] = p.read_text(encoding="utf-8")
     return case, b, occ, svgs
 
 

@@ -6,6 +6,7 @@ COPY src ./src
 RUN pip install --no-cache-dir .
 COPY data/lawdb ./data/lawdb
 COPY data/tables ./data/tables
+COPY data/review ./data/review
 # 以無家目錄的帳號執行；ezdxf 等套件的快取放暫存區
 ENV XDG_CACHE_HOME=/tmp/.cache
 USER 65534:65534

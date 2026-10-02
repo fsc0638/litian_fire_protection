@@ -500,9 +500,13 @@ def build_profile(floors: list, ctx) -> Profile:
     notes = []
     has_elec = has_kitchen = False
     big_rooms = []
+    seen = set()
     for fr in floors:
         fl = fr.floor
         lab = fl.label or ""
+        if lab in seen:
+            continue                     # 同一樓層分成幾張圖（各系統一張）：面積只算一次
+        seen.add(lab)
         area = ctx.floor_area.get(lab, fl.area)
         kind, lv = _level(lab)
         has_elec |= any(r.kind == "electrical" for r in fl.rooms)

@@ -46,21 +46,46 @@ def walk(entities):
     yield from _walk(entities, None, 0)
 
 
-def explode(doc) -> list[tuple[str, list[tuple[float, float]]]]:
-    """回傳 [(圖層, [(x, y), ...]), ...]；座標為圖面單位。"""
+def _near(x: float, y: float, boxes) -> bool:
+    """點是否落在任一範圍內（範圍各向外放大自身尺寸一倍：圖塊插入點常在底圖角落）。"""
+    for b in boxes:
+        w, h = b[2] - b[0], b[3] - b[1]
+        if b[0] - w <= x <= b[2] + w and b[1] - h <= y <= b[3] + h:
+            return True
+    return False
+
+
+def explode(doc, keep=None, boxes=None, flatten: float = FLATTEN) -> list[tuple[str, list[tuple[float, float]]]]:
+    """回傳 [(圖層, [(x, y), ...]), ...]；座標為圖面單位。
+    keep(圖層) → 是否保留（認房間只需要牆柱門窗，消防圖上的設備、配線、涵蓋圓不必展開）；
+    boxes：只展開插入點（或第一點）落在這些範圍附近的頂層實體；flatten：弧線轉折線容許誤差（圖面單位）。
+    竣工圖全部展開會有二十多萬條、數 GB 記憶體，所以呼叫端應盡量給 keep 與 boxes。"""
     from ezdxf import disassemble
 
     out = []
-    for e, layer in _walk(doc.modelspace(), None, 0):
-        try:
-            prim = disassemble.make_primitive(e, max_flattening_distance=FLATTEN)
-            pts = [(float(v.x), float(v.y)) for v in prim.vertices()]
-        except Exception:
-            continue
-        if len(pts) >= 2:
-            out.append((layer, pts))
-            if len(out) > MAX_PRIMS:
-                raise TooManyPrimitives(f"展開後線段超過 {MAX_PRIMS}")
+    for top in doc.modelspace():
+        if boxes:
+            try:
+                p = top.dxf.insert if top.dxf.hasattr("insert") else (top.dxf.start if top.dxf.hasattr("start") else None)
+                if p is None and top.dxftype() == "LWPOLYLINE":
+                    p = next(iter(top.vertices()))
+                    p = type("P", (), {"x": p[0], "y": p[1]})
+            except Exception:
+                p = None
+            if p is not None and not _near(p.x, p.y, boxes):
+                continue
+        for e, layer in _walk([top], None, 0):
+            if keep is not None and not keep(layer):
+                continue
+            try:
+                prim = disassemble.make_primitive(e, max_flattening_distance=flatten)
+                pts = [(float(v.x), float(v.y)) for v in prim.vertices()]
+            except Exception:
+                continue
+            if len(pts) >= 2:
+                out.append((layer, pts))
+                if len(out) > MAX_PRIMS:
+                    raise TooManyPrimitives(f"展開後線段超過 {MAX_PRIMS}")
     return out
 
 

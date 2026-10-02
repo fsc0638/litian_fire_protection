@@ -87,6 +87,103 @@ def _place(b, insert):
     return [_r(min(p.x for p in pts)), _r(min(p.y for p in pts)), _r(max(p.x for p in pts)), _r(max(p.y for p in pts))]
 
 
+DRAWING_NO = re.compile(r"[A-Z]{1,4}-?[0-9A-Z]{1,5}(?:-\d{1,2})?")
+DETAIL_NAME = re.compile(r"\(\s*\d+\s*\)\s*$")
+NOTE_PREFIX = re.compile(r"^(變更設計|本次|註|說明|備註|NOTE|\d+\s*[.、．])", re.I)     # 變更說明、編號條列不是圖名
+
+
+def _overlap(a, b) -> bool:
+    return a is not None and b is not None and a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
+def _iou(a, b) -> float:
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    inter = ix * iy
+    ua = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / ua if ua > 0 else 0.0
+
+
+def _within(a, b, tol: float = 0.02) -> bool:
+    """a 是否落在 b 內（容許 b 尺寸 2% 誤差）。"""
+    dx, dy = (b[2] - b[0]) * tol, (b[3] - b[1]) * tol
+    return a[0] >= b[0] - dx and a[1] >= b[1] - dy and a[2] <= b[2] + dx and a[3] <= b[3] + dy
+
+
+def _viewport_window(vp):
+    """視埠在模型空間框出的範圍（view_center ± 視埠寬高換算；有扭轉角時取外接框）。"""
+    h = float(vp.dxf.view_height)
+    pw, ph = float(vp.dxf.width), float(vp.dxf.height)
+    if h <= 0 or pw <= 0 or ph <= 0:
+        return None
+    w = h * pw / ph
+    c = vp.dxf.view_center_point
+    a = math.radians(float(vp.dxf.get("view_twist_angle", 0) or 0))
+    hw = abs(w / 2 * math.cos(a)) + abs(h / 2 * math.sin(a))
+    hh = abs(w / 2 * math.sin(a)) + abs(h / 2 * math.cos(a))
+    return [_r(c.x - hw), _r(c.y - hh), _r(c.x + hw), _r(c.y + hh)]
+
+
+def _layout_title(texts: list[tuple[float, float, str]]) -> str:
+    """配置頁上的圖名：含中文、40 字以內、不是變更說明或註記的文字，依由上而下、由左而右串起來
+    （圖名常拆成兩行，例：「一層消防滅火器避難」＋「緊急廣播設備平面圖」）。"""
+    parts = [(-y, x, s) for x, y, s in texts
+             if re.search(r"[一-鿿]", s) and len(s) <= 40 and not NOTE_PREFIX.match(s)]
+    return "".join(s for _, _, s in sorted(parts))
+
+
+def layout_sheets(doc) -> list[dict]:
+    """配置頁出圖：每個有視埠的配置頁＝一張圖。role：
+    main（主圖，分配模型空間內容）｜detail（細部放大，名稱帶「(1)」或範圍落在別張主圖內）｜duplicate（與主圖範圍幾乎相同，例：涵蓋檢討頁）。"""
+    out = []
+    for order, lay in enumerate(doc.layouts):
+        if lay.name == "Model":
+            continue
+        vps = []
+        for e in lay:
+            if e.dxftype() == "VIEWPORT" and e.dxf.get("id", 2) != 1:
+                w = _viewport_window(e)
+                if w:
+                    vps.append((float(e.dxf.width) * float(e.dxf.height), w))
+        if not vps:
+            continue
+        window = max(vps)[1]
+        meta, frame_block, texts = {}, None, []
+        for e in lay:
+            t = e.dxftype()
+            if t == "INSERT":
+                frame_block = frame_block or e.dxf.name
+                if e.attribs and any(SHEET_KEY_RE.search(a.dxf.tag) for a in e.attribs):
+                    meta = {_clean(a.dxf.tag): _clean(a.dxf.text) for a in e.attribs}
+                    frame_block = e.dxf.name
+            elif t in ("TEXT", "MTEXT"):
+                s = _text_of(e).strip()
+                if s:
+                    p = e.dxf.insert
+                    texts.append((p.x, p.y, " ".join(s.split())))
+        name = _clean(lay.name)
+        if not sheet_number(meta):
+            base = DETAIL_NAME.sub("", name).strip()
+            meta = {"圖號": name if DRAWING_NO.fullmatch(base) else "", "圖名": _layout_title(texts), **meta}
+        meta["配置頁"] = name
+        out.append({"layout": name, "order": order, "bbox": window, "meta": meta, "frame_block": _clean(frame_block),
+                    "detail": bool(DETAIL_NAME.search(name)), "plan": "平面" in sheet_title(meta)})
+    # 決定角色：先排主圖候選（圖名含「平面」者優先），再判細部與重複
+    mains: list[dict] = []
+    for s in sorted(out, key=lambda s: (s["detail"], not s["plan"], s["order"])):
+        if s["detail"] or any(_within(s["bbox"], m["bbox"]) and _iou(s["bbox"], m["bbox"]) < 0.8 for m in mains):
+            s["role"] = "detail"
+        elif any(_iou(s["bbox"], m["bbox"]) >= 0.8 for m in mains):
+            s["role"] = "duplicate"
+        else:
+            s["role"] = "main"
+            mains.append(s)
+    out.sort(key=lambda s: s["order"])
+    for s in out:
+        del s["order"], s["detail"], s["plan"]
+    return out
+
+
 def _contains(b, x, y) -> bool:
     return b is not None and b[0] <= x <= b[2] and b[1] <= y <= b[3]
 
@@ -112,10 +209,39 @@ def sheet_title(meta: dict) -> str:
     return meta_field(meta, "圖名") or ""
 
 
-def extract(path: str | Path) -> dict:
+def _expand_block(e, frame_of, texts: list, inserts: list, depth: int = 0) -> None:
+    """綁定進來的外部參考（建築底圖）：展開裡面的文字（不設上限，房名都在這裡）與巢狀圖塊（門、設備）。"""
+    name = _clean(e.dxf.name)
+    try:
+        children = list(e.virtual_entities())
+    except Exception:
+        return
+    for v in children:
+        t = v.dxftype()
+        if t in ("TEXT", "MTEXT"):
+            s = _text_of(v).strip()
+            if s:
+                q = v.dxf.insert
+                texts.append({"h": e.dxf.handle, "t": s, "x": _r(q.x), "y": _r(q.y),
+                              "ht": _r(v.dxf.char_height if t == "MTEXT" else v.dxf.height),
+                              "rot": _r(v.dxf.get("rotation", 0)), "layer": _clean(v.dxf.layer),
+                              "f": frame_of(q.x, q.y), "src": f"xref:{name}"})
+        elif t == "INSERT" and depth < 3:
+            q = v.dxf.insert
+            inserts.append({"h": e.dxf.handle, "name": _clean(v.dxf.name), "x": _r(q.x), "y": _r(q.y),
+                            "rot": _r(v.dxf.get("rotation", 0)), "sx": _r(v.dxf.get("xscale", 1)),
+                            "sy": _r(v.dxf.get("yscale", 1)), "layer": _clean(v.dxf.layer),
+                            "f": frame_of(q.x, q.y), "attribs": {}, "src": f"xref:{name}"})
+            if "$0$" in v.dxf.name:                                     # 綁定時參考檔的圖塊名稱加上「參考名$0$」前綴
+                _expand_block(v, frame_of, texts, inserts, depth + 1)     # 參考檔內的巢狀圖塊（房名標籤等）
+
+
+def extract(path: str | Path, expand: tuple[str, ...] | list[str] = ()) -> dict:
+    """expand：已綁定的外部參考圖塊名稱（xref.bind 的 bound），其內容完整展開。"""
     from ezdxf import recover
 
     doc, auditor = recover.readfile(str(path))
+    expand = set(expand)
     msp = doc.modelspace()
     n = len(msp)
     if n > MAX_ENTITIES:
@@ -153,11 +279,20 @@ def extract(path: str | Path) -> dict:
     frame_names = {f["block"] for f in frames}
     frames.sort(key=lambda f: (sheet_number(f["sheet"]) or "", f["bbox"][0]))
 
+    # 配置頁（paper space）出圖：每個配置頁是一張圖，主視埠框出的模型空間範圍就是這張圖的內容
+    lsheets = layout_sheets(doc)
+    if lsheets:
+        mains = [s for s in lsheets if s["role"] == "main"]
+        extra = [f for f in frames if not any(_overlap(f["bbox"], s["bbox"]) for s in mains)]
+        frames = [{"block": s["frame_block"], "bbox": s["bbox"], "sheet": s["meta"], "role": s["role"],
+                   "layout": s["layout"]} for s in lsheets] + [{**f, "role": "main", "layout": None} for f in extra]
+        frame_names |= {s["frame_block"] for s in lsheets if s["frame_block"]}
+    assignable = [(i, f["bbox"]) for i, f in enumerate(frames) if f.get("role", "main") == "main"]
+
     def frame_of(x: float, y: float):
-        for i, f in enumerate(frames):
-            if _contains(f["bbox"], x, y):
-                return i
-        return None
+        """點所在的圖紙：重疊時取範圍最小者（細部放大圖、涵蓋檢討頁等不分配內容）。"""
+        hits = [(area(b), i) for i, b in assignable if _contains(b, x, y)]
+        return min(hits)[1] if hits else None
 
     texts, inserts, segments, polygons = [], [], [], []
     for e in msp:
@@ -178,7 +313,9 @@ def extract(path: str | Path) -> dict:
                             "sy": _r(e.dxf.get("yscale", 1)), "layer": _clean(e.dxf.layer),
                             "f": frame_of(p.x, p.y),
                             "attribs": {_clean(a.dxf.tag): _clean(a.dxf.text) for a in e.attribs}})
-            if e.dxf.name not in frame_names and not e.dxf.name.startswith("*D"):   # 圖框與標註圖塊不展開
+            if e.dxf.name in expand:
+                _expand_block(e, frame_of, texts, inserts)
+            elif e.dxf.name not in frame_names and not e.dxf.name.startswith("*D"):   # 圖框與標註圖塊不展開
                 k = 0
                 for v in e.virtual_entities():
                     if k >= BLOCK_TEXT_MAX:
@@ -219,7 +356,8 @@ def extract(path: str | Path) -> dict:
                                  "area": _r(_poly_area(pts)), "pts": [[_r(x), _r(y)] for x, y in pts]})
 
     if frames:
-        sheets = [{"idx": i, "bbox": f["bbox"], "frame_block": _clean(f["block"]), "meta": f["sheet"]}
+        sheets = [{"idx": i, "bbox": f["bbox"], "frame_block": _clean(f["block"]) if f["block"] else None, "meta": f["sheet"],
+                   "role": f.get("role", "main"), "layout": f.get("layout")}
                   for i, f in enumerate(frames)]
     elif len(orphan_meta) <= 1:
         # 沒有圖框、最多一個圖號：整個模型空間算一張圖
@@ -261,8 +399,10 @@ def summary(ir: dict) -> dict:
 
 
 def main(argv: list[str]) -> int:
+    """python -m litian.drawing.ir <in.dxf> <out.json> [--expand 圖塊1,圖塊2]（--expand：已綁定的外部參考）"""
     src, dst = argv[1], argv[2]
-    ir = extract(src)
+    expand = argv[argv.index("--expand") + 1].split(",") if "--expand" in argv else ()
+    ir = extract(src, expand=[x for x in expand if x])
     Path(dst).write_text(json.dumps(ir, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(json.dumps(summary(ir), ensure_ascii=False))
     return 0

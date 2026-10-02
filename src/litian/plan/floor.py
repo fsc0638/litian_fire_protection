@@ -41,6 +41,7 @@ class LayerProfile:
     exclude: str = r"TXT|TEXT|DIM|ANNO|HATCH|標註"
 
     def role(self, layer: str) -> str | None:
+        layer = layer.split("$0$")[-1]          # 綁定外部參考後的圖層名稱帶「參考名$0$」前綴
         if re.search(self.exclude, layer, re.I):
             return None
         for name in ("wall", "column", "door", "window"):
@@ -94,13 +95,20 @@ def _cn_int(s: str) -> int | None:
     return _NUM.get(s) if len(s) == 1 else None
 
 
+NOT_PLAN = re.compile(r"配置|位置|天花|裝修|筏基|基礎|基地|景觀|植栽|地籍|昇位|升位|系統圖|剖面|立面|詳圖|大樣|水力|計算|索引|數量|涵蓋|檢討表|門窗")
+
+
 def floor_label(title: str) -> str | None:
-    """圖名 → 樓層代號（1F、1MF、B2、R1F、RF）。不是平面圖或認不出樓層回 None。"""
+    """圖名 → 樓層代號（1F、1MF、B2、R1F、RF）。不是平面圖或認不出樓層回 None。
+    消防圖常寫「一層消防排煙系統」「一層室內栓、火警設備平面圖」：有樓層且是消防設備配置的也算平面圖。"""
     t = (title or "").replace(" ", "")
-    if "平面" not in t or re.search(r"配置|位置|天花|裝修|筏基|基礎|基地|景觀|植栽|地籍", t):
+    if NOT_PLAN.search(t) or not ("平面" in t or re.search(r"消防|設備|系統", t)):
         return None
-    if "屋頂層" in t:
+    if "屋頂層" in t or re.search(r"(?<![A-Za-z0-9])RF(層|樓)", t):
         return "RF"
+    m = re.search(r"(?<![A-Za-z0-9])R(\d+)F(層|樓)", t)
+    if m:
+        return f"R{int(m.group(1))}F"
     m = re.search(rf"屋突([{_CN}]+)層", t)
     if m and (n := _cn_int(m.group(1))):
         return f"R{n}F"

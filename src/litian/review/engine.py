@@ -91,13 +91,19 @@ def presence_findings(res: Result) -> None:
                 "上傳消防設備平面圖；若已上傳，請確認設備圖塊名稱並補進圖塊字典",
                 sorted({law for r in required for law in r.law}), missing=["消防設備平面圖"]))
         return
+    # 同一樓層常分成幾張圖（例：室內栓火警、滅火器避難廣播、排煙各一張）：設備合併看，缺失記在該層第一張圖
+    by_label: dict[str, list[FloorResult]] = {}
+    for fr in plan_floors:
+        by_label.setdefault(fr.floor.label, []).append(fr)
     for r in required:
-        targets = [fr for fr in plan_floors if r.floors is None or fr.floor.label in r.floors]
-        for fr in targets:
-            if any(k in e.kinds for e in fr.equipment for k in r.kinds):
+        targets = [frs for lab, frs in by_label.items() if r.floors is None or lab in r.floors]
+        for frs in targets:
+            fr = frs[0]
+            eqs = [e for x in frs for e in x.equipment]
+            if any(k in e.kinds for e in eqs for k in r.kinds):
                 continue
             sev, extra, law = K.RED, "", list(r.law)
-            has_spk = any("sprinkler" in e.kinds for e in fr.equipment)
+            has_spk = any("sprinkler" in e.kinds for e in eqs)
             if r.key == "15" and has_spk:
                 sev, extra = K.ORANGE, "；本層設有自動撒水設備，若在其有效範圍內得免設（第 15 條第 2 項），請確認"
                 law.append("D0120029/15/2")
@@ -118,12 +124,21 @@ def review_dxf(path: str | Path, *, ctx: K.Context | None = None, dictionary: E.
 
     t0 = time.time()
     ctx = ctx or K.Context()
-    dictionary = dictionary or E.Dictionary(E.load_legend())
+    dictionary = dictionary or E.Dictionary.default()
     ir = ir or IR.extract(path)
+    prof_all = profile or F.LayerProfile()
+    floor_sheets = [s for s in ir["sheets"] if s.get("role", "main") == "main" and F.floor_label(IR.sheet_title(s["meta"]))]
+    boxes = [s["bbox"] for s in floor_sheets if s["bbox"]]
+    unit = F.unit_scale(floor_sheets[0]["meta"] if floor_sheets else {}, ir["dxf"].get("insunits")) or 0.01
     doc, _ = recover.readfile(str(path))
-    prims = G.explode(doc)
+    # 只展開平面圖範圍內的牆、柱、門、窗（認房間用）；弧線轉折誤差統一約 2 cm
+    prims = G.explode(doc, keep=lambda layer: prof_all.role(layer) is not None,
+                      boxes=boxes if len(boxes) == len(floor_sheets) else None, flatten=0.02 / unit)
+    del doc
     res = Result()
     for s in ir["sheets"]:
+        if s.get("role", "main") != "main":
+            continue                                   # 細部放大圖、涵蓋檢討頁：內容已在主圖
         title = IR.sheet_title(s["meta"])
         label = F.floor_label(title)
         if not label:
@@ -190,6 +205,11 @@ def _finding(i: int, f: K.Finding, geom: bool) -> dict:
             **({"geom": _geo(f.geom)} if geom else {})}
 
 
+def svg_name(fr: FloorResult) -> str:
+    """標示圖檔名：同一樓層可能有好幾張圖（各系統一張），用「樓層-圖紙序號」區分。"""
+    return f"{fr.floor.label}-{fr.sheet}"
+
+
 def to_dict(res: Result, geom: bool = True) -> dict:
     """geom=False：缺失只留外框（bbox），存資料庫用；範圍圖形已畫在標示圖上。"""
     floors = []
@@ -197,7 +217,7 @@ def to_dict(res: Result, geom: bool = True) -> dict:
         fl = fr.floor
         kinds = Counter(k for e in fr.equipment for k in e.kinds)
         floors.append({
-            "sheet": fr.sheet, "number": fr.number, "title": fr.title, "label": fl.label,
+            "sheet": fr.sheet, "number": fr.number, "title": fr.title, "label": fl.label, "svg_name": svg_name(fr),
             "area": round(fl.area, 2), "outline_area": round(fl.outline.area, 2), "fireproof": fl.fireproof,
             "rooms": [{"id": r.id, "name": r.name, "kind": r.kind, "conflict": r.conflict, "area": round(r.area, 2)}
                       for r in fl.rooms],
@@ -240,7 +260,7 @@ def main(argv: list[str]) -> int:
         out = Path(argv[argv.index("--svg") + 1])
         out.mkdir(parents=True, exist_ok=True)
         for fr in res.floors:
-            (out / f"{fr.floor.label}.svg").write_text(render.floor_svg(fr), encoding="utf-8")
+            (out / f"{svg_name(fr)}.svg").write_text(render.floor_svg(fr), encoding="utf-8")
     for fr in res.floors:
         c = Counter(f.severity for f in fr.findings)
         print(f"{fr.floor.label:5} {fr.title}：設備 {len(fr.equipment)}，缺失 {dict(c)}")
