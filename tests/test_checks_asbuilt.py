@@ -252,7 +252,7 @@ def test_hoistway_vs_elevator_lobby():
 def test_elevator_lobby_beyond_reach_is_reported_not_noted(name):
     """電梯廳是有人停留的樓地板：超出消防栓 25 m、揚聲器 10 m 仍列不符，不能當昇降機道改成說明。"""
     fl = long_plan(name)
-    assert next(r for r in fl.rooms if r.name == name).kind == "elevator"
+    assert next(r for r in fl.rooms if r.name == name).kind == "corridor"         # 房間種類表把電梯廳、前室歸通道
     f, notes = K.hydrant_distance(fl, [eq(HYD, 24, 5)], K.Context())
     assert [(x.severity, x.rooms) for x in f] == [(K.RED, [name])] and not notes_of(notes, "HYD-34")
     f, notes = K.speaker_distance(fl, [eq(SPKR, x, 5) for x in (5, 15, 25, 35, 40)], K.Context())

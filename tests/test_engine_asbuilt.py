@@ -161,7 +161,7 @@ def _sheet(msp, number, title, ox, oy, walls, texts, equip):
         msp.add_blockref(name, ((x + ox) * 100, (y + oy) * 100), dxfattribs={"layer": "DOOR" if name == "D1" else "0"})
 
 
-def make_dxf(path, *, upper_core=True, exit_sign=False, stair_speaker=True, hall_stair=False):
+def make_dxf(path, *, upper_core=True, exit_sign=False, stair_speaker=True, hall_stair=False, flame=False):
     """1F（F-101）：大空間「作業廠房」沒有探測器，辦公室 2 個；2F（F-102，畫在 (10, -60) m）：大空間是挑空，
     挑空範圍內 6 個探測器（裝在 2F 樓板下、保護 1F 大空間），辦公室 2 個。
     hall_stair：1F 大空間裡另寫「B梯」（樓梯沒有圍成獨立房間）。"""
@@ -175,13 +175,13 @@ def make_dxf(path, *, upper_core=True, exit_sign=False, stair_speaker=True, hall
     meta = doc.blocks.new("META")
     for tag in ("圖號", "中文圖名", "單位"):
         meta.add_attdef(tag, (0, 0))
-    for name in (SMOKE, SPEAKER, EXIT):
+    for name in (SMOKE, SPEAKER, EXIT, "火焰式探測器"):
         doc.blocks.new(name).add_circle((0, 0), 15)
     doc.blocks.new("D1").add_point((0, 0))
     office = [(SMOKE, 37, 8), (SMOKE, 37, 11), (SPEAKER, 36, 10)]
     eq1 = office + ([(SPEAKER, 37.5, 17.5)] if stair_speaker else [])
     eq1 += [("D1", 20, 0), (EXIT, 36, 6)] if exit_sign else []
-    eq2 = office + [(SMOKE, x, y) for x in (5, 15, 25) for y in (5, 15)]
+    eq2 = office + [(SMOKE, x, y) for x in (5, 15, 25) for y in (5, 15)] + ([("火焰式探測器", 20, 10)] if flame else [])
     walls, texts = plan("作業廠房")
     _sheet(msp, "F-101", "壹層消防設備平面圖", 0, 0, walls, texts + ([("B梯", 20, 12)] if hall_stair else []), eq1)
     _sheet(msp, "F-102", "貳層消防設備平面圖", 10, -60, *plan("(挑空)", core=upper_core), eq2)
@@ -213,6 +213,16 @@ def test_void_detectors_on_upper_sheet_protect_the_hall_below(tmp_path):
     assert [(f.severity, f.category, f.rooms) for f in h] == [(K.ORANGE, "需確認", ["作業廠房"])]
     assert h[0].metrics["need_est"] == 8 and h[0].metrics["have"] == 6 and h[0].law[0] == "D0120029/114/1"
     assert "F-102 圖 6 個，約 2 層樓高" in h[0].why and "高於本層設定的天花板高度 3 m" in h[0].why
+
+
+def test_flame_detector_reminder_only_where_it_protects(tmp_path):
+    """挑空內的火焰式探測器投影到下層：檢附監視範圍的提醒（DET-124）只列在下層，不在上層重複。"""
+    p = tmp_path / "fire.dxf"
+    make_dxf(p, flame=True)
+    res = EN.review_dxf(p, ctx=K.Context(ceiling_height={"1F": 3.0, "2F": 3.0}))
+    f1, f2 = res.floors
+    assert [f.rule for f in f1.findings if f.rule == "DET-124"] == ["DET-124"]
+    assert not any(f.rule == "DET-124" for f in f2.findings)
 
 
 def test_projected_detectors_keep_the_mounting_height_in_view(tmp_path):
@@ -282,10 +292,13 @@ def test_exit_sign_findings_become_advice_when_not_required(tmp_path):
     ticked = EN.review_dxf(p, ctx=K.Context(occupancy="丁-2", no_opening=["5F"]))   # 已檢討過無開口樓層：不再寫前提
     ex = [f for f in ticked.floors[0].findings if f.rule == "EXIT-146-3"]
     assert ex and all(f.severity == K.BLUE and "未勾選無開口樓層" not in f.why for f in ex)
+    # 不降級時維持出口標示燈規則原本的嚴重度（不符或需確認，視出入口情形而定），不會變建議
     off = EN.review_dxf(p, ctx=K.Context(occupancy="丁-2", policy={"voluntary_signs_note": False}))
-    assert {f.severity for f in off.floors[0].findings if f.rule == "EXIT-146-3"} == {K.RED}
+    sev = {f.severity for f in off.floors[0].findings if f.rule == "EXIT-146-3"}
+    assert sev and K.BLUE not in sev
     req = EN.review_dxf(p, ctx=K.Context(occupancy="甲-1"))               # 甲類應設：不降
-    assert {f.severity for f in req.floors[0].findings if f.rule == "EXIT-146-3"} == {K.RED}
+    sev = {f.severity for f in req.floors[0].findings if f.rule == "EXIT-146-3"}
+    assert sev and K.BLUE not in sev
 
 
 def _finding(rule):

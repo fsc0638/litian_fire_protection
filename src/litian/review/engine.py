@@ -500,8 +500,13 @@ def review_dxf(path: str | Path, *, ctx: K.Context | None = None, dictionary: E.
     # 各層都理解完才投影（上層挑空內的探測器要併到下層），再逐層跑規則；對位結果挑空投影與樓梯配對共用
     aligner = ST.Aligner([fr.floor for fr in res.floors])
     project_voids(res, ctx, aligner)
+    moved = Counter(e.spec.get("projected_from") for x in res.floors for e in x.projected if "flame_detector" in e.kinds)
     for fr in res.floors:
         findings, notes = review_floor(fr.floor, fr.equipment + fr.projected, ctx)
+        flames = sum(1 for e in fr.equipment if "flame_detector" in e.kinds)
+        if flames and moved[_name(fr)] >= flames:
+            # 本圖的火焰式探測器都畫在挑空內、已投影到下層實際保護的房間：檢附監視範圍的提醒只列在下層
+            findings = [f for f in findings if f.rule != "DET-124"]
         fr.findings = findings
         fr.notes.extend(notes)
     if res.floors:
