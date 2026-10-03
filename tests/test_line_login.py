@@ -400,7 +400,9 @@ def test_admin_invite_modes_revoke_and_self_protection(admin_api, monkeypatch):
     assert c.post("/api/admin/invites", json={"username": "amy", "mode": "rebind"}).status_code == 200
     assert c.post("/api/admin/invites", json={"username": "boss", "mode": "rebind"}).status_code == 422   # 不能替自己換綁
     assert c.post("/api/admin/invites", json={"username": "停用者"}).status_code == 422
-    assert c.post("/api/admin/invites", json={"username": "bob", "hours": 999}).status_code == 422
+    assert c.post("/api/admin/invites", json={"username": "bob", "hours": AU.INVITE_MAX_HOURS}).status_code == 200      # 上限 90 天剛好可以
+    assert c.post("/api/admin/invites", json={"username": "bob", "hours": AU.INVITE_MAX_HOURS + 1}).status_code == 422  # 多 1 小時就拒絕
+    assert c.post("/api/admin/invites", json={"username": "bob", "hours": 0}).status_code == 422
     assert c.post("/api/admin/invites", json={"username": "bob", "role": "root"}).status_code == 422
     assert c.delete("/api/admin/invites/9").status_code == 200 and c.delete("/api/admin/invites/8").status_code == 404
     assert c.patch("/api/admin/users/1", json={"disabled": True}).status_code == 422           # 不能停用自己

@@ -89,7 +89,7 @@ COOKIE = "__Host-fr_session"          # __Host-：只能由本站設定（同網
 LOGIN_COOKIE = "__Host-fr_login"      # 綁定「哪個瀏覽器發起登入」，防止登入 CSRF
 STATE_MINUTES = 10                    # LINE 授權碼也只有 10 分鐘
 MAX_PENDING_LOGINS = 5000             # 進行中的登入暫存上限（全站；防止灌爆資料表，不用來源 IP 封鎖）
-INVITE_HOURS, INVITE_MAX_HOURS = 24, 168
+INVITE_HOURS, INVITE_MAX_HOURS = 24, 90 * 24   # 邀請預設 24 小時、最長 90 天（工作台下拉最大選項；命令列 --hours 同此上限）
 USERNAME_RE = re.compile(r"[A-Za-z0-9_.\-一-鿿]{2,32}")
 ADMIN_LOCK = 7_310_001                # 改角色／停用時的全域鎖鍵（避免兩位管理者同時互相停用）
 
@@ -137,7 +137,7 @@ def create_invite(conn, username: str, role: str, created_by: str, hours: int = 
     if role not in ROLES:
         raise ValueError(f"角色只能是 {'／'.join(ROLES)}")
     if not 1 <= int(hours) <= INVITE_MAX_HOURS:
-        raise ValueError(f"有效時間要在 1 到 {INVITE_MAX_HOURS} 小時之間")
+        raise ValueError(f"有效時間要在 1 到 {INVITE_MAX_HOURS} 小時（{INVITE_MAX_HOURS // 24} 天）之間")
     token = secrets.token_urlsafe(32)
     with conn.transaction():
         conn.execute("SELECT pg_advisory_xact_lock(hashtext('invite:' || %s))", (username,))   # 同名同時發：排隊

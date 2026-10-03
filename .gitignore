@@ -7,3 +7,4 @@ data/raw/
 *.egg-info/
 *.local.md
 data/lawdb/legend.tmp/
+99-backups/

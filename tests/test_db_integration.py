@@ -179,6 +179,20 @@ def test_line_account_cannot_take_over_another_account(conn):
     assert AU.invite_info(conn, tr) is None
 
 
+def test_invite_expiry_follows_hours_and_is_enforced_on_both_checks(conn):
+    from litian import auth as AU
+    tok, inv = AU.create_invite(conn, "erin", "reviewer", "boss", AU.INVITE_MAX_HOURS)          # 最長 90 天
+    left = inv["expires_at"] - conn.execute("SELECT now() AS t").fetchone()["t"]
+    assert timedelta(days=90) - timedelta(minutes=1) <= left <= timedelta(days=90, seconds=5)   # 到期時間真的照小時數算（容許兩端時鐘差）
+    with pytest.raises(ValueError, match="有效時間"):
+        AU.create_invite(conn, "erin", "reviewer", "boss", AU.INVITE_MAX_HOURS + 1)             # 超過上限：連資料庫都不碰
+    assert AU.invite_info(conn, tok)["id"] == inv["id"]                                          # 沒過期：開連結查得到
+    conn.execute("UPDATE app_invite SET expires_at = now() - interval '1 second' WHERE id = %s", (inv["id"],))
+    assert AU.invite_info(conn, tok) is None                                                     # 過期：開連結那一步查不到
+    with pytest.raises(AU.AuthError, match="invite_invalid"):
+        AU.line_login(conn, SUB_B, "Erin", inv["id"])                                            # 過期：LINE 回呼那一步也擋
+
+
 def test_login_state_is_single_use_and_bound_to_browser(conn, monkeypatch):
     from litian import auth as AU
     AU.save_login_state(conn, "state-1", "browser-1", "nonce-1", "v" * 86, None)
