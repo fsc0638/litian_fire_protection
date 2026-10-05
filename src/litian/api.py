@@ -903,25 +903,31 @@ def _cad_status(svg_dir: str | None) -> tuple[Path, dict] | None:
     return d, st if isinstance(st, dict) else {}
 
 
-def _cad_state(cad: tuple[Path, dict] | None, name: str) -> str | None:
-    """樓層的 CAD 原樣圖：done＝圖磚可用、rendering＝產生中、failed＝失敗；沒產生過回 None。"""
-    if not cad or not REVIEW_LABEL.fullmatch(name or ""):
+def _cad_state(cad: tuple[Path, dict] | None, name: str, queued: str | None = None) -> str | None:
+    """樓層的 CAD 原樣圖：done＝圖磚可用、pending＝排隊中、rendering＝產生中、failed＝失敗；沒產生過回 None。
+    整檔狀態以資料庫為準（queued＝case_file.cad_state），各樓層畫好沒有看狀態檔（開始畫時會清掉上一輪的）。
+    排隊中一律不拿舊圖磚（重新處理後圖可能變了）；資料庫沒在排隊、狀態檔卻停在排隊或畫圖中的是過時的，不算。"""
+    if not REVIEW_LABEL.fullmatch(name or ""):
         return None
-    d, st = cad
+    d, st = cad if cad else (None, {})
     sheets = st.get("sheets") if isinstance(st.get("sheets"), dict) else {}
-    has_meta = (d / name / "meta.json").is_file()
+    has_meta = d is not None and (d / name / "meta.json").is_file()
+    if queued == "pending":
+        return "pending"
     if sheets.get(name) == "done" and has_meta:
         return "done"
     if sheets.get(name) == "failed":
         return "failed"
-    if st.get("state") in ("rendering", "failed"):
-        return st["state"]
+    if queued == "rendering":
+        return "rendering"
+    if queued == "failed" or st.get("state") == "failed":
+        return "failed"
     return "done" if has_meta else None
 
 
 def _review_bundle(case_id: int) -> dict:
     """檢核結果＋引用條文＋審核結果＋檢核條件（工作台與報告共用）。"""
-    rows = _all("SELECT r.file_id, f.name, r.status, r.error, r.result, r.svg_dir, r.created_at FROM file_review r "
+    rows = _all("SELECT r.file_id, f.name, r.status, r.error, r.result, r.svg_dir, r.created_at, f.cad_state FROM file_review r "
                 "JOIN case_file f ON f.id = r.file_id WHERE f.case_id = %s ORDER BY f.name", case_id)
     ids = set()
     for r in rows:
@@ -932,7 +938,7 @@ def _review_bundle(case_id: int) -> dict:
         cad = _cad_status(r.get("svg_dir")) if res.get("floors") else None
         for fl in res.get("floors", []):
             fl["svg"] = f"/api/cases/{case_id}/files/{r['file_id']}/review/{_svg_name(fl)}.svg"
-            fl["cad"] = _cad_state(cad, _svg_name(fl))
+            fl["cad"] = _cad_state(cad, _svg_name(fl), r.get("cad_state"))
             for item in fl["findings"] + fl["notes"]:
                 ids.update(item["law"])
     laws = {}
@@ -951,6 +957,7 @@ def cases_reviews(case_id: int, user: dict = Depends(current_user)):
     b = _review_bundle(case_id)
     for r in b["reviews"]:
         r.pop("svg_dir", None)
+        r.pop("cad_state", None)
     return b
 
 

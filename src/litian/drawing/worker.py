@@ -1,6 +1,7 @@
 """處理程序：從 case_file 佇列取檔 →（DWG 交給轉檔服務）→ 子行程抽取中介資料（限時、限記憶體）→ 存資料庫
 → 有平面圖的檔案再用子行程跑逐項檢核（review.engine），結果與各樓層標示圖存起來
-→ 檢核成功後再用子行程照 CAD 原樣畫各樓層圖的圖磚（review.cadview；失敗不影響檢核結果）。
+→ 檢核成功的排入 CAD 原樣圖佇列：佇列空下來時在背景用子行程畫各樓層圖的圖磚（review.cadview，見 CadRunner），
+  畫圖期間照常處理新上傳的檔；失敗不影響檢核結果。
 
 啟動：python -m litian.drawing.worker
 環境變數：DATABASE_URL、CONVERT_SPOOL（預設 /data/convert）
@@ -13,11 +14,14 @@ import json
 import logging
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
+
+from litian.review import cadview as CV
 
 from . import convert_client as CC
 from . import store as ST
@@ -30,7 +34,9 @@ EXTRACT_TIMEOUT = 600                 # 秒
 REVIEW_TIMEOUT = 900
 BIND_TIMEOUT = 600
 CAD_TIMEOUT = 3600                    # CAD 原樣圖：竣工圖讀檔約 30 秒、每張配置頁 1～2 分鐘
+CAD_STALE_S = CAD_TIMEOUT + 600       # 「畫圖中」超過這麼久還沒結束：當成沒有人在畫（worker 當掉）
 EXTRACT_MEM = int(os.environ.get("SUBPROC_MEM_MB", "2400")) * 1024 * 1024      # 子行程位址空間上限
+CAD_MEM = int(os.environ.get("CAD_MEM_MB", "3500")) * 1024 * 1024              # 畫圖子行程（竣工圖實測峰值約 1.5 GB）
 # 數值函式庫預設會開多執行緒、預留大量位址空間；子行程限記憶體時改單執行緒
 SUBPROC_ENV = {**os.environ, "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1"}
 CONVERT_TIMEOUT = 420                 # 等轉檔服務（含排隊）
@@ -40,6 +46,26 @@ IDLE_S = 2
 def _limit_memory():                  # 只在 Linux 子行程裡執行
     import resource
     resource.setrlimit(resource.RLIMIT_AS, (EXTRACT_MEM, EXTRACT_MEM))
+
+
+def _cad_limits():                    # 只在 Linux 子行程裡執行：限記憶體、限 CPU 秒數（逾時的保險）、降低優先順序
+    import resource
+    resource.setrlimit(resource.RLIMIT_AS, (CAD_MEM, CAD_MEM))
+    resource.setrlimit(resource.RLIMIT_CPU, (CAD_TIMEOUT, CAD_TIMEOUT + 60))
+    os.nice(10)
+
+
+def review_dir_of(path: str | Path) -> Path:
+    path = Path(path)
+    return path.with_name(path.name + ".review")
+
+
+def drawing_source(job: dict) -> Path:
+    """轉好（或已綁定外部參考）的 DXF：只重跑檢核、背景畫圖都用這個（不必再轉檔）。"""
+    path = Path(job["path"])
+    bound = path.with_name(path.stem + ".bound.dxf")
+    converted = path.with_name(path.stem + ".converted.dxf")
+    return bound if bound.exists() else (converted if job["kind"] == "dwg" else path)
 
 
 def _run(args: list[str], timeout: int, what: str) -> str:
@@ -118,10 +144,11 @@ def review_in_subprocess(dxf: Path, workdir: Path, svg_dir: Path, context: dict 
     return json.loads(out.read_text(encoding="utf-8"))
 
 
-def run_review(conn, job: dict, src: Path, work: Path, stats: dict | None) -> bool:
-    """檢核失敗不影響抽取結果（文字、圖紙照常可看），只記下原因。回傳檢核是否成功。"""
-    path = Path(job["path"])
-    svg_dir = path.with_name(path.name + ".review")
+def run_review(conn, job: dict, src: Path, work: Path, stats: dict | None, queue_cad: bool = False) -> bool:
+    """檢核失敗不影響抽取結果（文字、圖紙照常可看），只記下原因。回傳檢核是否成功。
+    queue_cad：有樓層圖就排入 CAD 原樣圖佇列（只重跑檢核時不重畫：底圖沒變，缺失疊圖資料由檢核更新）。
+    排隊要在標成完成之前：工作台一看到完成就看得到「原圖排隊中」、會繼續自動重查。"""
+    svg_dir = review_dir_of(job["path"])
     ok = False
     try:
         result = review_in_subprocess(src, work, svg_dir, ST.get_context(conn, job["case_id"]))
@@ -130,6 +157,9 @@ def run_review(conn, job: dict, src: Path, work: Path, stats: dict | None) -> bo
         if stats is not None:
             stats["review"] = {"floors": len(result["floors"]),
                                "findings": sum(len(f["findings"]) for f in result["floors"])}
+        if queue_cad and result["floors"]:
+            _set_status(svg_dir, CV.queue_status)
+            ST.queue_cad(conn, job["id"])
     except Exception as e:
         ST.save_review(conn, job["id"], "failed", None, f"{type(e).__name__}: {e}", None)
         log.warning("review failed file=%s error=%s", job["id"], e)
@@ -137,48 +167,159 @@ def run_review(conn, job: dict, src: Path, work: Path, stats: dict | None) -> bo
     return ok
 
 
-def render_cad(conn, job: dict, src: Path, work: Path, stats: dict) -> None:
-    """照 CAD 原樣畫各樓層圖的圖磚（檢核資料夾 cad/）。檔案已標為完成（檢核結果先給人看），畫圖在後面跑；
-    失敗、逾時、記憶體不足只記在 cad/status.json 與日誌，不影響檢核結果。耗時另併入 stats（不動狀態欄：
-    畫圖期間若檢核條件改了、檔案已重新排隊，不能被蓋回完成）。"""
-    from litian.review import cadview as CV
-    path = Path(job["path"])
-    review_dir = path.with_name(path.name + ".review")
-    t0 = time.time()
-    info: dict = {}
+def _tail(path: Path, n: int = 4000) -> str:
     try:
-        CV.start_status(review_dir)                    # 工作台立刻看得到「畫圖中」
-        out = _run(["litian.review.cadview", str(src), str(work / "ir.json"), str(work / "review.json"), str(review_dir)],
-                   CAD_TIMEOUT, "CAD 原樣圖")
-        try:
-            info = json.loads(out.strip().splitlines()[-1])
-        except (ValueError, IndexError):
-            info = {}
-        info = {"state": "done", "sheets": len(info.get("sheets", {})),
-                "failed": sum(v != "done" for v in info.get("sheets", {}).values()), "peak_mb": info.get("peak_mb")}
-    except Exception as e:
-        msg = "畫圖逾時" if isinstance(e, subprocess.TimeoutExpired) else str(e)
-        try:
-            CV.mark_failed(review_dir, msg)
-        except OSError:
-            pass
-        info = {"state": "failed", "error": msg[:200]}
-        log.warning("cad render failed file=%s error=%s", job["id"], msg)
-    info["seconds"] = round(time.time() - t0, 1)
-    stats["cad"] = info
-    conn.execute("UPDATE case_file SET stats = COALESCE(stats, '{}'::jsonb) || jsonb_build_object('cad', %s::jsonb) "
-                 "WHERE id = %s", (json.dumps(info, ensure_ascii=False), job["id"]))
-    log.info("cad file=%s %s", job["id"], info)
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - n))
+            return f.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
 
 
-def process(conn, job: dict, spool: Path) -> dict:
+def _set_status(review_dir: Path, fn, *args) -> None:
+    """改檢核資料夾裡的畫圖狀態檔；資料夾不在了（案件刪除）不重建，寫不進去只記日誌。"""
+    if not review_dir.is_dir():
+        return
+    try:
+        fn(review_dir, *args)
+    except OSError as e:
+        log.warning("cannot write cad status dir=%s error=%s", review_dir, e)
+
+
+XCPU = -getattr(signal, "SIGXCPU", 24)  # 子行程超過 CPU 秒數上限（RLIMIT_CPU）時的結束代碼
+
+
+class CadRunner:
+    """CAD 原樣圖在背景畫：佇列在資料庫（case_file.cad_state），一次一個子行程（限時、限記憶體、低優先順序），
+    畫圖期間照常處理新上傳的檔。圖磚與各張狀態在檢核資料夾 cad/（review.cadview）。
+    被系統砍掉（多半是記憶體不足）或 worker 重啟中斷的重新排隊，最多畫 ST.CAD_MAX_ATTEMPTS 次；
+    逾時、程式錯誤重畫結果相同，直接記失敗。主機上只有一個 worker（見 recover_cad_on_start）。"""
+
+    def __init__(self):
+        self.cur: dict | None = None
+
+    def busy(self) -> bool:
+        return self.cur is not None
+
+    def start(self, conn) -> bool:
+        """佇列空下來時呼叫：有排隊的就開始畫（不等畫完）。回傳是否處理了一筆排隊（含馬上失敗的）。"""
+        if self.cur is not None:
+            return False
+        for r in ST.recover_cad(conn, CAD_STALE_S):
+            log.warning("stale cad render file=%s -> %s", r["id"], r["cad_state"])
+            _sync_recovered(r)
+        job = ST.claim_cad(conn)
+        if not job:
+            return False
+        review_dir = review_dir_of(job["path"])
+        work = Path(tempfile.mkdtemp(prefix="litian-cad-"))
+        try:
+            ir, review, src = ST.load_ir(conn, job["id"]), ST.load_review(conn, job["id"]), drawing_source(job)
+            if ir is None or review is None or not src.is_file() or not review_dir.is_dir():
+                raise RuntimeError("找不到圖面中介資料、檢核結果或圖檔")
+            (work / "ir.json").write_text(json.dumps(ir, ensure_ascii=False), encoding="utf-8")
+            (work / "review.json").write_text(json.dumps(review, ensure_ascii=False), encoding="utf-8")
+            CV.start_status(review_dir)                # 工作台看得到「畫圖中」
+            with open(work / "out.txt", "wb") as out, open(work / "err.txt", "wb") as err:
+                proc = subprocess.Popen(
+                    [sys.executable, "-m", "litian.review.cadview", str(src), str(work / "ir.json"),
+                     str(work / "review.json"), str(review_dir)],
+                    stdout=out, stderr=err, env=SUBPROC_ENV, preexec_fn=_cad_limits if os.name == "posix" else None)
+        except Exception as e:
+            shutil.rmtree(work, ignore_errors=True)
+            self._end(conn, job, review_dir, "failed", {"state": "failed", "error": str(e)[:200]}, str(e))
+            return True
+        self.cur = {"job": job, "proc": proc, "work": work, "review_dir": review_dir, "t0": time.monotonic()}
+        log.info("cad start file=%s attempt=%s", job["id"], job["cad_attempts"])
+        return True
+
+    def poll(self, conn) -> None:
+        """畫完了就記結果；超過時間就砍掉。"""
+        c = self.cur
+        if c is None:
+            return
+        rc = c["proc"].poll()
+        timed_out = rc is None and time.monotonic() - c["t0"] > CAD_TIMEOUT
+        if rc is None and not timed_out:
+            return
+        if timed_out:
+            c["proc"].kill()
+            rc = c["proc"].wait()
+        self.cur = None
+        job, review_dir = c["job"], c["review_dir"]
+        secs = round(time.monotonic() - c["t0"], 1)
+        out, err = _tail(c["work"] / "out.txt"), _tail(c["work"] / "err.txt")
+        shutil.rmtree(c["work"], ignore_errors=True)
+        if rc == 0:
+            try:
+                summary = json.loads(out.strip().splitlines()[-1])
+            except (ValueError, IndexError):
+                summary = {}
+            sheets = summary.get("sheets") if isinstance(summary, dict) and isinstance(summary.get("sheets"), dict) else {}
+            info = {"state": "done", "sheets": len(sheets), "failed": sum(v != "done" for v in sheets.values()),
+                    "peak_mb": summary.get("peak_mb") if isinstance(summary, dict) else None, "seconds": secs}
+            self._end(conn, job, review_dir, "done", info, None)
+        elif timed_out or rc == XCPU:
+            self._end(conn, job, review_dir, "failed", {"state": "failed", "error": "畫圖逾時", "seconds": secs}, "畫圖逾時")
+        elif rc < 0 and job["cad_attempts"] < ST.CAD_MAX_ATTEMPTS:
+            # 被系統砍掉（記憶體不足等，可能剛好同時在處理別的大檔）：重新排隊
+            self._end(conn, job, review_dir, "pending", {"state": "pending", "error": f"被中斷（{rc}）", "seconds": secs}, None)
+        else:
+            msg = (err.strip().splitlines() or [f"結束代碼 {rc}"])[-1][:300]
+            self._end(conn, job, review_dir, "failed", {"state": "failed", "error": msg[:200], "seconds": secs}, msg)
+
+    def cancel(self, file_id: int) -> None:
+        """同一個檔要整個重新處理（圖可能變了）：畫到一半的作廢（cad_gen 也會變，結果不會被記下）。"""
+        c = self.cur
+        if c is None or c["job"]["id"] != file_id:
+            return
+        c["proc"].kill()
+        c["proc"].wait()
+        shutil.rmtree(c["work"], ignore_errors=True)
+        self.cur = None
+        log.info("cad cancelled file=%s (reprocessing)", file_id)
+
+    @staticmethod
+    def _end(conn, job: dict, review_dir: Path, state: str, info: dict, error: str | None) -> None:
+        # 先記資料庫：畫圖期間檔案重新排隊過（cad_gen 變了）就不動狀態檔（新一輪的排隊狀態不能被蓋掉）
+        if not ST.finish_cad(conn, job["id"], job["cad_gen"], state, info):
+            log.info("cad result dropped file=%s (requeued meanwhile)", job["id"])
+            return
+        if state == "failed":
+            _set_status(review_dir, CV.mark_failed, error or "畫圖失敗")
+        elif state == "pending":
+            _set_status(review_dir, CV.queue_status)
+        log.log(logging.WARNING if state == "failed" else logging.INFO, "cad file=%s %s", job["id"], info)
+
+
+def _sync_recovered(row: dict) -> None:
+    review_dir = review_dir_of(row["path"])
+    if row["cad_state"] == "pending":
+        _set_status(review_dir, CV.queue_status)
+    else:
+        _set_status(review_dir, CV.mark_failed, "畫圖多次中斷（處理程序重新啟動或記憶體不足）")
+
+
+def recover_cad_on_start(conn) -> tuple[int, int]:
+    """worker 啟動（主機上只有一個 worker）：停在「畫圖中」的都是上次被中斷的 → 重新排隊（次數用完記失敗）；
+    檢核成功、有樓層圖卻從沒排過的（這個功能上線前的檔案）補排隊。回傳（重新排隊或記失敗數, 補排隊數）。"""
+    rows = ST.recover_cad(conn, 0)
+    for r in rows:
+        _sync_recovered(r)
+    filled = ST.backfill_cad(conn)
+    for r in filled:
+        _set_status(review_dir_of(r["path"]), CV.queue_status)
+    return len(rows), len(filled)
+
+
+def process(conn, job: dict, spool: Path, cad: CadRunner | None = None) -> dict:
     path = Path(job["path"])
     converted = path.with_name(path.stem + ".converted.dxf")
-    bound = path.with_name(path.stem + ".bound.dxf")
     if job.get("review_only"):
         # 只重跑檢核（檢核條件改了）：用已存的中介資料與轉好（或已綁定外部參考）的 DXF
         ir = ST.load_ir(conn, job["id"])
-        src = bound if bound.exists() else (converted if job["kind"] == "dwg" else path)
+        src = drawing_source(job)
         if ir is not None and src.exists():
             with tempfile.TemporaryDirectory() as d:
                 work = Path(d)
@@ -186,6 +327,9 @@ def process(conn, job: dict, spool: Path) -> dict:
                 ST.mark(conn, job["id"], "reviewing")
                 run_review(conn, job, src, work, None)
             return {"review_only": True}
+    ST.reset_cad(conn, job["id"])                      # 整個重新處理：圖可能變了，舊的原圖排隊作廢
+    if cad is not None:
+        cad.cancel(job["id"])
     if job["kind"] == "dwg":
         src = _convert(spool, f"f{job['id']}", path, converted)   # 保留轉好的 DXF，之後重新抽取、重跑檢核不必再轉
     else:
@@ -199,17 +343,17 @@ def process(conn, job: dict, spool: Path) -> dict:
         review = has_floor_plans(ir)
         with conn.transaction():
             ST.save_result(conn, job["id"], ir, stats, status="reviewing" if review else "done")
-        if review and run_review(conn, job, src, work, stats) and stats["review"]["floors"]:
-            render_cad(conn, job, src, work, stats)    # 只重跑檢核時不重畫：底圖沒變，缺失疊圖資料由檢核更新
+        if review:
+            run_review(conn, job, src, work, stats, queue_cad=True)
     return stats
 
 
-def run_once(conn, spool: Path) -> bool:
+def run_once(conn, spool: Path, cad: CadRunner | None = None) -> bool:
     job = ST.claim(conn)
     if not job:
         return False
     try:
-        stats = process(conn, job, spool)
+        stats = process(conn, job, spool, cad)
         log.info("done file=%s name=%s %s", job["id"], job["name"],
                  "review-only" if stats.get("review_only") else f"sheets={stats['sheets']} texts={stats['texts']}")
         if not stats.get("review_only") and (n := requeue_xref_dependents(conn, job)):
@@ -227,20 +371,19 @@ def main() -> int:
     from psycopg.rows import dict_row
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     spool = Path(os.environ.get("CONVERT_SPOOL", "/data/convert"))
-    from litian.review import cadview as CV
-    try:
-        if n := CV.fail_interrupted(os.environ.get("CASES_DIR", "/data/cases")):
-            log.info("marked %s interrupted CAD render(s) as failed", n)
-    except OSError as e:
-        log.warning("cannot check interrupted CAD renders: %s", e)
+    cad = CadRunner()                                  # 斷線重連時沿用：畫到一半的子行程照常畫
     while True:
         try:
             with psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row, autocommit=True) as conn:
                 ST.ensure_schema(conn)
                 n = ST.recover_stale(conn, EXTRACT_TIMEOUT + CONVERT_TIMEOUT + 60)
-                log.info("worker ready (recovered %s stale jobs)", n)
+                m = recover_cad_on_start(conn) if not cad.busy() else (0, 0)
+                log.info("worker ready (recovered %s stale jobs; cad requeued/failed %s, backfilled %s)", n, *m)
                 while True:
-                    if not run_once(conn, spool):
+                    cad.poll(conn)
+                    if run_once(conn, spool, cad):     # 新上傳的優先；原圖等佇列空了才開始畫
+                        continue
+                    if not cad.start(conn):
                         time.sleep(IDLE_S)
         except psycopg.OperationalError as e:
             log.warning("database unavailable: %s; retry in 5s", type(e).__name__)

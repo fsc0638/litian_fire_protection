@@ -660,7 +660,7 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
     const d = await api("/api/cases/" + currentCase + "/reviews");
     if (gen !== reviewsGen) return;                                           // 查詢中換了案件或頁面
     if (ep !== decEpoch) d.decisions = bundle.decisions;                       // 查詢中送出了審核決定：以本機為準，下次重查再對齊
-    scheduleCad(d.reviews.some((r) => (r.result?.floors || []).some((fl) => fl.cad === "rendering")));
+    scheduleCad(d.reviews.some((r) => (r.result?.floors || []).some((fl) => CAD_WAIT[fl.cad])));
     // 只有審核結果、檢核條件或原圖狀態變了：局部更新（檢視器、捲動位置、打到一半的備註都不動）
     const key = reviewsKey(d);
     if (key === lastReviews) { patchReviews(d); return; }
@@ -699,7 +699,8 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
   function planHtml(r, fl) {
     if (fl.cad === "done") return '<div class="cadbox" data-base="/api/cases/' + currentCase + "/files/" + r.file_id + '" data-name="' + esc(fl.svg_name || fl.label) +
       '" data-svg="' + esc(fl.svg) + '" data-label="' + esc(fl.label) + '"></div>';
-    return (fl.cad === "rendering" ? '<p class="note info small">' + CAD_RENDERING + "</p>" : fl.cad === "failed" ? '<p class="note info small">' + CAD_FAILED + "</p>" : "") +
+    const note = CAD_WAIT[fl.cad] || (fl.cad === "failed" ? CAD_FAILED : "");
+    return (note ? '<p class="note info small">' + note + "</p>" : "") +
       '<a href="' + esc(fl.svg) + '" target="_blank" rel="noopener"><img class="plan" loading="lazy" alt="' + esc(fl.label) + ' 檢核標示圖" src="' + esc(fl.svg) + '"></a>';
   }
   // 只換掉這一層的圖區（缺失清單與輸入框不動）
@@ -755,7 +756,11 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
 
   // ---------- CAD 原樣檢視（OpenSeadragon 圖磚＋缺失疊圖）----------
   // 圖磚與 meta.json 由後端照 CAD 原圖畫好（Deep Zoom 層級）；疊圖的座標是公尺，用 meta.transform 換成原尺寸像素。
-  const CAD_RENDERING = "原圖產生中（約數分鐘），先顯示簡化圖；每 30 秒自動檢查一次。";
+  // 還在等原圖的狀態（每 30 秒自動重查）→ 提示文字
+  const CAD_WAIT = {
+    pending: "原圖排隊中：沒有其他檔案要處理時就開始產生（大型圖約 10～20 分鐘），先顯示簡化圖；每 30 秒自動檢查一次。",
+    rendering: "原圖產生中（大型圖約 10～20 分鐘），先顯示簡化圖；每 30 秒自動檢查一次。",
+  };
   const CAD_FAILED = "原圖產生失敗，先顯示簡化圖。";
   const OSD_IMAGES = "https://cdnjs.cloudflare.com/ajax/libs/openseadragon/4.1.1/images/";
   const SEV_COLOR = { RED: "#d93025", ORANGE: "#e8710a", YELLOW: "#c9a100", BLUE: "#1a73e8" };

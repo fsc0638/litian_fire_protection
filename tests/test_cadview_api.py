@@ -147,13 +147,14 @@ def _bundle(client, monkeypatch, rows):
     client.cookies.set("__Host-fr_session", "good-token")
     r = client.get("/api/cases/3/reviews")
     assert r.status_code == 200
+    assert not any("svg_dir" in rv or "cad_state" in rv for rv in r.json()["reviews"])   # 內部欄位不外露
     return {(rv["file_id"], fl["svg_name"]): fl["cad"] for rv in r.json()["reviews"] for fl in rv["result"]["floors"]}
 
 
-def _row(fid, svg_dir, names):
+def _row(fid, svg_dir, names, cad_state=None):
     floors = [{"label": n.split("-")[0], "svg_name": n, "findings": [], "notes": []} for n in names]
     return {"file_id": fid, "name": f"F{fid}.dxf", "status": "done", "error": None, "svg_dir": svg_dir,
-            "result": {"floors": floors, "warnings": []}, "created_at": "t"}
+            "result": {"floors": floors, "warnings": []}, "created_at": "t", "cad_state": cad_state}
 
 
 def test_review_bundle_cad_states(client, monkeypatch, tmp_path):
@@ -166,13 +167,23 @@ def test_review_bundle_cad_states(client, monkeypatch, tmp_path):
     old = c / "f" / "3" / "001_F.dxf.review"                                       # 舊的檢核結果：沒有產生過原圖
     old.mkdir(parents=True)
     outside = make_review_dir(tmp_path / "elsewhere", status={"state": "done", "sheets": {NAME: "done"}})
+    requeued = make_review_dir(c / "g", status={"state": "pending", "sheets": {}, "error": None})   # 重新處理後排隊：舊圖磚還在
+    stale = make_review_dir(c / "h", status={"state": "done", "sheets": {NAME: "done"}, "error": None})
+    leftover = make_review_dir(c / "i", status={"state": "rendering", "sheets": {}, "error": None}, meta=False)
     got = _bundle(client, monkeypatch, [
-        _row(1, str(done), [NAME]), _row(2, str(rendering), [NAME]), _row(3, str(failed), [NAME]),
-        _row(4, str(partial), [NAME, "2F-28", "3F-29"]), _row(5, str(broken), [NAME, "2F-28"]),
-        _row(6, str(old), [NAME]), _row(7, None, [NAME]), _row(8, str(outside), [NAME])])
+        _row(1, str(done), [NAME], "done"), _row(2, str(rendering), [NAME], "rendering"), _row(3, str(failed), [NAME], "failed"),
+        _row(4, str(partial), [NAME, "2F-28", "3F-29"], "rendering"), _row(5, str(broken), [NAME, "2F-28"], "done"),
+        _row(6, str(old), [NAME], "pending"), _row(7, None, [NAME]), _row(8, str(outside), [NAME], "done"),
+        _row(9, str(requeued), [NAME], "pending"), _row(10, str(stale), [NAME], "pending"),
+        _row(11, str(leftover), [NAME]), _row(12, str(old), [NAME])])
     assert got == {(1, NAME): "done", (2, NAME): "rendering", (3, NAME): "failed",
                    (4, NAME): "done", (4, "2F-28"): "failed", (4, "3F-29"): "rendering",
-                   (5, NAME): "done", (5, "2F-28"): None, (6, NAME): None, (7, NAME): None, (8, NAME): None}
+                   (5, NAME): "done", (5, "2F-28"): None,
+                   (6, NAME): "pending",                  # 上線前的舊檔補排隊（還沒有狀態檔）
+                   (7, NAME): None, (8, NAME): None,
+                   (9, NAME): "pending", (10, NAME): "pending",   # 排隊中不拿舊圖磚（狀態檔沒清到也一樣）
+                   (11, NAME): None,                      # 資料庫沒在畫、狀態檔停在畫圖中：過時的
+                   (12, NAME): None}
 
 
 def test_review_bundle_cad_done_needs_meta(client, monkeypatch):
@@ -197,7 +208,7 @@ def test_workbench_loads_openseadragon_from_cdnjs_only():
 
 def test_workbench_has_cad_viewer_pieces():
     html = api.WEB_WORKBENCH.read_text(encoding="utf-8")
-    for s in ["顯示檢核標示", "原圖產生中（約數分鐘）", "原圖產生失敗，先顯示簡化圖", "/meta.json", ".overlay.json",
+    for s in ["顯示檢核標示", "原圖排隊中", "原圖產生中（大型圖", "原圖產生失敗，先顯示簡化圖", "/meta.json", ".overlay.json",
               "max_level", "tile_size", "transform", "rendered_at", "getTileUrl", "30000", "canvas-click"]:
         assert s in html, s
     # 疊圖不用 innerHTML 塞圖面文字

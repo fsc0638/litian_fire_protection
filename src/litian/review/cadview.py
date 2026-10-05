@@ -6,14 +6,18 @@
 - cad/<svg_name>/meta.json：原尺寸寬高、圖磚規格、公尺座標 → 原尺寸像素的仿射轉換
   （px＝a*X+b*Y+c，py＝d*X+e*Y+f，py 向下）
 - cad/<svg_name>/<層級>/<欄>_<列>.png：Deep Zoom 層級規則（最大層＝原尺寸，每往下一層長寬減半、無條件進位，第 0 層 1×1）
-- cad/status.json：整批狀態 rendering｜done｜failed、各張結果、警告（例：找不到中文字型）
+- cad/status.json：整批狀態 pending（排隊）｜rendering｜done｜failed、各張結果、警告（例：找不到中文字型）
 
-命令列：python -m litian.review.cadview <dxf> <ir.json> <review.json> <review_dir>（worker 用子行程呼叫，限時、限記憶體）
+繪圖：ezdxf 繪圖模組＋matplotlib（Agg 點陣，授權寬鬆）；線寬照出圖紙上的實際粗細。
+命令列：python -m litian.review.cadview <dxf> <ir.json> <review.json> <review_dir>
+（worker 在背景用子行程呼叫：限時、限記憶體、低優先順序；排隊與重畫見 drawing.worker 的 CadRunner）
 """
 
 from __future__ import annotations
 
+import gc
 import json
+import logging
 import math
 import os
 import re
@@ -71,22 +75,17 @@ def start_status(review_dir: str | Path) -> dict:
     return st
 
 
+def queue_status(review_dir: str | Path) -> None:
+    """排入背景畫圖：清掉上一輪各張的結果（圖紙可能變了，舊圖磚不能當成這一輪畫好的）。"""
+    write_status(review_dir, {"state": "pending", "sheets": {}, "error": None, "warnings": [], "queued_at": _now(),
+                              "started_at": None, "finished_at": None})
+
+
 def mark_failed(review_dir: str | Path, error: str) -> None:
     """子行程逾時、被砍（記憶體不足）或中斷：已畫好的各張照舊，整批記失敗。"""
     st = read_status(review_dir) or {"sheets": {}, "warnings": [], "started_at": None}
     st.update(state="failed", error=error[:500], finished_at=_now())
     write_status(review_dir, st)
-
-
-def fail_interrupted(cases_dir: str | Path) -> int:
-    """worker 啟動時：上次停在「畫圖中」的（worker 當掉、容器重啟）改記失敗，工作台才不會一直顯示畫圖中。"""
-    n = 0
-    for p in Path(cases_dir).glob("*/*.review/cad/status.json"):
-        st = read_status(p.parent.parent)
-        if st and st.get("state") == "rendering":
-            mark_failed(p.parent.parent, "畫圖中斷（處理程序重新啟動），重新處理檔案即可重畫")
-            n += 1
-    return n
 
 
 # ---------- 字型、視埠 ----------
@@ -246,18 +245,6 @@ def _model_paper_mm(meta: dict, box_long: float, scale: float) -> float | None:
 
 # ---------- 畫圖 ----------
 
-def _placement(box, page, settings):
-    """圖面座標 → PDF 點（左上原點、y 向下）：與 PyMuPdfBackend.get_replay 內部同一套算法。"""
-    import copy
-
-    from ezdxf.addons.drawing import layout, pymupdf
-    out = layout.Layout(box, flip_y=True)
-    final = out.get_final_page(page, settings)
-    s2 = copy.copy(settings)
-    s2.output_coordinate_space = pymupdf.get_coordinate_output_space(final)
-    return out.get_placement_matrix(final, settings=s2, top_origin=True)
-
-
 def _affine(fn) -> list[float]:
     """（X, Y）→（px, py）的函式 → 仿射係數 [a, b, c, d, e, f]。"""
     ox, oy = fn(0.0, 0.0)
@@ -269,9 +256,14 @@ def _affine(fn) -> list[float]:
 def render_sheet(doc, sheet: dict, cache, long_px: int | None = None):
     """畫一張 → (PIL 影像, meta, 警告)。long_px：指定長邊像素（測試用）；未指定時約 A3 300 dpi，紙張大的提高到上限 MAX_PX。"""
     import ezdxf
+    import matplotlib
+    matplotlib.use("Agg")                                        # 無螢幕的點陣輸出；要在載入 ezdxf 的 matplotlib 模組前設定
     from ezdxf import bbox
-    from ezdxf.addons.drawing import Frontend, RenderContext, config, layout, pymupdf
+    from ezdxf.addons.drawing import Frontend, RenderContext, config
+    from ezdxf.addons.drawing.matplotlib import MatplotlibBackend
     from ezdxf.math import BoundingBox2d, Matrix44, Vec2, Vec3
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+    from matplotlib.figure import Figure
     from PIL import Image
 
     scale = sheet.get("scale")
@@ -318,34 +310,41 @@ def render_sheet(doc, sheet: dict, cache, long_px: int | None = None):
         long_px = max(A3_PX, round(paper_mm / 25.4 * DPI))
     long_px = min(MAX_PX, long_px)
     w, h = box.size.x, box.size.y
-    k = paper_mm / max(w, h)                                     # 圖面單位 → 紙面 mm
-    dpi = max(1, int(long_px * 25.4 / (max(w, h) * k)))
-    page = layout.Page(w * k, h * k, layout.Units.mm)            # 版面不留邊，頁面長寬比＝範圍長寬比
-    settings = layout.Settings(fit_page=True)
-
-    backend = pymupdf.PyMuPdfBackend()
+    W, H = (long_px, max(1, round(long_px * h / w))) if w >= h else (max(1, round(long_px * w / h)), long_px)
+    dpi = long_px * 25.4 / paper_mm                              # 每英吋像素（以紙面算）：線寬照出圖的粗細換算
+    # 畫布不留邊、長寬比＝範圍長寬比；多 0.001 像素：Agg 取整數寬高時不會少一個像素
+    fig = Figure(figsize=((W + 1e-3) / dpi, (H + 1e-3) / dpi), dpi=dpi, facecolor="white")
+    canvas = FigureCanvasAgg(fig)
+    ax = fig.add_axes((0, 0, 1, 1))
     cfg = config.Configuration(background_policy=config.BackgroundPolicy.WHITE,
                                color_policy=config.ColorPolicy.COLOR,
-                               image_policy=config.ImagePolicy.RECT)   # 圖片只畫外框：DXF 可指向任意本機檔案
-    draw(Frontend(RenderContext(doc), backend, config=cfg, bbox_cache=cache))
-    place = _placement(box, page, settings)
-    replay = backend.get_replay(page, settings=settings, render_box=box)
-    del backend                                                  # 記錄的圖元已轉成 PDF 頁面，先放掉
-    pix = replay.get_pixmap(dpi=dpi)
-    # 直接讀點陣記憶體（不經 samples 的 bytes 複本、不另 copy：8000 px 時每份約 140～180 MB）
-    img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples_mv, "raw", "RGB", pix.stride)
-    del pix, replay
-
-    zoom = dpi / 72                                              # PDF 點 → 像素
+                               image_policy=config.ImagePolicy.RECT,   # 圖片只畫外框：DXF 可指向任意本機檔案
+                               lineweight_scaling=72 / 25.4)           # 這個繪圖後端把線寬（mm）直接當點數：換算成點
+    draw(Frontend(RenderContext(doc), MatplotlibBackend(ax, adjust_figure=False), config=cfg, bbox_cache=cache))
+    # 畫完才設範圍（finalize 會自動縮放到全部圖元）：兩軸同一個比例（像素取整數後長寬比有微小差，多的平均留白）
+    bw, bh = fig.bbox.width, fig.bbox.height
+    s = min(bw / w, bh / h)                                      # 像素／圖面單位
+    c = box.center
+    ax.set_aspect("auto")
+    ax.set_xlim(c.x - bw / s / 2, c.x + bw / s / 2)
+    ax.set_ylim(c.y - bh / s / 2, c.y + bh / s / 2)
+    canvas.draw()
+    buf = canvas.buffer_rgba()
+    height = buf.shape[0]
+    img = Image.frombuffer("RGBA", (buf.shape[1], height), buf, "raw", "RGBA", 0, 1).convert("RGB")
+    # 圖面座標 → 像素：用 matplotlib 實際畫圖的轉換（含等比例時對範圍的微調）；Agg 的 y 從畫布底邊往上
+    data_to_display = ax.transData.frozen()
+    del buf, canvas, fig, ax                                     # 圖元與 RGBA 畫布（8000 px 時約 180 MB）先放掉
 
     def to_px(x: float, y: float) -> tuple[float, float]:
-        p = place.transform(to_paper.transform(Vec3(x / scale, y / scale, 0)))
-        return p.x * zoom, p.y * zoom
+        p = to_paper.transform(Vec3(x / scale, y / scale, 0))
+        dx, dy = data_to_display.transform((p.x, p.y))
+        return float(dx), float(height - dy)
 
     meta = {"version": 1, "width": img.width, "height": img.height, "tile_size": TILE, "overlap": 0, "format": "png",
             "max_level": max_level(img.width, img.height), "transform": _affine(to_px), "source": source,
-            "layout": sheet.get("layout") if source == "layout" else None, "dpi": dpi,
-            "rendered_at": _now(), "renderer": f"ezdxf {ezdxf.__version__}"}
+            "layout": sheet.get("layout") if source == "layout" else None, "dpi": round(dpi),
+            "rendered_at": _now(), "renderer": f"ezdxf {ezdxf.__version__} + matplotlib {matplotlib.__version__}"}
     return img, meta, notes
 
 
@@ -428,6 +427,8 @@ def render_all(dxf: str | Path, ir: dict, review: dict, review_dir: str | Path, 
         except Exception as e:
             st["sheets"][name] = "failed"
             errors[name] = f"{type(e).__name__}: {e}"[:300]
+        img = None
+        gc.collect()                                   # 上一張的圖元（matplotlib 物件互相參照）先回收，峰值不累加
         seconds[name] = round(time.time() - t0, 1)
         write_status(review_dir, st)                   # 每畫完一張就更新：工作台可先看已畫好的
     keep = {sh["name"] for sh in plan}
@@ -461,6 +462,7 @@ def _peak_mb() -> int | None:
 def main(argv: list[str]) -> int:
     """python -m litian.review.cadview <dxf> <ir.json> <review.json> <review_dir>；最後一行印摘要 JSON。"""
     dxf, ir_path, review_path, review_dir = argv[1:5]
+    logging.getLogger("ezdxf").setLevel(logging.ERROR)  # 轉檔後的圖常有大量「參照的樣式不存在」警告，不必寫進日誌
     t0 = time.time()
     try:
         ir = json.loads(Path(ir_path).read_text(encoding="utf-8"))

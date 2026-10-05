@@ -92,6 +92,45 @@ def test_save_result_failure_and_recover(conn):
     assert (row["status"], row["result"], row["error"], row["svg_dir"]) == ("done", {"floors": []}, None, "/x/a.dxf.review")
 
 
+def test_cad_queue_backfill_claim_gen_and_recover(conn):
+    """CAD 原樣圖佇列：上線前的舊檔補排隊、新的先畫、重新處理中的不畫、畫圖期間重新處理的結果作廢、中斷重排。"""
+    from litian.drawing import store as ST
+    cid = ST.create_case(conn, "原圖", None)
+    a, b, c, d = (ST.add_file(conn, cid, f"{n}.dxf", 1, "0" * 64, f"/x/{n}.dxf") for n in "abcd")
+    conn.execute("UPDATE case_file SET status = 'done'")
+    for f, res in ((a, {"floors": [{"label": "1F"}]}), (b, {"floors": [{"label": "2F"}]}), (c, {"floors": []})):
+        ST.save_review(conn, f, "done", res, None, f"/x/{f}.review")
+    ST.save_review(conn, d, "failed", None, "RuntimeError", None)
+    assert sorted(r["id"] for r in ST.backfill_cad(conn)) == [a, b]               # 沒有樓層圖、檢核失敗的不畫
+    assert ST.backfill_cad(conn) == []                                            # 只補一次
+    assert ST.load_review(conn, a) == {"floors": [{"label": "1F"}]} and ST.load_review(conn, d) is None
+    conn.execute("UPDATE case_file SET status = 'processing' WHERE id = %s", (b,))
+    j = ST.claim_cad(conn)
+    assert (j["id"], j["cad_attempts"]) == (a, 1) and ST.claim_cad(conn) is None   # b 重新處理中：不畫
+    # 畫圖期間整個重新處理（圖可能變了）：畫完的結果作廢，排隊也取消
+    ST.reset_cad(conn, a)
+    assert ST.finish_cad(conn, a, j["cad_gen"], "done", {"state": "done"}) is False
+    assert conn.execute("SELECT cad_state FROM case_file WHERE id = %s", (a,)).fetchone()["cad_state"] is None
+    ST.queue_cad(conn, a)
+    j = ST.claim_cad(conn)
+    assert ST.finish_cad(conn, a, j["cad_gen"], "done", {"state": "done", "sheets": 1}) is True
+    row = conn.execute("SELECT cad_state, stats FROM case_file WHERE id = %s", (a,)).fetchone()
+    assert row["cad_state"] == "done" and row["stats"]["cad"] == {"state": "done", "sheets": 1}
+    # 中斷（worker 重啟）：還有次數就重新排隊，用完記失敗；剛開始畫的不算卡住
+    conn.execute("UPDATE case_file SET status = 'done' WHERE id = %s", (b,))
+    for k in range(1, ST.CAD_MAX_ATTEMPTS + 1):
+        j = ST.claim_cad(conn)
+        assert (j["id"], j["cad_attempts"]) == (b, k)
+        assert ST.recover_cad(conn, 3600) == []
+        conn.execute("UPDATE case_file SET cad_started_at = now() - interval '1 second' WHERE id = %s", (b,))
+        assert [(r["id"], r["cad_state"]) for r in ST.recover_cad(conn, 0)] == [
+            (b, "pending" if k < ST.CAD_MAX_ATTEMPTS else "failed")]
+    assert ST.claim_cad(conn) is None
+    # 重新排隊會重設次數
+    ST.queue_cad(conn, b)
+    assert ST.claim_cad(conn)["cad_attempts"] == 1
+
+
 SUB_A, SUB_B = "U" + "a" * 32, "U" + "b" * 32
 
 

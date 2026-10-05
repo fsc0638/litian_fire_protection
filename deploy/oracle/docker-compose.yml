@@ -96,7 +96,8 @@ services:
       postgres:
         condition: service_healthy
     networks: [internal]          # 不出外網
-    mem_limit: 1536m
+    # 抽取、檢核子行程（各限 2.4 GB 位址空間）＋背景畫 CAD 原樣圖的子行程（竣工圖實測峰值約 1.5 GB）可能同時跑
+    mem_limit: 3584m
 
   # DWG 轉檔：LibreDWG（beta，近期仍在修記憶體安全漏洞）只在這個隔離容器跑。
   # 無網路、唯讀根目錄、限資源、不碰資料庫；只透過 data/convert 交接資料夾收件交件。

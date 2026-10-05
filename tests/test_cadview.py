@@ -215,16 +215,6 @@ def test_failed_sheet_and_unreadable_file_recorded_in_status(tmp_path):
     assert st["state"] == "failed" and st["error"] and st["finished_at"]
 
 
-def test_interrupted_render_marked_failed(tmp_path):
-    rd = tmp_path / "12" / "001_x.dxf.review"
-    CV.start_status(rd)
-    CV.write_status(tmp_path / "12" / "002_y.dxf.review", {"state": "done", "sheets": {"1F-0": "done"}})
-    assert CV.fail_interrupted(tmp_path) == 1
-    st = CV.read_status(rd)
-    assert st["state"] == "failed" and "中斷" in st["error"]
-    assert CV.read_status(tmp_path / "12" / "002_y.dxf.review")["state"] == "done"
-
-
 def test_prepare_fixes_fonts_inline_fonts_viewports_and_layers(monkeypatch):
     from ezdxf.fonts import fonts
     monkeypatch.setattr(fonts.font_manager, "_fallback_font_name", fonts.font_manager._fallback_font_name)
@@ -275,59 +265,221 @@ class _Conn:
 
 def _worker(monkeypatch, path, review_only=False):
     from litian.drawing import worker as W
-    reviews, failed = [], []
+    reviews, failed, calls = [], [], []
     monkeypatch.setattr(W.ST, "claim", lambda conn: {"id": 7, "case_id": 1, "name": path.name, "kind": "dxf", "path": str(path),
                                                     "attempts": 1, "review_only": review_only})
     monkeypatch.setattr(W.ST, "get_context", lambda conn, cid: {"occupancy": "乙-6"})
     monkeypatch.setattr(W.ST, "save_result", lambda *a, **k: None)
-    monkeypatch.setattr(W.ST, "mark", lambda *a, **k: None)
+    monkeypatch.setattr(W.ST, "mark", lambda conn, fid, status, stats=None: calls.append(("mark", status)))
+    monkeypatch.setattr(W.ST, "queue_cad", lambda conn, fid: calls.append(("queue", fid)))
+    monkeypatch.setattr(W.ST, "reset_cad", lambda conn, fid: calls.append(("reset", fid)))
     monkeypatch.setattr(W.ST, "save_review", lambda conn, fid, status, result, error, svg_dir: reviews.append(status))
     monkeypatch.setattr(W.ST, "save_failure", lambda conn, fid, err, retry: failed.append(err))
-    return W, reviews, failed
+    return W, reviews, failed, calls
 
 
-def test_worker_renders_after_review_and_records_stats(tmp_path, monkeypatch):
+def test_worker_queues_cad_before_marking_done(tmp_path, monkeypatch):
+    # 處理流程裡不畫（不卡住佇列）：排入原圖佇列，而且排在「完成」之前（工作台一看到完成就會繼續重查）
     p = tmp_path / "001_F-101.dxf"
     make_fire_dxf(p)
-    W, reviews, failed = _worker(monkeypatch, p)
-    conn = _Conn()
-    assert W.run_once(conn, tmp_path) is True
+    W, reviews, failed, calls = _worker(monkeypatch, p)
+    assert W.run_once(_Conn(), tmp_path) is True
     assert failed == [] and reviews == ["done"]
+    assert calls[0] == ("reset", 7) and calls.index(("queue", 7)) < calls.index(("mark", "done"))
     rd = tmp_path / "001_F-101.dxf.review"
-    assert CV.read_status(rd)["state"] == "done" and (rd / "cad" / "1F-0" / "meta.json").is_file()
+    assert CV.read_status(rd)["state"] == "pending" and not (rd / "cad" / "1F-0").exists()
     assert (rd / "1F-0.overlay.json").is_file() and (rd / "1F-0.svg").is_file()
-    sql, params = next(x for x in conn.sql if "'cad'" in x[0])
-    info = json.loads(params[0])
-    assert info["state"] == "done" and info["sheets"] == 1 and info["failed"] == 0 and info["seconds"] >= 0
-
-
-def test_worker_render_failure_keeps_review(tmp_path, monkeypatch):
-    p = tmp_path / "001_F-101.dxf"
-    make_fire_dxf(p)
-    W, reviews, failed = _worker(monkeypatch, p)
-    run = W._run
-
-    def fake(args, timeout, what):
-        if args[0] == "litian.review.cadview":
-            assert timeout == W.CAD_TIMEOUT
-            raise RuntimeError("CAD 原樣圖失敗：MemoryError")
-        return run(args, timeout, what)
-
-    monkeypatch.setattr(W, "_run", fake)
-    conn = _Conn()
-    assert W.run_once(conn, tmp_path) is True
-    assert failed == [] and reviews == ["done"]                     # 檢核結果照常
-    st = CV.read_status(tmp_path / "001_F-101.dxf.review")
-    assert st["state"] == "failed" and "MemoryError" in st["error"]
-    assert json.loads(next(x for x in conn.sql if "'cad'" in x[0])[1][0])["state"] == "failed"
 
 
 def test_review_only_rerun_does_not_redraw(tmp_path, monkeypatch):
     p = tmp_path / "001_F-101.dxf"
     make_fire_dxf(p)
-    W, reviews, failed = _worker(monkeypatch, p, review_only=True)
+    W, reviews, failed, calls = _worker(monkeypatch, p, review_only=True)
     monkeypatch.setattr(W.ST, "load_ir", lambda conn, fid: IR.extract(p))
-    monkeypatch.setattr(W, "render_cad", lambda *a: (_ for _ in ()).throw(AssertionError("只重跑檢核不重畫")))
-    assert W.run_once(_Conn(), tmp_path) is True
-    assert failed == [] and reviews == ["done"]
+    cad = W.CadRunner()
+    proc = _Proc(None)
+    cad.cur = {"job": {"id": 7}, "proc": proc, "work": tmp_path / "w", "review_dir": tmp_path, "t0": 0}
+    assert W.run_once(_Conn(), tmp_path, cad) is True
+    assert failed == [] and reviews == ["done"] and calls == [("mark", "reviewing"), ("mark", "done")]   # 不排隊、不作廢
+    assert cad.busy() and not proc.killed                                          # 同一個檔畫到一半的照常畫
     assert (tmp_path / "001_F-101.dxf.review" / "1F-0.overlay.json").is_file()      # 疊圖資料由檢核更新
+
+
+def test_full_reprocess_cancels_running_render_of_same_file(tmp_path, monkeypatch):
+    p = tmp_path / "001_F-101.dxf"
+    make_fire_dxf(p)
+    W, reviews, failed, calls = _worker(monkeypatch, p)
+    cad = W.CadRunner()
+    other, same = _Proc(None), _Proc(None)
+    work = tmp_path / "w"
+    work.mkdir()
+    cad.cur = {"job": {"id": 8}, "proc": other, "work": work, "review_dir": tmp_path, "t0": 0}
+    cad.cancel(7)
+    assert cad.busy() and not other.killed                                         # 別的檔不動
+    cad.cur = {"job": {"id": 7}, "proc": same, "work": work, "review_dir": tmp_path, "t0": 0}
+    assert W.run_once(_Conn(), tmp_path, cad) is True
+    assert same.killed and not cad.busy() and not work.exists() and ("reset", 7) in calls
+
+
+# ---------- 背景畫圖（CadRunner） ----------
+
+class _Proc:
+    """假的子行程：rc＝None 表示還在跑。"""
+
+    def __init__(self, rc):
+        self.rc, self.killed = rc, False
+
+    def poll(self):
+        return self.rc
+
+    def kill(self):
+        self.killed, self.rc = True, -9
+
+    def wait(self):
+        return self.rc
+
+
+def _cad_queue(monkeypatch, W, jobs, ir=None, review=None, finish=True):
+    finished, recovered = [], []
+    monkeypatch.setattr(W.ST, "recover_cad", lambda conn, s: recovered.append(s) or [])
+    monkeypatch.setattr(W.ST, "claim_cad", lambda conn: jobs.pop(0) if jobs else None)
+    monkeypatch.setattr(W.ST, "load_ir", lambda conn, fid: ir)
+    monkeypatch.setattr(W.ST, "load_review", lambda conn, fid: review)
+    monkeypatch.setattr(W.ST, "finish_cad", lambda conn, fid, gen, state, info: finished.append((fid, gen, state, info)) or finish)
+    return finished, recovered
+
+
+def _job(path, fid=7, gen=3, attempts=1):
+    return {"id": fid, "case_id": 1, "name": path.name, "kind": "dxf", "path": str(path), "cad_gen": gen, "cad_attempts": attempts}
+
+
+def _wait(cad, conn, timeout=180):
+    import time
+    t0 = time.time()
+    while cad.busy():
+        assert time.time() - t0 < timeout, "畫圖子行程沒有結束"
+        cad.poll(conn)
+        time.sleep(0.2)
+
+
+def test_cad_runner_renders_queued_file_in_background(tmp_path, monkeypatch):
+    from litian.drawing import worker as W
+    p = tmp_path / "001_F-101.dxf"
+    make_fire_dxf(p)
+    ir, review = _review(p)
+    rd = tmp_path / "001_F-101.dxf.review"
+    rd.mkdir()
+    finished, recovered = _cad_queue(monkeypatch, W, [_job(p)], ir, review)
+    cad = W.CadRunner()
+    assert cad.start(_Conn()) is True and cad.busy()                               # 不等畫完就回來
+    assert recovered == [W.CAD_STALE_S] and CV.read_status(rd)["state"] == "rendering"
+    assert cad.start(_Conn()) is False                                             # 一次只畫一個
+    _wait(cad, _Conn())
+    (fid, gen, state, info), = finished
+    assert (fid, gen, state) == (7, 3, "done") and info["sheets"] == 1 and info["failed"] == 0 and info["seconds"] >= 0
+    assert CV.read_status(rd)["state"] == "done" and (rd / "cad" / "1F-0" / "meta.json").is_file()
+    assert cad.start(_Conn()) is False                                             # 佇列空了
+
+
+def test_cad_runner_records_render_failure(tmp_path, monkeypatch):
+    from litian.drawing import worker as W
+    p = tmp_path / "001_F-101.dxf"
+    make_fire_dxf(p)
+    ir, review = _review(p)
+    p.write_bytes(b"\x00\x01 not a dxf")                                           # 圖檔壞了：讀不了
+    (tmp_path / "001_F-101.dxf.review").mkdir()
+    finished, _ = _cad_queue(monkeypatch, W, [_job(p)], ir, review)
+    cad = W.CadRunner()
+    assert cad.start(_Conn()) is True
+    _wait(cad, _Conn())
+    (_, _, state, info), = finished
+    st = CV.read_status(tmp_path / "001_F-101.dxf.review")
+    assert state == "failed" and info["error"] and st["state"] == "failed" and st["error"]
+
+
+def test_cad_runner_missing_inputs_fail_without_subprocess(tmp_path, monkeypatch):
+    from litian.drawing import worker as W
+    p = tmp_path / "001_F-101.dxf"
+    make_fire_dxf(p)
+    (tmp_path / "001_F-101.dxf.review").mkdir()
+    gone = tmp_path / "gone" / "002_x.dxf"                                         # 案件資料夾被刪了
+    finished, _ = _cad_queue(monkeypatch, W, [_job(p), _job(gone, fid=8)], ir=None, review={"floors": []})
+    cad = W.CadRunner()
+    assert cad.start(_Conn()) is True and not cad.busy()                           # 處理了一筆（馬上失敗）
+    assert cad.start(_Conn()) is True and not cad.busy()
+    assert [(f[0], f[2]) for f in finished] == [(7, "failed"), (8, "failed")]
+    assert CV.read_status(tmp_path / "001_F-101.dxf.review")["state"] == "failed"
+    assert not (tmp_path / "gone").exists()                                        # 不重建已刪的資料夾
+
+
+def _running(W, tmp_path, rc, attempts=1, age=0.0):
+    import time
+    rd = tmp_path / "x.dxf.review"
+    rd.mkdir(exist_ok=True)
+    work = tmp_path / "w"
+    work.mkdir(exist_ok=True)
+    (work / "err.txt").write_text("一些警告\nMemoryError: 畫布太大\n", encoding="utf-8")
+    CV.start_status(rd)
+    cad = W.CadRunner()
+    proc = _Proc(rc)
+    cad.cur = {"job": _job(tmp_path / "x.dxf", attempts=attempts), "proc": proc, "work": work, "review_dir": rd,
+               "t0": time.monotonic() - age}
+    return cad, proc, rd
+
+
+@pytest.mark.parametrize("rc,attempts,state,status,error", [
+    (-9, 1, "pending", "pending", None),                 # 被系統砍掉（記憶體不足）：重新排隊
+    (-9, 3, "failed", "failed", "MemoryError"),          # 次數用完
+    (1, 1, "failed", "failed", "MemoryError"),           # 程式錯誤：重畫結果相同，不重排
+    ("xcpu", 1, "failed", "failed", "逾時"),             # 超過 CPU 秒數上限
+])
+def test_cad_runner_exit_codes(tmp_path, monkeypatch, rc, attempts, state, status, error):
+    from litian.drawing import worker as W
+    finished, _ = _cad_queue(monkeypatch, W, [])
+    cad, _, rd = _running(W, tmp_path, W.XCPU if rc == "xcpu" else rc, attempts)
+    cad.poll(_Conn())
+    assert not cad.busy() and not (tmp_path / "w").exists()
+    (_, gen, got, info), = finished
+    assert (gen, got) == (3, state) and (error is None or error in info["error"])
+    st = CV.read_status(rd)
+    assert st["state"] == status and (error is None or error in st["error"])
+
+
+def test_cad_runner_timeout_kills_and_running_is_left_alone(tmp_path, monkeypatch):
+    from litian.drawing import worker as W
+    finished, _ = _cad_queue(monkeypatch, W, [])
+    cad, proc, _ = _running(W, tmp_path, None)
+    cad.poll(_Conn())
+    assert cad.busy() and not proc.killed and finished == []                       # 還在畫：不動
+    cad.cur["t0"] -= W.CAD_TIMEOUT + 1
+    cad.poll(_Conn())
+    assert proc.killed and not cad.busy() and finished[0][2] == "failed" and "逾時" in finished[0][3]["error"]
+
+
+def test_cad_result_dropped_when_file_requeued_meanwhile(tmp_path, monkeypatch):
+    from litian.drawing import worker as W
+    finished, _ = _cad_queue(monkeypatch, W, [], finish=False)                     # cad_gen 變了
+    cad, _, rd = _running(W, tmp_path, 1)
+    CV.queue_status(rd)                                                            # 新一輪已排隊
+    cad.poll(_Conn())
+    assert finished and CV.read_status(rd)["state"] == "pending"                   # 新一輪的狀態沒被蓋掉
+
+
+def test_recover_cad_on_start(tmp_path, monkeypatch):
+    from litian.drawing import worker as W
+    a, b, c = (tmp_path / f"{n}.dxf" for n in "abc")
+    for x in (a, b, c):
+        W.review_dir_of(x).mkdir()
+        CV.start_status(W.review_dir_of(x))
+    gone = tmp_path / "gone" / "d.dxf"
+    seen = []
+    monkeypatch.setattr(W.ST, "recover_cad", lambda conn, s: seen.append(s) or [
+        {"id": 1, "path": str(a), "cad_state": "pending"}, {"id": 2, "path": str(b), "cad_state": "failed"},
+        {"id": 3, "path": str(gone), "cad_state": "pending"}])
+    monkeypatch.setattr(W.ST, "backfill_cad", lambda conn: [{"id": 4, "path": str(c)}])
+    assert W.recover_cad_on_start(_Conn()) == (3, 1) and seen == [0]               # 啟動時「畫圖中」的全部算中斷
+    assert CV.read_status(W.review_dir_of(a))["state"] == "pending"
+    st = CV.read_status(W.review_dir_of(b))
+    assert st["state"] == "failed" and "中斷" in st["error"]
+    assert CV.read_status(W.review_dir_of(c))["state"] == "pending"
+    assert not (tmp_path / "gone").exists()

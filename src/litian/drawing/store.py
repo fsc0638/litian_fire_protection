@@ -1,6 +1,8 @@
 """案件、檔案、圖面中介資料的資料表與工作佇列（PostgreSQL，SELECT … FOR UPDATE SKIP LOCKED）。
 
 檔案狀態：queued（排隊）→ processing（處理中）→〔reviewing（檢核中，有平面圖時）〕→ done（完成）｜failed（失敗）｜skipped（不支援的檔案類型）
+CAD 原樣圖（cad_state，另一條佇列，worker 閒置時在背景畫）：pending（排隊）→ rendering（畫圖中）→ done｜failed；
+NULL＝不用畫（沒有樓層圖、檢核失敗）或重新處理中。cad_gen 每次重新排隊加一：舊的畫圖結果不會蓋掉新的狀態。
 """
 
 from __future__ import annotations
@@ -72,6 +74,11 @@ CREATE TABLE IF NOT EXISTS file_review (
   svg_dir text,                         -- 各樓層標示圖 <樓層>.svg 所在資料夾
   created_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE case_file ADD COLUMN IF NOT EXISTS cad_state text;
+ALTER TABLE case_file ADD COLUMN IF NOT EXISTS cad_attempts integer NOT NULL DEFAULT 0;
+ALTER TABLE case_file ADD COLUMN IF NOT EXISTS cad_gen integer NOT NULL DEFAULT 0;
+ALTER TABLE case_file ADD COLUMN IF NOT EXISTS cad_started_at timestamptz;
+CREATE INDEX IF NOT EXISTS case_file_cad ON case_file (id) WHERE cad_state IN ('pending', 'rendering');
 """
 
 # 副檔名 → 種類；其餘（.dwl/.dwl2/.bak 等 AutoCAD 暫存檔）記為 skipped
@@ -92,8 +99,68 @@ WHERE status IN ('processing', 'reviewing') AND updated_at < now() - make_interv
 """
 
 
+# CAD 原樣圖：新上傳的優先（id 大的先畫），舊檔補畫排後面；檔案要是完成狀態（重新處理中的不畫）
+CAD_CLAIM_SQL = """
+UPDATE case_file SET cad_state = 'rendering', cad_attempts = cad_attempts + 1, cad_started_at = now()
+WHERE id = (SELECT id FROM case_file WHERE cad_state = 'pending' AND status = 'done'
+            ORDER BY id DESC FOR UPDATE SKIP LOCKED LIMIT 1)
+RETURNING id, case_id, name, kind, path, cad_gen, cad_attempts
+"""
+# 畫圖中卻沒有人在畫（worker 重啟、當掉）：還有次數就重新排隊，否則記失敗
+CAD_RECOVER_SQL = """
+UPDATE case_file SET cad_state = CASE WHEN cad_attempts < %s THEN 'pending' ELSE 'failed' END
+WHERE cad_state = 'rendering' AND cad_started_at < now() - make_interval(secs => %s)
+RETURNING id, path, cad_state
+"""
+# 檢核成功、有樓層圖卻從沒排過畫圖的（這個功能上線前的檔案）：補排隊
+CAD_BACKFILL_SQL = """
+UPDATE case_file f SET cad_state = 'pending', cad_attempts = 0
+FROM file_review r
+WHERE r.file_id = f.id AND f.cad_state IS NULL AND f.status = 'done' AND r.status = 'done'
+  AND jsonb_typeof(r.result -> 'floors') = 'array' AND jsonb_array_length(r.result -> 'floors') > 0
+RETURNING f.id, f.path
+"""
+CAD_MAX_ATTEMPTS = 3                 # 被中斷（worker 重啟、記憶體不足被系統砍）最多畫幾次
+
+
 def ensure_schema(conn) -> None:
     conn.execute(SCHEMA)
+
+
+def queue_cad(conn, file_id: int) -> None:
+    conn.execute("UPDATE case_file SET cad_state = 'pending', cad_attempts = 0, cad_gen = cad_gen + 1, "
+                 "cad_started_at = NULL WHERE id = %s", (file_id,))
+
+
+def reset_cad(conn, file_id: int) -> None:
+    """重新處理整個檔（圖可能變了）：取消排隊，進行中的畫圖結果作廢（cad_gen 不同）。"""
+    conn.execute("UPDATE case_file SET cad_state = NULL, cad_gen = cad_gen + 1, cad_started_at = NULL WHERE id = %s",
+                 (file_id,))
+
+
+def claim_cad(conn):
+    return conn.execute(CAD_CLAIM_SQL).fetchone()
+
+
+def recover_cad(conn, older_than_s: int) -> list[dict]:
+    return conn.execute(CAD_RECOVER_SQL, (CAD_MAX_ATTEMPTS, older_than_s)).fetchall()
+
+
+def backfill_cad(conn) -> list[dict]:
+    return conn.execute(CAD_BACKFILL_SQL).fetchall()
+
+
+def finish_cad(conn, file_id: int, gen: int, state: str, info: dict) -> bool:
+    """畫圖結束：state＝done｜failed｜pending（被中斷、重新排隊）。檔案在畫圖期間重新排隊過（cad_gen 變了）就不動。"""
+    return conn.execute(
+        "UPDATE case_file SET cad_state = %s, stats = COALESCE(stats, '{}'::jsonb) || jsonb_build_object('cad', %s::jsonb) "
+        "WHERE id = %s AND cad_gen = %s AND cad_state = 'rendering'",
+        (state, json.dumps(info, ensure_ascii=False), file_id, gen)).rowcount == 1
+
+
+def load_review(conn, file_id: int) -> dict | None:
+    row = conn.execute("SELECT result FROM file_review WHERE file_id = %s AND status = 'done'", (file_id,)).fetchone()
+    return row["result"] if row else None
 
 
 def kind_of(name: str) -> str:

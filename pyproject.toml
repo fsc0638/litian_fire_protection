@@ -14,7 +14,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "shapely>=2.0,<3",
     "scipy>=1.13,<2",
-    "pymupdf>=1.24,<2",          # CAD 原樣圖：ezdxf 繪圖模組的點陣輸出（AGPL 授權）
+    "matplotlib>=3.8,<4",        # CAD 原樣圖：ezdxf 繪圖模組的點陣輸出（Agg；授權寬鬆）
     "pillow>=10",                # CAD 原樣圖切圖磚
 ]
 
