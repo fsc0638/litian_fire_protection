@@ -154,6 +154,12 @@ def rendering_cad(conn) -> list[dict]:
     return conn.execute("SELECT id, path, cad_gen, cad_started_at FROM case_file WHERE cad_state = 'rendering'").fetchall()
 
 
+def requeue_job(conn, file_id: int) -> bool:
+    """處理到一半被我們自己停掉（重新部署）：退回排隊，這次不算次數。"""
+    return conn.execute("UPDATE case_file SET status = 'queued', attempts = GREATEST(attempts - 1, 0), updated_at = now() "
+                        "WHERE id = %s AND status IN ('processing', 'reviewing')", (file_id,)).rowcount == 1
+
+
 def requeue_review(conn, file_id: int) -> bool:
     """只重跑檢核（例：舊版檢核沒有產生疊圖資料）。"""
     return conn.execute("UPDATE case_file SET status = 'queued', review_only = true, attempts = 0, updated_at = now() "

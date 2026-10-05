@@ -156,6 +156,15 @@ def test_cad_queue_backfill_claim_gen_and_recover(conn):
     ST.recover_stale(conn, 60)
     assert conn.execute("SELECT status, cad_state FROM case_file WHERE id = %s", (d,)).fetchone() == {
         "status": "failed", "cad_state": None}
+    # 重新部署時處理到一半的檔：退回排隊、不算次數；只有處理中的才動
+    conn.execute("UPDATE case_file SET status = 'processing', attempts = 2 WHERE id = %s", (d,))
+    assert ST.requeue_job(conn, d) is True and ST.requeue_job(conn, d) is False
+    assert conn.execute("SELECT status, attempts FROM case_file WHERE id = %s", (d,)).fetchone() == {
+        "status": "queued", "attempts": 1}
+    # 單一 worker 連上時：處理中的都沒人在處理 → 0 秒就退回排隊
+    conn.execute("UPDATE case_file SET status = 'reviewing', attempts = 1, updated_at = now() WHERE id = %s", (d,))
+    assert ST.recover_stale(conn, 0) == 1
+    assert conn.execute("SELECT status FROM case_file WHERE id = %s", (d,)).fetchone()["status"] == "queued"
     # 只重跑檢核（舊版沒有疊圖資料）：只有完成的檔
     conn.execute("UPDATE case_file SET status = 'done' WHERE id = %s", (a,))
     assert ST.requeue_review(conn, a) is True and ST.requeue_review(conn, a) is False

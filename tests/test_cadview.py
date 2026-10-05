@@ -325,10 +325,16 @@ def test_sigterm_during_processing_is_not_a_file_failure(tmp_path, monkeypatch):
     p = tmp_path / "001_F-101.dxf"
     make_fire_dxf(p)
     W, reviews, failed, calls = _worker(monkeypatch, p)
-    monkeypatch.setattr(W, "process", lambda *a: (_ for _ in ()).throw(W.Stop()))
+    seen = []
+
+    def stop(*a):
+        seen.append(W._current["job"]["id"])                                       # 處理中的檔記著（SIGTERM 時退回排隊）
+        raise W.Stop()
+
+    monkeypatch.setattr(W, "process", stop)
     with pytest.raises(W.Stop):
         W.run_once(_Conn(), tmp_path)
-    assert failed == []
+    assert failed == [] and seen == [7] and W._current["job"] is None
 
 
 def test_full_reprocess_cancels_running_render_of_same_file(tmp_path, monkeypatch):
@@ -556,7 +562,7 @@ def test_cad_start_disk_error_requeues_without_counting(tmp_path, monkeypatch):
     make_fire_dxf(p)
     rd = tmp_path / "001_F-101.dxf.review"
     rd.mkdir()
-    finished, _ = _cad_queue(monkeypatch, W, [_job(p), _job(p)], ir={"sheets": []}, review={"floors": []})
+    finished, _ = _cad_queue(monkeypatch, W, [_job(p) for _ in range(3)], ir={"sheets": []}, review={"floors": []})
     requeued = []
     monkeypatch.setattr(W.ST, "requeue_cad", lambda conn, fid, gen: requeued.append((fid, gen)) or True)
     monkeypatch.setattr(W.tempfile, "mkdtemp", lambda **k: (_ for _ in ()).throw(OSError(28, "No space left on device")))
@@ -564,6 +570,11 @@ def test_cad_start_disk_error_requeues_without_counting(tmp_path, monkeypatch):
     assert cad.start(_Conn()) is False and requeued == [(7, 3)] and finished == []
     assert CV.read_status(rd)["state"] == "pending"
     assert cad.start(_Conn()) is False and requeued == [(7, 3)]                    # 等一陣子再試，不空轉
+    cad.retry_at = 0
+    assert cad.start(_Conn()) is False and requeued == [(7, 3), (7, 3)]
+    cad.retry_at = 0                                                               # 連續第 3 次：記失敗，不再擋住其他檔
+    assert cad.start(_Conn()) is True and [x[2] for x in finished] == ["failed"] and len(requeued) == 2
+    assert not cad.busy() and cad.claimed is None
 
 
 def test_shutdown_requeues_running_render_without_counting(tmp_path, monkeypatch):
@@ -576,6 +587,55 @@ def test_shutdown_requeues_running_render_without_counting(tmp_path, monkeypatch
     assert CV.read_status(rd)["state"] == "pending"
     cad.shutdown(_Conn())                                                          # 沒在畫：不動
     assert requeued == [(7, 3)]
+
+
+def test_shutdown_records_finished_render_instead_of_requeue(tmp_path, monkeypatch):
+    # 子行程已畫完、worker 還沒記（正在處理別的檔）就遇到部署：照結果記，不重畫
+    from litian.drawing import worker as W
+    finished, _ = _cad_queue(monkeypatch, W, [])
+    requeued = []
+    monkeypatch.setattr(W.ST, "requeue_cad", lambda conn, fid, gen: requeued.append(fid) or True)
+    cad, proc, rd = _running(W, tmp_path, 0)
+    (tmp_path / "w" / "out.txt").write_text('{"sheets": {"1F-0": "done"}}\n', encoding="utf-8")
+    CV.write_status(rd, {"state": "done", "sheets": {"1F-0": "done"}})
+    cad.shutdown(_Conn())
+    assert requeued == [] and [x[2] for x in finished] == ["done"] and not cad.busy()
+    assert CV.read_status(rd)["state"] == "done"
+    cad, proc, rd = _running(W, tmp_path, 0)                                       # 資料庫連不上：不動（下次啟動收拾）
+    cad.shutdown(None)
+    assert requeued == [] and len(finished) == 1
+
+
+def test_shutdown_requeues_claimed_but_not_started(tmp_path, monkeypatch):
+    from litian.drawing import worker as W
+    requeued = []
+    monkeypatch.setattr(W.ST, "requeue_cad", lambda conn, fid, gen: requeued.append((fid, gen)) or True)
+    rd = tmp_path / "x.dxf.review"
+    rd.mkdir()
+    cad = W.CadRunner()
+    cad.claimed = _job(tmp_path / "x.dxf")
+    cad.shutdown(_Conn())
+    assert requeued == [(7, 3)] and cad.claimed is None and CV.read_status(rd)["state"] == "pending"
+
+
+def test_backend_draws_points_and_dash_dots_by_lineweight():
+    import matplotlib
+    matplotlib.use("Agg")
+    from ezdxf.addons.drawing import config
+    from ezdxf.addons.drawing.matplotlib import MatplotlibBackend
+    from ezdxf.addons.drawing.properties import BackendProperties
+    from ezdxf.math import Vec2
+    from matplotlib.figure import Figure
+    ax = Figure(dpi=100).add_axes((0, 0, 1, 1))
+    be = CV._backend(MatplotlibBackend)(ax, adjust_figure=False)
+    be.configure(config.Configuration(lineweight_scaling=72 / 25.4))
+    props = BackendProperties(color="#ff000080", lineweight=1.0)
+    be.draw_solid_lines([(Vec2(0, 0), Vec2(0, 0)), (Vec2(1, 0), Vec2(3, 0)), (Vec2(5, 0), Vec2(5, 0))], props)
+    be.draw_point(Vec2(9, 9), props)
+    dots = [ln for ln in ax.lines if ln.get_marker() == "o"]
+    assert [len(d.get_xdata()) for d in dots] == [2, 1]                            # 點劃線的點、POINT 都照線寬
+    assert all(d.get_markersize() == pytest.approx(72 / 25.4) for d in dots)
+    assert len(ax.collections) == 1 and len(ax.collections[0].get_segments()) == 1
 
 
 def test_tick_isolates_background_errors(tmp_path, monkeypatch):

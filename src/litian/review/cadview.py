@@ -362,16 +362,34 @@ _BACKEND = None
 
 
 def _backend(base):
-    """ezdxf 的 matplotlib 後端，點（POINT、長度 0 的線）改照線寬畫圓點（原本固定大小、不管線寬）。"""
+    """ezdxf 的 matplotlib 後端，點（POINT、長度 0 的線、點劃線裡的點）改照線寬畫圓點（原本固定極小、不管線寬）。"""
     global _BACKEND
     if _BACKEND is None:
+        from matplotlib.collections import LineCollection
         from matplotlib.lines import Line2D
 
         class Backend(base):
+            def _dots(self, xs, ys, properties, z):
+                self.ax.add_line(Line2D(xs, ys, marker="o", markersize=self.get_lineweight(properties),
+                                        markeredgewidth=0, linestyle="none", color=properties.color, zorder=z))
+
             def draw_point(self, pos, properties):
-                self.ax.add_line(Line2D([pos.x], [pos.y], marker="o", markersize=self.get_lineweight(properties),
-                                        markeredgewidth=0, linestyle="none", color=properties.color,
-                                        zorder=self._get_z()))
+                self._dots([pos.x], [pos.y], properties, self._get_z())
+
+            def draw_solid_lines(self, lines, properties):
+                z = self._get_z()
+                segs, xs, ys = [], [], []
+                for s, e in lines:
+                    if s.isclose(e):
+                        xs.append(s.x)
+                        ys.append(s.y)
+                    else:
+                        segs.append(((s.x, s.y), (e.x, e.y)))
+                if xs:
+                    self._dots(xs, ys, properties, z)
+                if segs:
+                    self.ax.add_collection(LineCollection(segs, linewidths=self.get_lineweight(properties),
+                                                          color=properties.color, zorder=z, capstyle="butt"))
 
         _BACKEND = Backend
     return _BACKEND

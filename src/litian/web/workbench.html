@@ -339,7 +339,7 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
   };
   let me = null;
   function showLogin(err) {
-    me = null; clearInterval(timer); clearTimeout(cadTimer); reviewsGen++;
+    me = null; clearInterval(timer); clearTimeout(cadTimer); cadTimer = null; reviewsGen++;
     $("#app").classList.add("hidden"); $("#invite").classList.add("hidden"); $("#login").classList.remove("hidden");
     $("#logout").classList.add("hidden"); $("#admin-link").classList.add("hidden"); $("#who").textContent = "";
     const msg = err && errText(err);
@@ -464,7 +464,7 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
   window.addEventListener("hashchange", route);
   const inviteIn = (hash) => (hash.match(/^#invite=([A-Za-z0-9_-]{20,200})$/) || [])[1];
   function route() {
-    clearInterval(timer); clearTimeout(cadTimer); reviewsGen++;
+    clearInterval(timer); clearTimeout(cadTimer); cadTimer = null; reviewsGen++;
     const inv = inviteIn(location.hash);                     // 已開著工作台時在同一分頁點邀請連結（只改了 # 片段）
     if (inv) { history.replaceState(null, "", location.pathname); showInvite(inv); return; }
     if (!me) return;
@@ -517,7 +517,8 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
       '</td><td class="opt">' + esc(s.scale || "") + '</td><td class="opt">' + esc(s.unit || "") + "</td></tr>").join("");
     clearInterval(timer);
     if (d.files.some((f) => ["queued", "processing", "reviewing"].includes(f.status))) timer = setInterval(refreshCase, 3000);
-    await loadReviews().catch(() => { if (me && !cadTimer) scheduleCad(true); });   // 失敗時改由 30 秒重查接手
+    const gen = reviewsGen;
+    await loadReviews().catch(() => { if (me && gen === reviewsGen && !cadTimer) scheduleCad(true); });   // 失敗時改由 30 秒重查接手
   }
 
   // ---------- 檢核結果 ----------

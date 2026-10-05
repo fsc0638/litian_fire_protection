@@ -193,6 +193,7 @@ def _set_status(review_dir: Path, fn, *args) -> None:
 
 XCPU = -getattr(signal, "SIGXCPU", 24)  # 子行程超過 CPU 秒數上限（RLIMIT_CPU）時的結束代碼
 CAD_BACKOFF_S = 60                      # 暫時性錯誤（磁碟滿等）後隔多久再試
+CAD_TRANSIENT_MAX = 3                   # 同一個檔連續幾次暫時性錯誤就記失敗（不讓它一直擋住其他檔）
 
 
 class CadRunner:
@@ -204,7 +205,9 @@ class CadRunner:
 
     def __init__(self):
         self.cur: dict | None = None
+        self.claimed: dict | None = None               # 已認領、子行程還沒開始（這段收到 SIGTERM 也要退回排隊）
         self.retry_at = 0.0
+        self.transient: dict[int, int] = {}            # 檔案 id → 連續暫時性錯誤次數
 
     def busy(self) -> bool:
         return self.cur is not None
@@ -219,6 +222,13 @@ class CadRunner:
         job = ST.claim_cad(conn)
         if not job:
             return False
+        self.claimed = job
+        try:
+            return self._launch(conn, job)
+        finally:
+            self.claimed = None
+
+    def _launch(self, conn, job: dict) -> bool:
         review_dir = review_dir_of(job["path"])
         work = None
         try:
@@ -234,19 +244,22 @@ class CadRunner:
                     [sys.executable, "-m", "litian.review.cadview", str(src), str(work / "ir.json"),
                      str(work / "review.json"), str(review_dir)],
                     stdout=out, stderr=err, env=SUBPROC_ENV, preexec_fn=_cad_limits if os.name == "posix" else None)
-        except OSError as e:                           # 磁碟滿、暫存區寫不進去：退回排隊（不算次數），過一陣子再試
-            if work is not None:
-                shutil.rmtree(work, ignore_errors=True)
-            ST.requeue_cad(conn, job["id"], job["cad_gen"])
-            _set_status(review_dir, CV.queue_status)
-            self.retry_at = time.monotonic() + CAD_BACKOFF_S
-            log.warning("cad start failed file=%s (will retry): %s", job["id"], e)
-            return False
         except Exception as e:
             if work is not None:
                 shutil.rmtree(work, ignore_errors=True)
+            n = self.transient.get(job["id"], 0) + 1
+            if isinstance(e, OSError) and n < CAD_TRANSIENT_MAX:
+                # 磁碟滿、暫存區寫不進去：退回排隊（不算次數），過一陣子再試
+                self.transient[job["id"]] = n
+                ST.requeue_cad(conn, job["id"], job["cad_gen"])
+                _set_status(review_dir, CV.queue_status)
+                self.retry_at = time.monotonic() + CAD_BACKOFF_S
+                log.warning("cad start failed file=%s (will retry): %s", job["id"], e)
+                return False
+            self.transient.pop(job["id"], None)
             self._end(conn, job, review_dir, "failed", {"state": "failed", "error": str(e)[:200]}, str(e))
             return True
+        self.transient.pop(job["id"], None)
         self.cur = {"job": job, "proc": proc, "work": work, "review_dir": review_dir, "t0": time.monotonic()}
         log.info("cad start file=%s attempt=%s", job["id"], job["cad_attempts"])
         return True
@@ -301,9 +314,19 @@ class CadRunner:
         log.info("cad cancelled file=%s (reprocessing)", file_id)
 
     def shutdown(self, conn) -> None:
-        """worker 要停（重新部署、docker stop）：畫到一半的砍掉、退回排隊，不算次數（否則每次部署都吃掉一次）。"""
+        """worker 要停（重新部署、docker stop）：已畫完的照結果記；畫到一半（或剛認領還沒開始）的砍掉、退回排隊，
+        不算次數（否則每次部署都吃掉一次）。conn 為 None（資料庫連不上）：只砍子行程，下次啟動再收拾。"""
+        if self.claimed is not None and self.cur is None:
+            job, self.claimed = self.claimed, None
+            if conn is not None and ST.requeue_cad(conn, job["id"], job["cad_gen"]):
+                _set_status(review_dir_of(job["path"]), CV.queue_status)
+            return
         c = self.cur
         if c is None:
+            return
+        if "result" in c or c["proc"].poll() is not None:
+            if conn is not None:
+                self.poll(conn)                        # 已畫完：照結果記（記不進去就留給下次啟動的 _finished_meanwhile）
             return
         self._kill(c)
         self.cur = None
@@ -416,10 +439,21 @@ def process(conn, job: dict, spool: Path, cad: CadRunner | None = None) -> dict:
     return stats
 
 
+_current: dict = {"job": None}                         # 主佇列正在處理的檔（SIGTERM 時退回排隊）
+
+
 def run_once(conn, spool: Path, cad: CadRunner | None = None) -> bool:
     job = ST.claim(conn)
     if not job:
         return False
+    _current["job"] = job
+    try:
+        return _run_job(conn, job, spool, cad)
+    finally:
+        _current["job"] = None
+
+
+def _run_job(conn, job: dict, spool: Path, cad: CadRunner | None) -> bool:
     try:
         stats = process(conn, job, spool, cad)
         log.info("done file=%s name=%s %s", job["id"], job["name"],
@@ -474,7 +508,9 @@ def main() -> int:
             try:
                 with psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row, autocommit=True) as conn:
                     ST.ensure_schema(conn)
-                    n = ST.recover_stale(conn, EXTRACT_TIMEOUT + CONVERT_TIMEOUT + 60)
+                    # 主機上只有一個 worker：連上（啟動或重連）時「處理中」的都沒有人在處理了（重連前的處理已因斷線中止；
+                    # 也包含認領已寫進資料庫、還沒收到回應就被停掉的）→ 馬上退回排隊，不必等逾時
+                    n = ST.recover_stale(conn, 0)
                     m = recover_cad_on_start(conn) if not cad.busy() else (0, 0)
                     log.info("worker ready (recovered %s stale jobs; cad recovered %s, backfilled %s)", n, *m)
                     while True:
@@ -486,13 +522,15 @@ def main() -> int:
     except Stop:
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         log.info("SIGTERM: stopping")
-        if cad.busy():
-            try:
-                with psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row, autocommit=True,
-                                     connect_timeout=5) as conn:
-                    cad.shutdown(conn)
-            except psycopg.Error:
-                cad.shutdown(None)                     # 記不進去：下次啟動照「被中斷」處理（算一次）
+        job = _current["job"]
+        try:
+            with psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row, autocommit=True,
+                                 connect_timeout=5) as conn:
+                if job is not None and ST.requeue_job(conn, job["id"]):     # 處理到一半的檔：退回排隊、不算次數
+                    log.info("file=%s requeued for shutdown", job["id"])
+                cad.shutdown(conn)
+        except psycopg.Error:
+            cad.shutdown(None)                         # 記不進去：下次啟動照「被中斷」處理（算一次）
         return 0
 
 
