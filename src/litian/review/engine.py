@@ -533,6 +533,8 @@ def _geo(g, nd: int = 2):
     if g is None or g.is_empty:
         return None
     m = mapping(g)
+    if "geometries" in m:                       # GeometryCollection
+        return {"type": m["type"], "geometries": [x for x in (_geo(p, nd) for p in g.geoms) if x]}
     return {"type": m["type"], "coordinates": _round(m["coordinates"], nd)}
 
 
@@ -558,6 +560,23 @@ def _finding(i: int, f: K.Finding, geom: bool) -> dict:
 def svg_name(fr: FloorResult) -> str:
     """標示圖檔名：同一樓層可能有好幾張圖（各系統一張），用「樓層-圖紙序號」區分。"""
     return f"{fr.floor.label}-{fr.sheet}"
+
+
+OVERLAY_TOL = 0.05      # 疊圖用的缺失範圍簡化到約 5 cm
+
+
+def overlay(fr: FloorResult) -> dict:
+    """疊在 CAD 原樣圖上的缺失（<svg_name>.overlay.json）：座標＝公尺（與 Finding.geom 同一座標系），
+    no 與 to_dict 的編號相同；anchor＝標號位置（與標示圖相同取範圍內代表點）。"""
+    out = []
+    for i, f in enumerate(fr.findings, 1):
+        g = f.geom if f.geom is not None and not f.geom.is_empty else None
+        s = g.simplify(OVERLAY_TOL) if g is not None else None
+        if s is not None and s.is_empty:
+            s = g
+        out.append({"no": i, "key": finding_key(f), "severity": f.severity, "rule": f.rule, "title": f.title,
+                    "geom": _geo(s), "anchor": _round(list(g.representative_point().coords[0]), 2) if g is not None else None})
+    return {"version": 1, "sheet": fr.sheet, "number": fr.number, "label": fr.floor.label, "findings": out}
 
 
 def to_dict(res: Result, geom: bool = True) -> dict:
@@ -597,7 +616,8 @@ def to_dict(res: Result, geom: bool = True) -> dict:
 
 
 def main(argv: list[str]) -> int:
-    """python -m litian.review.engine <in.dxf> <out.json> [--ir ir.json] [--ctx 條件.json] [--svg 資料夾] [--no-geom]"""
+    """python -m litian.review.engine <in.dxf> <out.json> [--ir ir.json] [--ctx 條件.json] [--svg 資料夾] [--no-geom]
+    --svg：各樓層的標示圖 <svg_name>.svg 與缺失疊圖資料 <svg_name>.overlay.json 寫到該資料夾。"""
     src, dst = argv[1], argv[2]
     ir = json.loads(Path(argv[argv.index("--ir") + 1]).read_text(encoding="utf-8")) if "--ir" in argv else None
     ctx = None
@@ -611,6 +631,10 @@ def main(argv: list[str]) -> int:
         out.mkdir(parents=True, exist_ok=True)
         for fr in res.floors:
             (out / f"{svg_name(fr)}.svg").write_text(render.floor_svg(fr), encoding="utf-8")
+            # 缺失疊圖資料（審核工作台疊在 CAD 原樣圖上）：先寫暫存檔再改名，重跑檢核時工作台不會讀到寫一半的檔
+            tmp = out / f".{svg_name(fr)}.overlay.json.tmp"
+            tmp.write_text(json.dumps(overlay(fr), ensure_ascii=False), encoding="utf-8")
+            tmp.replace(out / f"{svg_name(fr)}.overlay.json")
     for fr in res.floors:
         c = Counter(f.severity for f in fr.findings)
         print(f"{fr.floor.label:5} {fr.title}：設備 {len(fr.equipment)}，缺失 {dict(c)}")

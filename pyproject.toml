@@ -14,6 +14,8 @@ dependencies = [
     "python-multipart>=0.0.9",
     "shapely>=2.0,<3",
     "scipy>=1.13,<2",
+    "pymupdf>=1.24,<2",          # CAD 原樣圖：ezdxf 繪圖模組的點陣輸出（AGPL 授權）
+    "pillow>=10",                # CAD 原樣圖切圖磚
 ]
 
 [project.optional-dependencies]
