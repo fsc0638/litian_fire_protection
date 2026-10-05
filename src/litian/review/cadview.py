@@ -114,7 +114,9 @@ def prepare(doc, font: str | None) -> dict:
     """只改記憶體中的 doc：
     1) .shx、沒有副檔名或本機沒有的字型改用中文字型（否則中文變方框），找不到的字型一律退回中文字型；
     2) 多行文字內嵌的字型切換拿掉（改用上面的中文字型）；
-    3) 轉檔後視埠的狀態常被設成「關閉」（0）：整張紙以外的視埠打開，才畫得出視埠內容；
+    3) 視埠狀態不可靠（轉檔後常是「關閉」0；也有內容視埠是 1）：ezdxf 只畫狀態 >0 的視埠，
+       且把排第一個、狀態 1 的當成整張紙丟掉。所以整張紙以外的視埠一律設成 ≥2、整張紙的一律關閉，
+       畫哪些視埠就只看 _paper_vp，不靠 ezdxf 依狀態猜；
     4) 實體用到、圖層表卻沒有的圖層補上（預設白／黑色，跟 AutoCAD 開檔時一樣；否則 ezdxf 一律畫成白色）。"""
     from ezdxf.fonts import fonts
     out = {"styles": 0, "mtext": 0, "viewports": 0, "layers": 0}
@@ -145,8 +147,9 @@ def prepare(doc, font: str | None) -> dict:
         if lay.name == "Model":
             continue
         for vp in lay.query("VIEWPORT"):
-            if not _paper_vp(vp) and vp.dxf.get("status", 0) <= 0:
-                vp.dxf.status = 2
+            want = 0 if _paper_vp(vp) else max(2, vp.dxf.get("status", 0))
+            if vp.dxf.get("status", 0) != want:
+                vp.dxf.status = want
                 out["viewports"] += 1
     return out
 

@@ -23,9 +23,9 @@ SIDE = 1.0
 LONG = 1500              # 測試用長邊像素（實際約 A3 300 dpi 以上）
 
 
-def _red_square(doc, unit: float, at=RED):
+def _red_square(doc, unit: float, at=RED, side=SIDE):
     x, y = at[0] / unit, at[1] / unit
-    h = SIDE / 2 / unit
+    h = side / 2 / unit
     hatch = doc.modelspace().add_hatch(color=1)
     hatch.paths.add_polyline_path([(x - h, y - h), (x + h, y - h), (x + h, y + h), (x - h, y + h)])
 
@@ -104,6 +104,40 @@ def test_layout_sheet_renders_viewport_and_transform(tmp_path):
     a, b, _c, dd, e, _f = meta["transform"]
     assert b == pytest.approx(0, abs=1e-6) and dd == pytest.approx(0, abs=1e-6) and a == pytest.approx(-e)   # y 向下
     assert not list((tmp_path / "fire.dxf.review" / "cad").glob(".tmp-*"))
+
+
+def _count(sheet_dir, meta, rgb) -> int:
+    """原尺寸那一層所有圖磚中，恰為 rgb 的像素數。"""
+    return sum(n for t in (sheet_dir / str(meta["max_level"])).iterdir()
+               for n, c in Image.open(t).convert("RGB").getcolors(512 * 512) if c == rgb)
+
+
+@pytest.mark.parametrize("paper", [None, 0, 1, 2])
+def test_layout_main_viewport_status_1_still_drawn(tmp_path, paper):
+    """主視埠狀態是 1（真實圖也有）：ezdxf 會把排第一個、狀態 1 的視埠當成整張紙丟掉不畫。
+    整張紙視埠不存在、關閉、狀態 1 但排在主視埠後面、或狀態 2 時，都要畫出主視埠內容，且不把整張紙視埠當內容畫。"""
+    p = tmp_path / "fire.dxf"
+    make_layout_dxf(p)
+    doc = ezdxf.readfile(p)
+    _red_square(doc, 0.001)
+    # 模型空間 (100, 80) mm 附近：主視埠、小視埠都框不到，只有整張紙視埠被當成內容畫時才會出現
+    _red_square(doc, 0.001, at=(0.1, 0.08), side=0.3)
+    lay = doc.layouts.get("FE-311")
+    main, small = sorted(lay.query("VIEWPORT"), key=lambda v: -float(v.dxf.width))
+    main.dxf.status, small.dxf.status = 1, 2
+    if paper is not None:                              # 加在主視埠之後：同為狀態 1 時排在後面
+        lay.add_viewport(center=(100, 80), size=(150, 100), view_center_point=(100, 80),
+                         view_height=100).dxf.status = paper
+    doc.saveas(p)
+    ir, review = _review(p)
+    name = review["floors"][0]["svg_name"]
+    st = CV.render_all(p, ir, review, tmp_path / "r", long_px=LONG)
+    assert st["sheets"] == {name: "done"}
+    d = tmp_path / "r" / "cad" / name
+    meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+    assert _pixel(d, meta, *RED) == (255, 0, 0)
+    side = SIDE * abs(meta["transform"][0])            # 1 m 方塊的像素邊長
+    assert 0.6 * side ** 2 < _count(d, meta, (255, 0, 0)) < 1.2 * side ** 2      # 只有視埠裡那一塊
 
 
 def test_model_frame_renders_only_frame_area(tmp_path):
@@ -200,10 +234,14 @@ def test_prepare_fixes_fonts_inline_fonts_viewports_and_layers(monkeypatch):
     lay = doc.layouts.new("FE-101")
     paper = lay.add_viewport(center=(100, 80), size=(150, 100), view_center_point=(100, 80), view_height=100)
     main = lay.add_viewport(center=(200, 150), size=(380, 260), view_center_point=(0, 0), view_height=20000)
+    detail = lay.add_viewport(center=(40, 40), size=(30, 20), view_center_point=(500, 500), view_height=500)
+    paper2 = lay.add_viewport(center=(300, 200), size=(60, 40), view_center_point=(300, 200), view_height=40)
     paper.dxf.status = main.dxf.status = 0
+    detail.dxf.status, paper2.dxf.status = 1, 3
     n = CV.prepare(doc, "CJK.ttf")
     assert doc.styles.get("CHT").dxf.font == "CJK.ttf" and doc.styles.get("CHT").dxf.bigfont == ""
-    assert m.text == "{一層}平面" and main.dxf.status == 2 and paper.dxf.status == 0
+    assert m.text == "{一層}平面" and n["viewports"] == 3
+    assert (main.dxf.status, detail.dxf.status, paper.dxf.status, paper2.dxf.status) == (2, 2, 0, 0)
     assert doc.layers.has_entry("沒定義的圖層") and n["layers"] >= 1
 
 
