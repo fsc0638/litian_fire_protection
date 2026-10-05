@@ -889,6 +889,36 @@ def _svg_name(fl: dict) -> str:
     return fl.get("svg_name") or fl["label"]
 
 
+def _cad_status(svg_dir: str | None) -> tuple[Path, dict] | None:
+    """檢核資料夾裡的 cad/status.json（沒有或壞掉當空的）；資料夾不在案件資料夾內回 None。"""
+    if not svg_dir:
+        return None
+    d = (Path(svg_dir) / "cad").resolve()
+    if CASES_DIR.resolve() not in d.parents:
+        return None
+    try:
+        st = json.loads((d / "status.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        st = {}
+    return d, st if isinstance(st, dict) else {}
+
+
+def _cad_state(cad: tuple[Path, dict] | None, name: str) -> str | None:
+    """樓層的 CAD 原樣圖：done＝圖磚可用、rendering＝產生中、failed＝失敗；沒產生過回 None。"""
+    if not cad or not REVIEW_LABEL.fullmatch(name or ""):
+        return None
+    d, st = cad
+    sheets = st.get("sheets") if isinstance(st.get("sheets"), dict) else {}
+    has_meta = (d / name / "meta.json").is_file()
+    if sheets.get(name) == "done" and has_meta:
+        return "done"
+    if sheets.get(name) == "failed":
+        return "failed"
+    if st.get("state") in ("rendering", "failed"):
+        return st["state"]
+    return "done" if has_meta else None
+
+
 def _review_bundle(case_id: int) -> dict:
     """檢核結果＋引用條文＋審核結果＋檢核條件（工作台與報告共用）。"""
     rows = _all("SELECT r.file_id, f.name, r.status, r.error, r.result, r.svg_dir, r.created_at FROM file_review r "
@@ -899,8 +929,10 @@ def _review_bundle(case_id: int) -> dict:
         b = res.get("building") or {}
         for item in b.get("findings", []) + b.get("requirements", []) + b.get("notes", []):
             ids.update(item["law"])
+        cad = _cad_status(r.get("svg_dir")) if res.get("floors") else None
         for fl in res.get("floors", []):
             fl["svg"] = f"/api/cases/{case_id}/files/{r['file_id']}/review/{_svg_name(fl)}.svg"
+            fl["cad"] = _cad_state(cad, _svg_name(fl))
             for item in fl["findings"] + fl["notes"]:
                 ids.update(item["law"])
     laws = {}
@@ -1018,3 +1050,47 @@ def cases_review_svg(case_id: int, file_id: int, label: str, user: dict = Depend
     return FileResponse(p, media_type="image/svg+xml", headers={
         "Cache-Control": "private, no-cache", "X-Content-Type-Options": "nosniff",
         "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"})
+
+
+# ---------- CAD 原樣圖（圖磚）與缺失疊圖：檢核資料夾裡的 cad/<圖名>/ 與 <圖名>.overlay.json ----------
+CAD_TILE = re.compile(r"(\d{1,2})/(\d{1,5})_(\d{1,5})\.png")       # 層級/欄_列.png，只收整數
+JSON_HEADERS = {"Cache-Control": "private, no-cache", "X-Content-Type-Options": "nosniff"}
+
+
+def _review_file(case_id: int, file_id: int, name: str, *parts: str) -> Path:
+    """檢核資料夾裡的檔案；圖名格式不符、沒有檢核結果、解析後不在案件資料夾內或不存在，一律 404。"""
+    if not REVIEW_LABEL.fullmatch(name):
+        raise HTTPException(404, "沒有這張圖")
+    r = _one("SELECT r.svg_dir FROM file_review r JOIN case_file f ON f.id = r.file_id "
+             "WHERE r.file_id = %s AND f.case_id = %s", file_id, case_id)
+    if not r or not r["svg_dir"]:
+        raise HTTPException(404, "沒有這張圖")
+    p = Path(r["svg_dir"]).joinpath(*parts).resolve()
+    if CASES_DIR.resolve() not in p.parents or not p.is_file():
+        raise HTTPException(404, "沒有這張圖")
+    return p
+
+
+@app.get("/api/cases/{case_id}/files/{file_id}/cad/{name}/meta.json", include_in_schema=False)
+def cases_cad_meta(case_id: int, file_id: int, name: str, user: dict = Depends(current_user)):
+    """圖磚資訊：尺寸、層級、公尺座標 → 像素的換算。"""
+    return FileResponse(_review_file(case_id, file_id, name, "cad", name, "meta.json"),
+                        media_type="application/json", headers=JSON_HEADERS)
+
+
+@app.get("/api/cases/{case_id}/files/{file_id}/cad/{name}/{level}/{tile}", include_in_schema=False)
+def cases_cad_tile(case_id: int, file_id: int, name: str, level: str, tile: str, user: dict = Depends(current_user)):
+    m = CAD_TILE.fullmatch(f"{level}/{tile}")
+    if not m:
+        raise HTTPException(404, "沒有這張圖")
+    lv, col, row = (int(x) for x in m.groups())
+    p = _review_file(case_id, file_id, name, "cad", name, str(lv), f"{col}_{row}.png")
+    return FileResponse(p, media_type="image/png",
+                        headers={"Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff"})
+
+
+@app.get("/api/cases/{case_id}/files/{file_id}/review/{name}.overlay.json", include_in_schema=False)
+def cases_review_overlay(case_id: int, file_id: int, name: str, user: dict = Depends(current_user)):
+    """缺失疊圖：各缺失的範圍（GeoJSON，公尺）與標號位置。"""
+    return FileResponse(_review_file(case_id, file_id, name, f"{name}.overlay.json"),
+                        media_type="application/json", headers=JSON_HEADERS)
