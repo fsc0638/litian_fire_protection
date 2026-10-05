@@ -63,7 +63,9 @@ curl https://<對外網址>/healthz    # 應回 "litian ok"
 | `libredwg/Dockerfile`、`libredwg/converter.py`、`libredwg/pipeline_check.py` | 轉檔容器（建置內容＝repo 根目錄）、常駐轉檔服務、一次性三步管線檢查 |
 | `04_host_caddy_site.sh` | 在主機層 Caddy 新增本系統網站區塊（主機層 Caddy 模式） |
 | `05_route_api.sh` | 更新本系統網站區塊，把 `/api/*` 轉送到 API 容器 |
-| `06_update_from_git.sh` | 從 GitHub 更新並重新部署 |
+| `06_update_from_git.sh` | 從 GitHub 更新並重新部署（手動；部署前備份資料庫，與自動部署共用一把鎖） |
 | `07_add_developer.sh` | 新增協作開發者帳號：只能金鑰登入、無 sudo、不在 docker 群組、限 CPU 與記憶體；`--disable` 停用 |
 | `08_export_ask_log.sh` | 匯出法規問答的提問紀錄成 CSV（Excel 可開） |
 | `09_db_tests.sh` | 在主機上跑全部測試（含資料庫整合測試，用獨立的 litian_test 資料庫） |
+| `10_autodeploy.sh` | 自動部署本體（計時器每 2 分鐘執行）：GitHub main 有新提交 → 測試新版 → 通過才部署；失敗換回前一版並暫停。`status`／`pause`／`resume`／`run` |
+| `11_install_autodeploy.sh` | 安裝自動部署的 systemd 計時器（`--uninstall` 移除），只加 `litian-autodeploy.service`／`.timer` 兩個單元 |
