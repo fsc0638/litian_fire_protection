@@ -3,7 +3,9 @@
 
 import json
 import re
+import shutil
 import struct
+import subprocess
 import zlib
 from contextlib import contextmanager
 from types import SimpleNamespace as NS
@@ -202,3 +204,70 @@ def test_workbench_has_cad_viewer_pieces():
     script = html[html.index("// ---------- CAD 原樣檢視"):]
     script = script[:script.index("// ---------- CAD 原樣檢視結束")]
     assert "innerHTML" not in script
+
+
+def test_workbench_cad_poll_survives_failures():
+    # 30 秒重查失敗（網路斷、主機重啟）時要照排下一次，不能吞掉例外就停了
+    html = api.WEB_WORKBENCH.read_text(encoding="utf-8")
+    assert "loadReviews().catch(() => {})" not in html
+    sched = html[html.index("function scheduleCad("):html.index("async function loadReviews(")]
+    assert "30000" in sched and re.search(r"\.catch\(\(\) => \{[^}]*scheduleCad\(true\)", sched)
+    # 重查結果一樣時走局部更新，不整頁重畫
+    load = html[html.index("async function loadReviews("):html.index("function planHtml(")]
+    assert "reviewsKey(d)" in load and "patchReviews(d)" in load and "JSON.stringify(d)" not in load
+
+
+# ---------- 重查比對（工作台的純函式段落，用 node 跑；沒有 node 就略過） ----------
+
+def _run_js(tmp_path, data: dict, body: str):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("沒有 node，略過前端純函式測試")
+    html = api.WEB_WORKBENCH.read_text(encoding="utf-8")
+    funcs = html[html.index("// ---------- 重查比對（"):html.index("// ---------- 重查比對結束")]
+    js = tmp_path / "t.js"
+    js.write_text(funcs + "\nconst D = " + json.dumps(data, ensure_ascii=False) + ";\n"
+                  "process.stdout.write(JSON.stringify((() => {" + body + "})()));\n", encoding="utf-8")
+    r = subprocess.run([node, str(js)], capture_output=True, timeout=60)
+    assert r.returncode == 0, r.stderr.decode("utf-8", "replace")
+    return json.loads(r.stdout.decode("utf-8"))
+
+
+def _rv(cad2="rendering", decisions=None, title="探測器涵蓋不足", laws=None):
+    floors = [{"label": "1F", "svg_name": "1F-1", "cad": "done", "findings": [{"no": 1, "key": "k1", "title": title}]},
+              {"label": "2F", "svg_name": "2F-2", "cad": cad2, "findings": [{"no": 1, "key": "k2", "title": "滅火器"}]}]
+    return {"reviews": [{"file_id": 7, "name": "F.dxf", "status": "done", "error": None, "created_at": "t",
+                         "result": {"building": None, "floors": floors, "warnings": []}},
+                        {"file_id": 8, "name": "G.dxf", "status": "failed", "error": "轉檔失敗", "result": None, "created_at": "t"}],
+            "laws": laws or {"L1": {"citation": "第 1 條", "text": "條文"}}, "context": {}, "decisions": decisions or {}}
+
+
+def test_poll_key_ignores_decisions_and_cad(tmp_path):
+    local = {"7": {"k1": {"decision": "accept", "note": None}}}                         # 按下接受後本機存的
+    server = {"7": {"k1": {"decision": "accept", "note": "", "by": "amy", "at": "2026-10-05T10:00:00+08:00"}}}
+    got = _run_js(tmp_path, {"a": _rv(decisions=local), "b": _rv("done", server), "c": _rv(title="改了"),
+                             "d": _rv(laws={"L2": {"citation": "第 2 條", "text": ""}}), "e": _rv("failed")}, """
+        const k = reviewsKey(D.a);
+        return { same: k === reviewsKey(D.b), title: k === reviewsKey(D.c), laws: k === reviewsKey(D.d),
+                 cad: cadChanges(D.a, D.b), cadFail: cadChanges(D.a, D.e), cadNone: cadChanges(D.a, D.a),
+                 dec: decisionChanges(D.a.decisions, D.b.decisions), kept: D.a.reviews[0].result.floors[1].cad };""")
+    # 只有審核結果（伺服器多帶 by、at）和原圖狀態不同：key 一樣 → 局部更新
+    assert got["same"] is True and got["dec"] == []
+    # 缺失內容或引用條文變了才整頁重畫
+    assert got["title"] is False and got["laws"] is False
+    # 原圖狀態變了的只有第 1 個檔案的第 2 層；比對不會改到原資料
+    assert got["cad"] == [[0, 1]] and got["cadFail"] == [[0, 1]] and got["cadNone"] == [] and got["kept"] == "rendering"
+
+
+def test_decision_changes_only_visible_ones(tmp_path):
+    base = {"7": {"k1": {"decision": "accept", "note": "看過"}}}
+    got = _run_js(tmp_path, {"base": base, "cases": {
+        "same": {"7": {"k1": {"decision": "accept", "note": "看過", "by": "bob", "at": "x"}}},
+        "other": {"7": {"k1": {"decision": "accept", "note": "看過"}, "k2": {"decision": "reject", "note": None}}},
+        "undo": {},
+        "note": {"7": {"k1": {"decision": "accept", "note": "改備註"}}},
+        "flip": {"7": {"k1": {"decision": "reject", "note": "看過"}}},
+        "file": {"7": {"k1": {"decision": "accept", "note": "看過"}}, "9": {"k9": {"decision": "accept", "note": ""}}},
+    }}, "return Object.fromEntries(Object.entries(D.cases).map(([n, c]) => [n, decisionChanges(D.base, c)]));")
+    assert got == {"same": [], "other": [["7", "k2"]], "undo": [["7", "k1"]], "note": [["7", "k1"]],
+                   "flip": [["7", "k1"]], "file": [["9", "k9"]]}

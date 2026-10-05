@@ -339,7 +339,7 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
   };
   let me = null;
   function showLogin(err) {
-    me = null; clearInterval(timer); clearTimeout(cadTimer);
+    me = null; clearInterval(timer); clearTimeout(cadTimer); reviewsGen++;
     $("#app").classList.add("hidden"); $("#invite").classList.add("hidden"); $("#login").classList.remove("hidden");
     $("#logout").classList.add("hidden"); $("#admin-link").classList.add("hidden"); $("#who").textContent = "";
     const msg = err && errText(err);
@@ -464,7 +464,7 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
   window.addEventListener("hashchange", route);
   const inviteIn = (hash) => (hash.match(/^#invite=([A-Za-z0-9_-]{20,200})$/) || [])[1];
   function route() {
-    clearInterval(timer); clearTimeout(cadTimer);
+    clearInterval(timer); clearTimeout(cadTimer); reviewsGen++;
     const inv = inviteIn(location.hash);                     // 已開著工作台時在同一分頁點邀請連結（只改了 # 片段）
     if (inv) { history.replaceState(null, "", location.pathname); showInvite(inv); return; }
     if (!me) return;
@@ -528,6 +528,7 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
     exit_sign: "出口標示燈", direction_light: "避難方向指示燈", emergency_light: "緊急照明燈", smoke_vent: "排煙口",
     manual_alarm: "手動警報機", end_test_valve: "末端查驗閥", alarm_valve: "自動警報逆止閥", emergency_outlet: "緊急電源插座" };
   let lastReviews = "", bundle = { reviews: [], laws: {}, decisions: {}, context: {} }, occList = null, ctxDirty = false;
+  let reviewsGen = 0, decEpoch = 0;          // 換案件／頁面時作廢查詢中的結果；送出審核決定期間的查詢結果不採用
   function lawHtml(ids, laws) {
     return ids.map((id) => { const l = laws[id]; return l ? '<span title="' + esc(l.text) + '">' + esc(l.citation) + "</span>" : esc(id); }).join("、");
   }
@@ -630,27 +631,39 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
     const btn = e.target.closest("button[data-act]"); if (!btn) return;
     const li = btn.closest("li[data-key]"), act = btn.dataset.act;
     const note = (li.querySelector(".decide input") || {}).value || null;
-    btn.disabled = true;
+    btn.disabled = true; decEpoch++;
     try {
       await api("/api/cases/" + currentCase + "/files/" + li.dataset.file + "/decisions", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key: li.dataset.key, decision: act === "undo" ? null : act, note }) });
       const m = (bundle.decisions[li.dataset.file] = bundle.decisions[li.dataset.file] || {});
       if (act === "undo") delete m[li.dataset.key]; else m[li.dataset.key] = { decision: act, note };
-      lastReviews = JSON.stringify(bundle);
       li.querySelector(".decide").outerHTML = decisionHtml(li.dataset.file, li.dataset.key);
       li.classList.toggle("rejected", act === "reject");
       updateSummary();
     } catch (err) { btn.disabled = false; alert(err.message); }
+    finally { decEpoch++; }
   });
-  async function loadReviews() {
-    await loadOccupancy().catch(() => {});
-    const d = await api("/api/cases/" + currentCase + "/reviews");
-    // 有樓層的原圖還在產生：每 30 秒重查一次，好了就換成原圖
+  // 有樓層的原圖還在產生：每 30 秒重查一次，好了就換成原圖。重查失敗（網路斷、主機重啟）也照排下一次
+  function scheduleCad(on) {
     clearTimeout(cadTimer); cadTimer = null;
-    if (d.reviews.some((r) => (r.result?.floors || []).some((fl) => fl.cad === "rendering")))
-      cadTimer = setTimeout(() => { cadTimer = null; loadReviews().catch(() => {}); }, 30000);
-    const key = JSON.stringify(d);
-    if (key === lastReviews) return;
+    if (!on) return;
+    const gen = reviewsGen;
+    cadTimer = setTimeout(() => {
+      cadTimer = null;
+      loadReviews().catch(() => { if (me && gen === reviewsGen && !cadTimer) scheduleCad(true); });
+    }, 30000);
+  }
+  async function loadReviews() {
+    const gen = reviewsGen;
+    await loadOccupancy().catch(() => {});
+    const ep = decEpoch;
+    const d = await api("/api/cases/" + currentCase + "/reviews");
+    if (gen !== reviewsGen) return;                                           // 查詢中換了案件或頁面
+    if (ep !== decEpoch) d.decisions = bundle.decisions;                       // 查詢中送出了審核決定：以本機為準，下次重查再對齊
+    scheduleCad(d.reviews.some((r) => (r.result?.floors || []).some((fl) => fl.cad === "rendering")));
+    // 只有審核結果、檢核條件或原圖狀態變了：局部更新（檢視器、捲動位置、打到一半的備註都不動）
+    const key = reviewsKey(d);
+    if (key === lastReviews) { patchReviews(d); return; }
     lastReviews = key;
     bundle = d;
     destroyCads();
@@ -659,36 +672,86 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
     fillContext();
     updateSummary();
     $("#review-hint").classList.toggle("hidden", d.reviews.length > 0);
-    $("#reviews").innerHTML = d.reviews.map((r) => {
+    $("#reviews").innerHTML = d.reviews.map((r, ri) => {
       if (r.status !== "done") return '<p class="note err">' + esc(r.name) + "：檢核失敗（" + esc(r.error || "") + "）</p>";
       const floors = r.result.floors;
       if (!floors.length) return '<p class="muted small">' + esc(r.name) + "：沒有可檢核的平面圖。</p>";
-      return buildingHtml(r) + floors.map((fl) => {
+      return buildingHtml(r) + floors.map((fl, fi) => {
         const cnt = {}; fl.findings.forEach((f) => { cnt[f.severity] = (cnt[f.severity] || 0) + 1; });
         const chips = ["RED", "ORANGE", "YELLOW", "BLUE"].filter((k) => cnt[k]).map((k) => '<span class="badge sev s-' + k + '">' + SEV[k] + " " + cnt[k] + "</span>").join(" ");
         const eq = Object.entries(fl.equipment).map(([k, n]) => (KIND[k] || k) + " " + n).join("、") || "未認出消防設備";
         const warns = fl.warnings.concat(r.result.warnings || []).map((w) => '<div class="small">' + esc(w) + "</div>").join("");
-        // CAD 原樣圖好了就用圖磚檢視器（mountCads 掛上）；還沒好或失敗先放簡化標示圖
-        const cadOk = fl.cad === "done";
-        const plan = cadOk
-          ? '<div class="cadbox" data-base="/api/cases/' + currentCase + "/files/" + r.file_id + '" data-name="' + esc(fl.svg_name || fl.label) +
-            '" data-svg="' + esc(fl.svg) + '" data-label="' + esc(fl.label) + '"></div>'
-          : (fl.cad === "rendering" ? '<p class="note info small">' + CAD_RENDERING + "</p>" : fl.cad === "failed" ? '<p class="note info small">' + CAD_FAILED + "</p>" : "") +
-            '<a href="' + esc(fl.svg) + '" target="_blank" rel="noopener"><img class="plan" loading="lazy" alt="' + esc(fl.label) + ' 檢核標示圖" src="' + esc(fl.svg) + '"></a>';
         return '<section class="floor"><h3>' + esc(fl.label) + "｜" + esc(fl.number || "") + " " + esc(fl.title) + "</h3>" +
           '<div class="small muted">' + esc(r.name) + "｜樓地板約 " + Math.round(fl.area).toLocaleString() + " ㎡｜" + esc(eq) +
           (fl.fireproof ? "｜圖註防火構造" : "") + "</div>" +
           '<div class="row" style="margin:6px 0">' + (chips || (Object.keys(fl.equipment).length
             ? '<span class="badge b-done">未發現缺失</span>'
             : '<span class="badge b-skipped">未認出消防設備，本層未檢核</span>')) + "</div>" +
-          '<div class="floorbody' + (cadOk && fl.findings.length ? " has-cad" : "") + '">' + plan + '<div class="floorlist">' +
-          '<ol class="findings">' + fl.findings.map((f) => findingHtml(r.file_id, f)).join("") + "</ol>" +
+          '<div class="floorbody' + (fl.cad === "done" && fl.findings.length ? " has-cad" : "") + '" data-fl="' + ri + "-" + fi + '">' + planHtml(r, fl) +
+          '<div class="floorlist"><ol class="findings">' + fl.findings.map((f) => findingHtml(r.file_id, f)).join("") + "</ol>" +
           (fl.notes.length ? "<details><summary>免設處所與說明</summary>" + noteHtml(fl.notes) + "</details>" : "") +
           (warns ? "<details><summary>判讀提醒</summary>" + warns + "</details>" : "") + "</div></div></section>";
       }).join("");
     }).join("");
     mountCads();
   }
+  // CAD 原樣圖好了就用圖磚檢視器（observeCad 掛上）；還沒好或失敗先放簡化標示圖
+  function planHtml(r, fl) {
+    if (fl.cad === "done") return '<div class="cadbox" data-base="/api/cases/' + currentCase + "/files/" + r.file_id + '" data-name="' + esc(fl.svg_name || fl.label) +
+      '" data-svg="' + esc(fl.svg) + '" data-label="' + esc(fl.label) + '"></div>';
+    return (fl.cad === "rendering" ? '<p class="note info small">' + CAD_RENDERING + "</p>" : fl.cad === "failed" ? '<p class="note info small">' + CAD_FAILED + "</p>" : "") +
+      '<a href="' + esc(fl.svg) + '" target="_blank" rel="noopener"><img class="plan" loading="lazy" alt="' + esc(fl.label) + ' 檢核標示圖" src="' + esc(fl.svg) + '"></a>';
+  }
+  // 只換掉這一層的圖區（缺失清單與輸入框不動）
+  function setPlan(body, r, fl) {
+    const old = body.querySelector(".cadbox"); if (old) dropCad(old);
+    [...body.children].forEach((x) => { if (!x.classList.contains("floorlist")) x.remove(); });
+    body.classList.toggle("has-cad", fl.cad === "done" && fl.findings.length > 0);
+    body.querySelector(".floorlist").insertAdjacentHTML("beforebegin", planHtml(r, fl));
+    const box = body.querySelector(".cadbox"); if (box) observeCad(box);
+  }
+  function patchReviews(d) {
+    const old = bundle; bundle = d;
+    if (JSON.stringify(old.context) !== JSON.stringify(d.context)) fillContext();
+    decisionChanges(old.decisions, d.decisions).forEach(([fid, key]) => {
+      document.querySelectorAll('#reviews li[data-file="' + CSS.escape(fid) + '"][data-key="' + CSS.escape(key) + '"]').forEach((li) => {
+        const dec = li.querySelector(".decide"); if (dec) dec.outerHTML = decisionHtml(fid, key);
+        li.classList.toggle("rejected", decisionOf(fid, key).decision === "reject");
+      });
+    });
+    updateSummary();
+    cadChanges(old, d).forEach(([ri, fi]) => {
+      const body = document.querySelector('#reviews .floorbody[data-fl="' + ri + "-" + fi + '"]');
+      if (body) setPlan(body, d.reviews[ri], d.reviews[ri].result.floors[fi]);
+    });
+  }
+
+  // ---------- 重查比對（純函式；tests/test_cadview_api.py 用 node 跑）----------
+  // 比對用的 key 不含審核結果與每層原圖狀態：這兩項變了只局部更新（整頁重畫會讓檢視器跳回全圖、打到一半的備註被清空）
+  function reviewsKey(d) {
+    return JSON.stringify([d.laws, (d.reviews || []).map((r) => (r.result && Array.isArray(r.result.floors)
+      ? { ...r, result: { ...r.result, floors: r.result.floors.map((fl) => ({ ...fl, cad: null })) } } : r))]);
+  }
+  // 畫面上看得到的審核結果（決定＋備註）不同的 [檔案, 缺失 key]；伺服器多帶的 by、at 不算
+  function decisionChanges(a, b) {
+    const shown = (x) => (x && x.decision ? x.decision + "\n" + (x.note || "") : "");
+    const out = [];
+    new Set([...Object.keys(a || {}), ...Object.keys(b || {})]).forEach((fid) => {
+      const x = (a || {})[fid] || {}, y = (b || {})[fid] || {};
+      new Set([...Object.keys(x), ...Object.keys(y)]).forEach((k) => { if (shown(x[k]) !== shown(y[k])) out.push([fid, k]); });
+    });
+    return out;
+  }
+  // 原圖狀態變了的樓層 [第幾個檔案, 第幾層]（兩份結果的 key 相同、樓層一一對應時才用）
+  function cadChanges(a, b) {
+    const out = [];
+    (b.reviews || []).forEach((r, ri) => ((r.result && r.result.floors) || []).forEach((fl, fi) => {
+      const o = (a.reviews || [])[ri]?.result?.floors?.[fi];
+      if ((o?.cad ?? null) !== (fl.cad ?? null)) out.push([ri, fi]);
+    }));
+    return out;
+  }
+  // ---------- 重查比對結束 ----------
 
   // ---------- CAD 原樣檢視（OpenSeadragon 圖磚＋缺失疊圖）----------
   // 圖磚與 meta.json 由後端照 CAD 原圖畫好（Deep Zoom 層級）；疊圖的座標是公尺，用 meta.transform 換成原尺寸像素。
@@ -726,21 +789,27 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
     cads.forEach((c) => { try { c.viewer.destroy(); } catch {} });
     cads.clear();
   }
-  function mountCads() {
-    const boxes = [...document.querySelectorAll("#reviews .cadbox")];
-    if (!boxes.length) return;
-    if (!("IntersectionObserver" in window)) { boxes.forEach(mountCad); return; }
+  function mountCads() { document.querySelectorAll("#reviews .cadbox").forEach(observeCad); }
+  function observeCad(box) {
+    if (!("IntersectionObserver" in window)) { mountCad(box); return; }
     // 捲到附近才載入（一個案件可能有十幾張圖）
-    cadObserver = new IntersectionObserver((ents) => ents.forEach((en) => {
+    if (!cadObserver) cadObserver = new IntersectionObserver((ents) => ents.forEach((en) => {
       if (en.isIntersecting) { cadObserver.unobserve(en.target); mountCad(en.target); }
     }), { rootMargin: "400px 0px" });
-    boxes.forEach((b) => cadObserver.observe(b));
+    cadObserver.observe(box);
   }
-  function cadFallback(box, msg) {
+  // 拆掉一層的檢視器，連同缺失清單上的「在圖上看」
+  function dropCad(box) {
+    if (cadObserver) cadObserver.unobserve(box);
     const c = cadOf.get(box);
     if (c) { cads.delete(c); try { c.viewer.destroy(); } catch {} cadOf.delete(box); }
-    const body = box.closest(".floorbody"); if (body) body.classList.remove("has-cad");
-    box.querySelectorAll("button.locate").forEach((b) => b.remove());
+    const body = box.closest(".floorbody"); if (!body) return;
+    body.classList.remove("has-cad");
+    body.querySelectorAll("button.locate").forEach((b) => b.remove());
+    body.querySelectorAll("li.loc").forEach((li) => li.classList.remove("loc"));
+  }
+  function cadFallback(box, msg) {
+    dropCad(box);
     const a = h("a", { href: box.dataset.svg, target: "_blank", rel: "noopener" });
     a.append(h("img", { class: "plan", loading: "lazy", alt: box.dataset.label + " 檢核標示圖", src: box.dataset.svg }));
     box.replaceChildren(h("p", { class: "note info small" }, msg), a);
