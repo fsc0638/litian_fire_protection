@@ -151,10 +151,22 @@ bash /opt/litian/repo/deploy/oracle/11_install_autodeploy.sh
 - 審核：每條缺失可接受／退回（附備註），識別碼由規則＋樓層＋房間＋範圍算出，重跑後仍對得上。匯出報告（HTML，可列印成 PDF）與 CSV；退回者不列入報告。
 - 合成測試圖：`tools/synth_fire/make_synthetic.py` 在建築平面上自動配置設備並埋入已知缺失（輸出只放私人資料夾）。
 
+### CAD 原樣圖（看原圖、缺失疊在上面）
+
+- 工作台的樓層圖照 CAD 原樣顯示：圖層顏色、線型、線寬（照出圖紙粗細）、文字、圖框、配置頁的視埠內容，白底；可縮放、平移（OpenSeadragon，從 cdnjs 載入），缺失標示疊在圖上，可用「顯示檢核標示」開關。原圖還沒好或產生失敗時先顯示簡化標示圖。
+- 產生方式（`src/litian/review/cadview.py`）：ezdxf 繪圖模組＋matplotlib（Agg 點陣，授權寬鬆），每張樓層圖長邊約 5000～8000 像素，切成 Deep Zoom 圖磚放在檢核資料夾 `cad/`；`meta.json` 記公尺座標 → 像素的轉換，缺失位置（`<樓層>.overlay.json`，公尺）照這個換算。CAD 專用字型（.shx）一律改用中文字型（容器內 Noto Sans CJK）。
+- 背景排隊（`case_file.cad_state`）：檢核完成的檔排入佇列，**佇列裡沒有其他檔要處理時**才開始畫，畫圖期間照常處理新上傳的檔；一次畫一個檔（子行程限記憶體 3.5 GB、限 CPU 一小時、降低優先順序）。竣工圖等大型圖約 5～20 分鐘。工作台顯示「原圖排隊中／產生中」並每 30 秒自動檢查，好了就換上原圖。
+- 重新部署（worker 收到 SIGTERM）時畫到一半的退回排隊、不算次數，部署完接著畫；被系統砍掉（記憶體不足）或 worker 當掉的重新排隊，最多畫 3 次；逾時、程式錯誤直接記失敗。worker 重啟前其實已畫完的照結果記，不重畫。
+- 只重跑檢核（改檢核條件）不重畫：底圖沒變，疊圖資料由檢核更新；但還沒畫過或上次畫失敗的會趁這次排隊（改一次檢核條件就能重畫失敗的原圖）。整個檔重新處理（例：後來上傳了外部參考）時舊圖作廢重畫，期間顯示簡化圖。檢核失敗的檔不畫。
+- 這個功能上線前已檢核的檔會自動補排隊；舊版檢核沒有產生缺失疊圖資料（`<樓層>.overlay.json`）的，先自動只重跑檢核再畫。疊圖資料載不到時工作台退回附標示的簡化圖，不顯示沒有標示的原圖。
+- 主機實測（ARM 2 核，竣工圖 11 張配置頁）：約 4 分 40 秒、記憶體峰值約 1.2 GB、圖磚約 78 MB。
+
 | 方法 | 路徑 | 用途 |
 |---|---|---|
-| GET | `/api/cases/{id}/reviews` | 檢核結果、引用條文、審核結果、檢核條件 |
+| GET | `/api/cases/{id}/reviews` | 檢核結果、引用條文、審核結果、檢核條件；各樓層 `cad`＝原圖狀態（done／pending／rendering／failed） |
 | PUT | `/api/cases/{id}/context` | 存檢核條件並排入重跑檢核 |
 | POST | `/api/cases/{id}/files/{fid}/decisions` | 缺失接受／退回／撤回 |
-| GET | `/api/cases/{id}/files/{fid}/review/{樓層}.svg` | 各層檢核標示圖 |
+| GET | `/api/cases/{id}/files/{fid}/review/{樓層}.svg` | 各層檢核標示圖（簡化） |
+| GET | `/api/cases/{id}/files/{fid}/review/{樓層}.overlay.json` | 疊在原圖上的缺失（公尺座標） |
+| GET | `/api/cases/{id}/files/{fid}/cad/{樓層}/meta.json`、`/cad/{樓層}/{層級}/{欄}_{列}.png` | CAD 原樣圖的圖磚資訊與圖磚 |
 | GET | `/api/cases/{id}/report`、`/report.csv` | 匯出報告 |

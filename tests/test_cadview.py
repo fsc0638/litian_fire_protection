@@ -263,7 +263,7 @@ class _Conn:
         return SimpleNamespace(fetchall=lambda: [], fetchone=lambda: None, rowcount=0)
 
 
-def _worker(monkeypatch, path, review_only=False):
+def _worker(monkeypatch, path, review_only=False, missing=False):
     from litian.drawing import worker as W
     reviews, failed, calls = [], [], []
     monkeypatch.setattr(W.ST, "claim", lambda conn: {"id": 7, "case_id": 1, "name": path.name, "kind": "dxf", "path": str(path),
@@ -273,6 +273,7 @@ def _worker(monkeypatch, path, review_only=False):
     monkeypatch.setattr(W.ST, "mark", lambda conn, fid, status, stats=None: calls.append(("mark", status)))
     monkeypatch.setattr(W.ST, "queue_cad", lambda conn, fid: calls.append(("queue", fid)))
     monkeypatch.setattr(W.ST, "reset_cad", lambda conn, fid: calls.append(("reset", fid)))
+    monkeypatch.setattr(W.ST, "queue_cad_if_missing", lambda conn, fid: calls.append(("queue_missing", fid)) or missing)
     monkeypatch.setattr(W.ST, "save_review", lambda conn, fid, status, result, error, svg_dir: reviews.append(status))
     monkeypatch.setattr(W.ST, "save_failure", lambda conn, fid, err, retry: failed.append(err))
     return W, reviews, failed, calls
@@ -300,9 +301,34 @@ def test_review_only_rerun_does_not_redraw(tmp_path, monkeypatch):
     proc = _Proc(None)
     cad.cur = {"job": {"id": 7}, "proc": proc, "work": tmp_path / "w", "review_dir": tmp_path, "t0": 0}
     assert W.run_once(_Conn(), tmp_path, cad) is True
-    assert failed == [] and reviews == ["done"] and calls == [("mark", "reviewing"), ("mark", "done")]   # 不排隊、不作廢
+    # 已畫好、排隊中、畫圖中的不重排（底圖沒變）、不作廢；只問「還沒排過或上次失敗」的要不要排
+    assert failed == [] and reviews == ["done"] and calls == [("mark", "reviewing"), ("queue_missing", 7), ("mark", "done")]
     assert cad.busy() and not proc.killed                                          # 同一個檔畫到一半的照常畫
     assert (tmp_path / "001_F-101.dxf.review" / "1F-0.overlay.json").is_file()      # 疊圖資料由檢核更新
+    assert CV.read_status(tmp_path / "001_F-101.dxf.review") is None
+
+
+def test_review_only_rerun_queues_when_never_drawn(tmp_path, monkeypatch):
+    # 第一次檢核失敗（從沒排過原圖）、或上次畫失敗：只重跑檢核成功時排隊，在標成完成之前
+    p = tmp_path / "001_F-101.dxf"
+    make_fire_dxf(p)
+    W, reviews, failed, calls = _worker(monkeypatch, p, review_only=True, missing=True)
+    monkeypatch.setattr(W.ST, "load_ir", lambda conn, fid: IR.extract(p))
+    assert W.run_once(_Conn(), tmp_path) is True
+    assert calls == [("mark", "reviewing"), ("queue_missing", 7), ("mark", "done")]
+    assert CV.read_status(tmp_path / "001_F-101.dxf.review")["state"] == "pending"
+
+
+def test_sigterm_during_processing_is_not_a_file_failure(tmp_path, monkeypatch):
+    # 重新部署時的 SIGTERM 不能被「處理失敗」吃掉（否則檔案被記成失敗）
+    from litian.drawing import worker as W
+    p = tmp_path / "001_F-101.dxf"
+    make_fire_dxf(p)
+    W, reviews, failed, calls = _worker(monkeypatch, p)
+    monkeypatch.setattr(W, "process", lambda *a: (_ for _ in ()).throw(W.Stop()))
+    with pytest.raises(W.Stop):
+        W.run_once(_Conn(), tmp_path)
+    assert failed == []
 
 
 def test_full_reprocess_cancels_running_render_of_same_file(tmp_path, monkeypatch):
@@ -466,20 +492,122 @@ def test_cad_result_dropped_when_file_requeued_meanwhile(tmp_path, monkeypatch):
 
 
 def test_recover_cad_on_start(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
     from litian.drawing import worker as W
-    a, b, c = (tmp_path / f"{n}.dxf" for n in "abc")
-    for x in (a, b, c):
+    a, b, c, e, f, g = (tmp_path / f"{n}.dxf" for n in "abcefg")
+    for x in (a, b, c, e, f, g):
         W.review_dir_of(x).mkdir()
         CV.start_status(W.review_dir_of(x))
     gone = tmp_path / "gone" / "d.dxf"
-    seen = []
+    now = datetime.now(timezone.utc)
+    CV.write_status(W.review_dir_of(e), {"state": "done", "sheets": {"1F-0": "done", "2F-1": "failed"},
+                                         "finished_at": now.isoformat(timespec="seconds")})
+    CV.write_status(W.review_dir_of(a), {"state": "done", "sheets": {"1F-0": "done"},           # 上一輪的（比這次開始早）
+                                         "finished_at": (now - timedelta(hours=1)).isoformat(timespec="seconds")})
+    finished, seen, reviewed = [], [], []
+    monkeypatch.setattr(W.ST, "rendering_cad", lambda conn: [
+        {"id": 5, "path": str(e), "cad_gen": 4, "cad_started_at": now - timedelta(minutes=9)},
+        {"id": 1, "path": str(a), "cad_gen": 2, "cad_started_at": now - timedelta(minutes=5)}])
+    monkeypatch.setattr(W.ST, "finish_cad", lambda conn, fid, gen, state, info: finished.append((fid, gen, state, info)) or True)
     monkeypatch.setattr(W.ST, "recover_cad", lambda conn, s: seen.append(s) or [
         {"id": 1, "path": str(a), "cad_state": "pending"}, {"id": 2, "path": str(b), "cad_state": "failed"},
         {"id": 3, "path": str(gone), "cad_state": "pending"}])
-    monkeypatch.setattr(W.ST, "backfill_cad", lambda conn: [{"id": 4, "path": str(c)}])
-    assert W.recover_cad_on_start(_Conn()) == (3, 1) and seen == [0]               # 啟動時「畫圖中」的全部算中斷
+    (W.review_dir_of(f) / "1F-0.overlay.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(W.ST, "backfill_cad", lambda conn: [
+        {"id": 4, "path": str(c), "svg_dir": str(W.review_dir_of(c)), "names": ["1F-0"]},       # 舊版檢核：沒有疊圖資料
+        {"id": 6, "path": str(f), "svg_dir": str(W.review_dir_of(f)), "names": ["1F-0"]}])
+    monkeypatch.setattr(W.ST, "requeue_review", lambda conn, fid: reviewed.append(fid) or True)
+    assert W.recover_cad_on_start(_Conn()) == (4, 2) and seen == [0]               # 啟動時「畫圖中」的全部算中斷
+    # 子行程其實已經畫完（重啟前沒來得及記）：照結果記、不重畫
+    assert [(x[0], x[1], x[2]) for x in finished] == [(5, 4, "done")] and finished[0][3]["failed"] == 1
     assert CV.read_status(W.review_dir_of(a))["state"] == "pending"
     st = CV.read_status(W.review_dir_of(b))
     assert st["state"] == "failed" and "中斷" in st["error"]
     assert CV.read_status(W.review_dir_of(c))["state"] == "pending"
+    assert reviewed == [4]                                                         # 先重跑檢核產生疊圖資料
     assert not (tmp_path / "gone").exists()
+
+
+def test_poll_keeps_result_until_recorded(tmp_path, monkeypatch):
+    # 記結果時資料庫斷線：保留畫圖結果，重連後再記（不能當成中斷重畫）
+    from litian.drawing import worker as W
+    finished, _ = _cad_queue(monkeypatch, W, [])
+    cad, _, rd = _running(W, tmp_path, 0)
+    (tmp_path / "w" / "out.txt").write_text('{"sheets": {"1F-0": "done"}, "peak_mb": 900}\n', encoding="utf-8")
+    calls = []
+
+    def flaky(conn, fid, gen, state, info):
+        calls.append(state)
+        if len(calls) == 1:
+            raise ConnectionError("db down")
+        return True
+
+    monkeypatch.setattr(W.ST, "finish_cad", flaky)
+    with pytest.raises(ConnectionError):
+        cad.poll(_Conn())
+    assert cad.busy() and (tmp_path / "w").exists()
+    cad.poll(_Conn())
+    assert calls == ["done", "done"] and not cad.busy() and not (tmp_path / "w").exists()
+
+
+def test_cad_start_disk_error_requeues_without_counting(tmp_path, monkeypatch):
+    from litian.drawing import worker as W
+    p = tmp_path / "001_F-101.dxf"
+    make_fire_dxf(p)
+    rd = tmp_path / "001_F-101.dxf.review"
+    rd.mkdir()
+    finished, _ = _cad_queue(monkeypatch, W, [_job(p), _job(p)], ir={"sheets": []}, review={"floors": []})
+    requeued = []
+    monkeypatch.setattr(W.ST, "requeue_cad", lambda conn, fid, gen: requeued.append((fid, gen)) or True)
+    monkeypatch.setattr(W.tempfile, "mkdtemp", lambda **k: (_ for _ in ()).throw(OSError(28, "No space left on device")))
+    cad = W.CadRunner()
+    assert cad.start(_Conn()) is False and requeued == [(7, 3)] and finished == []
+    assert CV.read_status(rd)["state"] == "pending"
+    assert cad.start(_Conn()) is False and requeued == [(7, 3)]                    # 等一陣子再試，不空轉
+
+
+def test_shutdown_requeues_running_render_without_counting(tmp_path, monkeypatch):
+    from litian.drawing import worker as W
+    requeued = []
+    monkeypatch.setattr(W.ST, "requeue_cad", lambda conn, fid, gen: requeued.append((fid, gen)) or True)
+    cad, proc, rd = _running(W, tmp_path, None)
+    cad.shutdown(_Conn())
+    assert proc.killed and not cad.busy() and requeued == [(7, 3)] and not (tmp_path / "w").exists()
+    assert CV.read_status(rd)["state"] == "pending"
+    cad.shutdown(_Conn())                                                          # 沒在畫：不動
+    assert requeued == [(7, 3)]
+
+
+def test_tick_isolates_background_errors(tmp_path, monkeypatch):
+    import psycopg
+    from litian.drawing import worker as W
+
+    class Cad:
+        def poll(self, conn): raise ValueError("壞掉的狀態")
+        def start(self, conn): raise ValueError("又壞了")
+    ran = []
+    monkeypatch.setattr(W, "run_once", lambda conn, spool, cad: ran.append(1) or False)
+    assert W.tick(_Conn(), tmp_path, Cad()) is False and ran == [1]                # 新上傳照常處理
+
+    class Down(Cad):
+        def poll(self, conn): raise psycopg.OperationalError("斷線")
+    with pytest.raises(psycopg.OperationalError):                                  # 斷線照樣往外丟（重連）
+        W.tick(_Conn(), tmp_path, Down())
+
+
+def test_model_frame_clips_block_content_outside_frame(tmp_path, monkeypatch):
+    # 整棟各層放在同一個圖塊：篩選只看最上層實體，圖塊裡框外的線要靠裁切擋掉，不能全送去畫
+    from ezdxf import bbox
+    from ezdxf.addons.drawing.matplotlib import MatplotlibBackend
+    doc = ezdxf.new("R2018")
+    blk = doc.blocks.new("ALL_FLOORS")
+    for k in range(40):
+        blk.add_line((k, 0), (k, 10))                                              # 本層：0～40
+        blk.add_line((5000 + k, 0), (5000 + k, 10))                                # 別層：遠在框外
+    doc.modelspace().add_blockref("ALL_FLOORS", (0, 0))
+    n = []
+    draw_line = MatplotlibBackend.draw_line
+    monkeypatch.setattr(MatplotlibBackend, "draw_line", lambda self, *a: n.append(1) or draw_line(self, *a))
+    sheet = {"name": "1F-1", "sheet": 0, "bbox": [-5, -5, 45, 15], "meta": {}, "scale": 1.0, "layout": None}
+    img, meta, _ = CV.render_sheet(doc, sheet, bbox.Cache(), long_px=400)
+    assert 40 <= len(n) < 60 and meta["source"] == "model"

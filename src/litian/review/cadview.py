@@ -303,7 +303,16 @@ def render_sheet(doc, sheet: dict, cache, long_px: int | None = None):
                 return True
             return not (b.extmax.x <= lim[0] or b.extmin.x >= lim[2] or b.extmax.y <= lim[1] or b.extmin.y >= lim[3])
 
-        source, draw = "model", (lambda fe: fe.draw_layout(msp, finalize=True, filter_func=inside))
+        clip = _pad(box)
+
+        def draw(fe) -> None:
+            # 篩選只看最上層實體；整棟各層放在同一個圖塊（例：綁定的建築底圖）時，圖塊展開後的實體全都會送去畫，
+            # 再用圖框範圍裁切：範圍外的不產生 matplotlib 圖元（否則記憶體與時間是好幾倍）
+            from ezdxf.tools.clipping_portal import ClippingRect
+            fe.pipeline.push_clipping_shape(ClippingRect([clip.extmin, clip.extmax]), None)
+            fe.draw_layout(msp, finalize=True, filter_func=inside)
+
+        source = "model"
     paper_mm = paper_mm if paper_mm and 50 <= paper_mm <= 3000 else 420.0      # 紙張大小不明：當 A3
     box = _pad(box)
     if long_px is None:
@@ -320,7 +329,7 @@ def render_sheet(doc, sheet: dict, cache, long_px: int | None = None):
                                color_policy=config.ColorPolicy.COLOR,
                                image_policy=config.ImagePolicy.RECT,   # 圖片只畫外框：DXF 可指向任意本機檔案
                                lineweight_scaling=72 / 25.4)           # 這個繪圖後端把線寬（mm）直接當點數：換算成點
-    draw(Frontend(RenderContext(doc), MatplotlibBackend(ax, adjust_figure=False), config=cfg, bbox_cache=cache))
+    draw(Frontend(RenderContext(doc), _backend(MatplotlibBackend)(ax, adjust_figure=False), config=cfg, bbox_cache=cache))
     # 畫完才設範圍（finalize 會自動縮放到全部圖元）：兩軸同一個比例（像素取整數後長寬比有微小差，多的平均留白）
     bw, bh = fig.bbox.width, fig.bbox.height
     s = min(bw / w, bh / h)                                      # 像素／圖面單位
@@ -334,7 +343,8 @@ def render_sheet(doc, sheet: dict, cache, long_px: int | None = None):
     img = Image.frombuffer("RGBA", (buf.shape[1], height), buf, "raw", "RGBA", 0, 1).convert("RGB")
     # 圖面座標 → 像素：用 matplotlib 實際畫圖的轉換（含等比例時對範圍的微調）；Agg 的 y 從畫布底邊往上
     data_to_display = ax.transData.frozen()
-    del buf, canvas, fig, ax                                     # 圖元與 RGBA 畫布（8000 px 時約 180 MB）先放掉
+    del buf, canvas, fig, ax
+    gc.collect()                    # 圖元與 RGBA 畫布（8000 px 時約 180 MB）互相參照：要回收才會在切圖磚前放掉
 
     def to_px(x: float, y: float) -> tuple[float, float]:
         p = to_paper.transform(Vec3(x / scale, y / scale, 0))
@@ -346,6 +356,25 @@ def render_sheet(doc, sheet: dict, cache, long_px: int | None = None):
             "layout": sheet.get("layout") if source == "layout" else None, "dpi": round(dpi),
             "rendered_at": _now(), "renderer": f"ezdxf {ezdxf.__version__} + matplotlib {matplotlib.__version__}"}
     return img, meta, notes
+
+
+_BACKEND = None
+
+
+def _backend(base):
+    """ezdxf 的 matplotlib 後端，點（POINT、長度 0 的線）改照線寬畫圓點（原本固定大小、不管線寬）。"""
+    global _BACKEND
+    if _BACKEND is None:
+        from matplotlib.lines import Line2D
+
+        class Backend(base):
+            def draw_point(self, pos, properties):
+                self.ax.add_line(Line2D([pos.x], [pos.y], marker="o", markersize=self.get_lineweight(properties),
+                                        markeredgewidth=0, linestyle="none", color=properties.color,
+                                        zorder=self._get_z()))
+
+        _BACKEND = Backend
+    return _BACKEND
 
 
 def max_level(w: int, h: int) -> int:

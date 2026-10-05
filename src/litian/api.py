@@ -922,13 +922,15 @@ def _cad_state(cad: tuple[Path, dict] | None, name: str, queued: str | None = No
         return "rendering"
     if queued == "failed" or st.get("state") == "failed":
         return "failed"
+    if st.get("state") in ("pending", "rendering"):      # 重新處理中（資料庫已取消排隊）：上一輪的圖磚不算
+        return None
     return "done" if has_meta else None
 
 
 def _review_bundle(case_id: int) -> dict:
     """檢核結果＋引用條文＋審核結果＋檢核條件（工作台與報告共用）。"""
     rows = _all("SELECT r.file_id, f.name, r.status, r.error, r.result, r.svg_dir, r.created_at, f.cad_state FROM file_review r "
-                "JOIN case_file f ON f.id = r.file_id WHERE f.case_id = %s ORDER BY f.name", case_id)
+                "JOIN case_file f ON f.id = r.file_id WHERE f.case_id = %s ORDER BY f.name, f.id", case_id)
     ids = set()
     for r in rows:
         res = r["result"] or {}

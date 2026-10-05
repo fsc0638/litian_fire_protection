@@ -91,19 +91,22 @@ UPDATE case_file SET status = 'processing', attempts = attempts + 1, updated_at 
 WHERE id = (SELECT id FROM case_file WHERE status = 'queued' ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1)
 RETURNING id, case_id, name, kind, path, attempts, review_only
 """
-# 處理中卻超過時間沒更新（worker 當掉）：還有次數就退回排隊，否則記失敗
+# 處理中卻超過時間沒更新（worker 當掉）：還有次數就退回排隊，否則記失敗（記失敗時原圖排隊一併取消：失敗的檔不畫）
 RECOVER_SQL = """
 UPDATE case_file SET status = CASE WHEN attempts < %s THEN 'queued' ELSE 'failed' END,
-       error = CASE WHEN attempts < %s THEN error ELSE '處理逾時或中斷次數過多' END, updated_at = now()
+       error = CASE WHEN attempts < %s THEN error ELSE '處理逾時或中斷次數過多' END, updated_at = now(),
+       cad_state = CASE WHEN attempts >= %s AND cad_state = 'pending' THEN NULL ELSE cad_state END
 WHERE status IN ('processing', 'reviewing') AND updated_at < now() - make_interval(secs => %s)
 """
 
 
-# CAD 原樣圖：新上傳的優先（id 大的先畫），舊檔補畫排後面；檔案要是完成狀態（重新處理中的不畫）
+# CAD 原樣圖：新上傳的優先（id 大的先畫），舊檔補畫排後面；檔案要是完成狀態、檢核成功
+# （重新處理中、只重跑檢核失敗的先不畫：等檢核成功再畫，不必記失敗）
 CAD_CLAIM_SQL = """
 UPDATE case_file SET cad_state = 'rendering', cad_attempts = cad_attempts + 1, cad_started_at = now()
-WHERE id = (SELECT id FROM case_file WHERE cad_state = 'pending' AND status = 'done'
-            ORDER BY id DESC FOR UPDATE SKIP LOCKED LIMIT 1)
+WHERE id = (SELECT f.id FROM case_file f WHERE f.cad_state = 'pending' AND f.status = 'done'
+              AND EXISTS (SELECT 1 FROM file_review r WHERE r.file_id = f.id AND r.status = 'done')
+            ORDER BY f.id DESC FOR UPDATE OF f SKIP LOCKED LIMIT 1)
 RETURNING id, case_id, name, kind, path, cad_gen, cad_attempts
 """
 # 畫圖中卻沒有人在畫（worker 重啟、當掉）：還有次數就重新排隊，否則記失敗
@@ -112,13 +115,14 @@ UPDATE case_file SET cad_state = CASE WHEN cad_attempts < %s THEN 'pending' ELSE
 WHERE cad_state = 'rendering' AND cad_started_at < now() - make_interval(secs => %s)
 RETURNING id, path, cad_state
 """
-# 檢核成功、有樓層圖卻從沒排過畫圖的（這個功能上線前的檔案）：補排隊
+# 檢核成功、有樓層圖卻從沒排過畫圖的（這個功能上線前的檔案）：補排隊；回傳各樓層圖名（檢查疊圖資料在不在）
 CAD_BACKFILL_SQL = """
 UPDATE case_file f SET cad_state = 'pending', cad_attempts = 0
 FROM file_review r
 WHERE r.file_id = f.id AND f.cad_state IS NULL AND f.status = 'done' AND r.status = 'done'
   AND jsonb_typeof(r.result -> 'floors') = 'array' AND jsonb_array_length(r.result -> 'floors') > 0
-RETURNING f.id, f.path
+RETURNING f.id, f.path, r.svg_dir,
+  (SELECT jsonb_agg(COALESCE(fl ->> 'svg_name', fl ->> 'label')) FROM jsonb_array_elements(r.result -> 'floors') fl) AS names
 """
 CAD_MAX_ATTEMPTS = 3                 # 被中斷（worker 重啟、記憶體不足被系統砍）最多畫幾次
 
@@ -130,6 +134,30 @@ def ensure_schema(conn) -> None:
 def queue_cad(conn, file_id: int) -> None:
     conn.execute("UPDATE case_file SET cad_state = 'pending', cad_attempts = 0, cad_gen = cad_gen + 1, "
                  "cad_started_at = NULL WHERE id = %s", (file_id,))
+
+
+def queue_cad_if_missing(conn, file_id: int) -> bool:
+    """只重跑檢核成功時：還沒排過（第一次檢核失敗）或上次畫失敗的才排；已畫好、排隊中、畫圖中的不動。"""
+    return conn.execute("UPDATE case_file SET cad_state = 'pending', cad_attempts = 0, cad_gen = cad_gen + 1, "
+                        "cad_started_at = NULL WHERE id = %s AND (cad_state IS NULL OR cad_state = 'failed')",
+                        (file_id,)).rowcount == 1
+
+
+def requeue_cad(conn, file_id: int, gen: int) -> bool:
+    """畫到一半被我們自己停掉（重新部署、暫時性錯誤）：退回排隊，這次不算次數。"""
+    return conn.execute("UPDATE case_file SET cad_state = 'pending', cad_attempts = GREATEST(cad_attempts - 1, 0), "
+                        "cad_started_at = NULL WHERE id = %s AND cad_gen = %s AND cad_state = 'rendering'",
+                        (file_id, gen)).rowcount == 1
+
+
+def rendering_cad(conn) -> list[dict]:
+    return conn.execute("SELECT id, path, cad_gen, cad_started_at FROM case_file WHERE cad_state = 'rendering'").fetchall()
+
+
+def requeue_review(conn, file_id: int) -> bool:
+    """只重跑檢核（例：舊版檢核沒有產生疊圖資料）。"""
+    return conn.execute("UPDATE case_file SET status = 'queued', review_only = true, attempts = 0, updated_at = now() "
+                        "WHERE id = %s AND status = 'done'", (file_id,)).rowcount == 1
 
 
 def reset_cad(conn, file_id: int) -> None:
@@ -190,7 +218,7 @@ def claim(conn):
 
 
 def recover_stale(conn, older_than_s: int) -> int:
-    return conn.execute(RECOVER_SQL, (MAX_ATTEMPTS, MAX_ATTEMPTS, older_than_s)).rowcount
+    return conn.execute(RECOVER_SQL, (MAX_ATTEMPTS, MAX_ATTEMPTS, MAX_ATTEMPTS, older_than_s)).rowcount
 
 
 def save_result(conn, file_id: int, ir: dict, stats: dict, status: str = "done") -> None:
@@ -270,10 +298,12 @@ def load_ir(conn, file_id: int) -> dict | None:
 
 
 def save_failure(conn, file_id: int, error: str, retry: bool) -> None:
-    conn.execute("UPDATE case_file SET status = %s, error = %s, updated_at = now() WHERE id = %s",
-                 ("queued" if retry else "failed", error[:500], file_id))
+    # 記失敗時原圖排隊一併取消（失敗的檔不會被畫，工作台不能一直顯示排隊中）；之後重跑成功會再排
+    conn.execute("UPDATE case_file SET status = %s, error = %s, updated_at = now(), "
+                 "cad_state = CASE WHEN %s AND cad_state = 'pending' THEN NULL ELSE cad_state END WHERE id = %s",
+                 ("queued" if retry else "failed", error[:500], not retry, file_id))
 
 
 def case_status(conn, case_id: int) -> list[dict]:
     return conn.execute("SELECT id, name, kind, size, status, error, stats, attempts FROM case_file "
-                        "WHERE case_id = %s ORDER BY name", (case_id,)).fetchall()
+                        "WHERE case_id = %s ORDER BY name, id", (case_id,)).fetchall()

@@ -140,7 +140,10 @@ def test_missing_files_and_dirs_outside_cases_are_404(client, tmp_path):
 
 def _bundle(client, monkeypatch, rows):
     def fake_all(sql, *a):
-        return rows if "FROM file_review" in sql else []
+        if "FROM file_review" in sql:
+            assert "ORDER BY f.name, f.id" in sql                    # 同名檔的順序固定：重查不會整頁重畫
+            return rows
+        return []
     monkeypatch.setattr(api, "_all", fake_all)
     monkeypatch.setattr(api.DS, "get_context", lambda c, cid: {})
     monkeypatch.setattr(api.DS, "decisions", lambda c, cid: {})
@@ -170,12 +173,13 @@ def test_review_bundle_cad_states(client, monkeypatch, tmp_path):
     requeued = make_review_dir(c / "g", status={"state": "pending", "sheets": {}, "error": None})   # 重新處理後排隊：舊圖磚還在
     stale = make_review_dir(c / "h", status={"state": "done", "sheets": {NAME: "done"}, "error": None})
     leftover = make_review_dir(c / "i", status={"state": "rendering", "sheets": {}, "error": None}, meta=False)
+    reprocessing = make_review_dir(c / "j", status={"state": "pending", "sheets": {}, "error": None})   # 舊圖磚還在
     got = _bundle(client, monkeypatch, [
         _row(1, str(done), [NAME], "done"), _row(2, str(rendering), [NAME], "rendering"), _row(3, str(failed), [NAME], "failed"),
         _row(4, str(partial), [NAME, "2F-28", "3F-29"], "rendering"), _row(5, str(broken), [NAME, "2F-28"], "done"),
         _row(6, str(old), [NAME], "pending"), _row(7, None, [NAME]), _row(8, str(outside), [NAME], "done"),
         _row(9, str(requeued), [NAME], "pending"), _row(10, str(stale), [NAME], "pending"),
-        _row(11, str(leftover), [NAME]), _row(12, str(old), [NAME])])
+        _row(11, str(leftover), [NAME]), _row(12, str(old), [NAME]), _row(13, str(reprocessing), [NAME])])
     assert got == {(1, NAME): "done", (2, NAME): "rendering", (3, NAME): "failed",
                    (4, NAME): "done", (4, "2F-28"): "failed", (4, "3F-29"): "rendering",
                    (5, NAME): "done", (5, "2F-28"): None,
@@ -183,7 +187,8 @@ def test_review_bundle_cad_states(client, monkeypatch, tmp_path):
                    (7, NAME): None, (8, NAME): None,
                    (9, NAME): "pending", (10, NAME): "pending",   # 排隊中不拿舊圖磚（狀態檔沒清到也一樣）
                    (11, NAME): None,                      # 資料庫沒在畫、狀態檔停在畫圖中：過時的
-                   (12, NAME): None}
+                   (12, NAME): None,
+                   (13, NAME): None}                      # 整個重新處理中（資料庫取消排隊）：不拿上一輪的圖磚
 
 
 def test_review_bundle_cad_done_needs_meta(client, monkeypatch):

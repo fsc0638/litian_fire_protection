@@ -101,8 +101,9 @@ def test_cad_queue_backfill_claim_gen_and_recover(conn):
     for f, res in ((a, {"floors": [{"label": "1F"}]}), (b, {"floors": [{"label": "2F"}]}), (c, {"floors": []})):
         ST.save_review(conn, f, "done", res, None, f"/x/{f}.review")
     ST.save_review(conn, d, "failed", None, "RuntimeError", None)
-    assert sorted(r["id"] for r in ST.backfill_cad(conn)) == [a, b]               # 沒有樓層圖、檢核失敗的不畫
-    assert ST.backfill_cad(conn) == []                                            # 只補一次
+    filled = ST.backfill_cad(conn)
+    assert sorted((r["id"], r["svg_dir"], r["names"][0]) for r in filled) == [(a, f"/x/{a}.review", "1F"), (b, f"/x/{b}.review", "2F")]
+    assert ST.backfill_cad(conn) == []                                            # 只補一次；沒有樓層圖、檢核失敗的不畫
     assert ST.load_review(conn, a) == {"floors": [{"label": "1F"}]} and ST.load_review(conn, d) is None
     conn.execute("UPDATE case_file SET status = 'processing' WHERE id = %s", (b,))
     j = ST.claim_cad(conn)
@@ -126,9 +127,40 @@ def test_cad_queue_backfill_claim_gen_and_recover(conn):
         assert [(r["id"], r["cad_state"]) for r in ST.recover_cad(conn, 0)] == [
             (b, "pending" if k < ST.CAD_MAX_ATTEMPTS else "failed")]
     assert ST.claim_cad(conn) is None
-    # 重新排隊會重設次數
+    # 重新排隊會重設次數；重新部署停掉的退回排隊不算次數
     ST.queue_cad(conn, b)
-    assert ST.claim_cad(conn)["cad_attempts"] == 1
+    j = ST.claim_cad(conn)
+    assert j["cad_attempts"] == 1 and [r["id"] for r in ST.rendering_cad(conn)] == [b]
+    assert ST.requeue_cad(conn, b, j["cad_gen"]) is True and ST.requeue_cad(conn, b, j["cad_gen"]) is False
+    assert conn.execute("SELECT cad_state, cad_attempts FROM case_file WHERE id = %s", (b,)).fetchone() == {
+        "cad_state": "pending", "cad_attempts": 0}
+    # 只重跑檢核：還沒排過或畫失敗的才排
+    assert ST.queue_cad_if_missing(conn, b) is False                               # 排隊中：不動
+    conn.execute("UPDATE case_file SET cad_state = 'failed' WHERE id = %s", (b,))
+    assert ST.queue_cad_if_missing(conn, b) is True and ST.queue_cad_if_missing(conn, c) is True
+    assert ST.queue_cad_if_missing(conn, a) is False                               # 已畫好
+    # 檢核失敗的先不畫（等檢核成功），不記失敗
+    ST.save_review(conn, b, "failed", None, "RuntimeError", None)
+    assert ST.claim_cad(conn)["id"] == c and ST.claim_cad(conn) is None
+    ST.save_review(conn, b, "done", {"floors": [{"label": "2F"}]}, None, "/x/b.review")
+    assert ST.claim_cad(conn)["id"] == b
+    # 檔案記失敗時原圖排隊一併取消（工作台不會一直顯示排隊中）
+    ST.queue_cad(conn, a)
+    ST.save_failure(conn, a, "OSError", retry=False)
+    assert conn.execute("SELECT cad_state FROM case_file WHERE id = %s", (a,)).fetchone()["cad_state"] is None
+    ST.queue_cad(conn, d)
+    ST.save_failure(conn, d, "ConvertError: 逾時", retry=True)                     # 重試：照常排隊
+    assert conn.execute("SELECT cad_state FROM case_file WHERE id = %s", (d,)).fetchone()["cad_state"] == "pending"
+    conn.execute("UPDATE case_file SET status = 'processing', attempts = %s, updated_at = now() - interval '2 hours' "
+                 "WHERE id = %s", (ST.MAX_ATTEMPTS, d))
+    ST.recover_stale(conn, 60)
+    assert conn.execute("SELECT status, cad_state FROM case_file WHERE id = %s", (d,)).fetchone() == {
+        "status": "failed", "cad_state": None}
+    # 只重跑檢核（舊版沒有疊圖資料）：只有完成的檔
+    conn.execute("UPDATE case_file SET status = 'done' WHERE id = %s", (a,))
+    assert ST.requeue_review(conn, a) is True and ST.requeue_review(conn, a) is False
+    assert conn.execute("SELECT status, review_only FROM case_file WHERE id = %s", (a,)).fetchone() == {
+        "status": "queued", "review_only": True}
 
 
 SUB_A, SUB_B = "U" + "a" * 32, "U" + "b" * 32
