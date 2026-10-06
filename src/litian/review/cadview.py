@@ -23,6 +23,7 @@ import os
 import re
 import shutil
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -395,6 +396,61 @@ def _backend(base):
     return _BACKEND
 
 
+PRINT_MAX = 5000                      # 報告列印用整張圖的長邊上限（A4 橫印約 370 dpi）
+_PRINT_LOCK = threading.Lock()        # 報告一次要好幾張：一次只拼一張（API 容器記憶體小）
+
+
+def _print_shrink(W: int, H: int, L: int, limit: int) -> int:
+    """列印圖用第幾層往下縮：長邊不超過 limit 的最大那層（與圖磚層級對齊）。"""
+    k = 0
+    while math.ceil(max(W, H) / 2 ** k) > limit and k < L:
+        k += 1
+    return k
+
+
+def _save_print(img, out: Path) -> None:
+    """減成 256 色存 PNG（白底維持純白，約 0.5 MB）；先寫暫存檔再換上，讀的一方不會讀到寫一半的檔。"""
+    import uuid
+
+    from PIL import Image
+    q = img.quantize(colors=256, method=Image.Quantize.MAXCOVERAGE, dither=Image.Dither.NONE)
+    tmp = out.with_name(f".print.{uuid.uuid4().hex}.tmp")
+    try:
+        q.save(tmp, format="PNG")
+        os.replace(tmp, out)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def print_image(sheet_dir: str | Path, limit: int = PRINT_MAX) -> Path:
+    """報告（列印、存成 PDF）用的整張原圖 print.png：畫圖時就順便存好；之前畫的（沒有 print.png）才從圖磚拼回
+    長邊不超過 limit 的那一層。快取在圖磚資料夾（圖重畫時整個資料夾換掉；meta.json 比較新時也重做）。回傳檔案路徑。"""
+    from PIL import Image
+    d = Path(sheet_dir)
+    meta_path, out = d / "meta.json", d / "print.png"
+    fresh = lambda: out.is_file() and out.stat().st_mtime >= meta_path.stat().st_mtime
+    if fresh():
+        return out
+    with _PRINT_LOCK:
+        if fresh():                                                          # 等鎖的期間別人做好了
+            return out
+        before = meta_path.stat()
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        W, H, L, T = int(meta["width"]), int(meta["height"]), int(meta["max_level"]), int(meta.get("tile_size") or TILE)
+        k = _print_shrink(W, H, L, limit)
+        w, h = math.ceil(W / 2 ** k), math.ceil(H / 2 ** k)
+        img = Image.new("RGB", (w, h), "white")
+        for col in range(math.ceil(w / T)):
+            for row in range(math.ceil(h / T)):
+                with Image.open(d / str(L - k) / f"{col}_{row}.png") as tile:   # 少一塊就整張失敗（呼叫端退回簡化圖）
+                    img.paste(tile.convert("RGB"), (col * T, row * T))
+        after = meta_path.stat()
+        if (before.st_ino, before.st_mtime_ns) != (after.st_ino, after.st_mtime_ns):   # 拼到一半剛好重畫換了資料夾
+            raise OSError("原圖剛重畫，稍後再試")
+        _save_print(img, out)
+    return out
+
+
 def max_level(w: int, h: int) -> int:
     return max(0, math.ceil(math.log2(max(w, h, 1))))
 
@@ -431,6 +487,7 @@ def _swap(tmp: Path, final: Path) -> None:
 def render_all(dxf: str | Path, ir: dict, review: dict, review_dir: str | Path, long_px: int | None = None) -> dict:
     """一次讀檔、畫各張；每張獨立，失敗的記在 status.json。回傳最後的狀態（另含各張秒數 seconds）。"""
     from ezdxf import bbox, recover
+    from PIL import Image
 
     review_dir = Path(review_dir)
     cad = review_dir / "cad"
@@ -467,8 +524,11 @@ def render_all(dxf: str | Path, ir: dict, review: dict, review_dir: str | Path, 
             tmp = cad / f".tmp-{name}-{os.getpid()}"
             shutil.rmtree(tmp, ignore_errors=True)
             write_tiles(img, tmp)
-            del img
             _write_json(tmp / "meta.json", meta)
+            k = _print_shrink(img.width, img.height, meta["max_level"], PRINT_MAX)     # 報告用整張圖：手上就有，順便存
+            _save_print(img if not k else img.resize((math.ceil(img.width / 2 ** k), math.ceil(img.height / 2 ** k)),
+                                                     Image.Resampling.LANCZOS), tmp / "print.png")
+            del img
             _swap(tmp, cad / name)
             st["sheets"][name] = "done"
         except Exception as e:

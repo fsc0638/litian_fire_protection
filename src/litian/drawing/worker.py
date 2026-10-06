@@ -269,9 +269,12 @@ class CadRunner:
     worker 當掉的重新排隊，最多畫 ST.CAD_MAX_ATTEMPTS 次；逾時、程式錯誤重畫結果相同，直接記失敗。
     主機上只有一個 worker（見 recover_cad_on_start）。"""
 
-    def __init__(self):
+    def __init__(self, cases_dir: str | Path | None = None):
         self.cur: dict | None = None
         self.claimed: dict | None = None               # 已認領、子行程還沒開始（這段收到 SIGTERM 也要退回排隊）
+        self.cases_dir = Path(cases_dir) if cases_dir else None
+        self.print_failed: set[str] = set()            # 補做報告用整張圖失敗的圖磚資料夾（不再試）
+        self.print_scanned = False                     # 已經掃過一輪、沒有要補的了
         self.retry_at = 0.0
         self.transient: dict[int, int] = {}            # 檔案 id → 連續暫時性錯誤次數
 
@@ -329,6 +332,25 @@ class CadRunner:
         self.cur = {"job": job, "proc": proc, "work": work, "review_dir": review_dir, "t0": time.monotonic()}
         log.info("cad start file=%s attempt=%s", job["id"], job["cad_attempts"])
         return True
+
+    def backfill_print(self) -> bool:
+        """閒置時補做報告用整張圖：這功能上線前畫好的原圖沒有 print.png，報告第一次開時才在網站上拼會等很久。
+        一次補一張（回傳 True 表示做了事）；做不出來的記住不再試；掃過一輪沒得補就不再掃（之後畫的圖都會順便存好）。"""
+        if self.cur is not None or self.print_scanned or not self.cases_dir:
+            return False
+        for meta in self.cases_dir.glob("*/*.review/cad/*/meta.json"):
+            d = meta.parent
+            if (d / "print.png").is_file() or str(d) in self.print_failed:
+                continue
+            try:
+                CV.print_image(d)
+                log.info("print image backfilled %s", d.name)
+            except (OSError, ValueError, KeyError, TypeError) as e:
+                self.print_failed.add(str(d))
+                log.warning("print image backfill failed %s: %s", d, e)
+            return True
+        self.print_scanned = True
+        return False
 
     def poll(self, conn) -> None:
         """畫完了就記結果；超過時間就砍掉。結果確實記進資料庫才收尾（記的時候資料庫斷線：重連後再記一次）。"""
@@ -559,7 +581,7 @@ def tick(conn, spool: Path, cad: CadRunner) -> bool:
     guarded(cad.poll)
     if run_once(conn, spool, cad):
         return True
-    return guarded(cad.start)
+    return guarded(cad.start) or guarded(lambda c: cad.backfill_print())
 
 
 def main() -> int:
@@ -567,7 +589,7 @@ def main() -> int:
     from psycopg.rows import dict_row
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     spool = Path(os.environ.get("CONVERT_SPOOL", "/data/convert"))
-    cad = CadRunner()                                  # 斷線重連時沿用：畫到一半的子行程照常畫
+    cad = CadRunner(os.environ.get("CASES_DIR", "/data/cases"))   # 斷線重連時沿用：畫到一半的子行程照常畫
     signal.signal(signal.SIGTERM, _on_term)            # python 是容器的 PID 1：要自己接 SIGTERM 才收得到
     try:
         while True:

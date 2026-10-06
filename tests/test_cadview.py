@@ -104,6 +104,12 @@ def test_layout_sheet_renders_viewport_and_transform(tmp_path):
     a, b, _c, dd, e, _f = meta["transform"]
     assert b == pytest.approx(0, abs=1e-6) and dd == pytest.approx(0, abs=1e-6) and a == pytest.approx(-e)   # y 向下
     assert not list((tmp_path / "fire.dxf.review" / "cad").glob(".tmp-*"))
+    # 報告用整張圖畫圖時就存好（不必再從圖磚拼）；與原圖同尺寸（沒超過列印上限）、比 meta.json 新
+    pr = d / "print.png"
+    assert Image.open(pr).size == (meta["width"], meta["height"]) and pr.stat().st_mtime >= (d / "meta.json").stat().st_mtime
+    before = pr.stat().st_mtime_ns
+    assert CV.print_image(d) == pr and pr.stat().st_mtime_ns == before
+    assert Image.open(pr).convert("RGB").getpixel(tuple(int(v) for v in _px(meta, *RED))) == (255, 0, 0)
 
 
 def _count(sheet_dir, meta, rgb) -> int:
@@ -779,3 +785,82 @@ def test_bind_xrefs_converts_newest_and_falls_back(tmp_path, monkeypatch):
     calls.clear()
     W.bind_xrefs(job, tmp_path / "001_main.converted.dxf", tmp_path, skip=["004_Area_1F.dwg"])
     assert calls == [("f7x0u3", "003_Area_1F.dwg")]                    # 較早的已轉好：最新的再試一次，失敗就用轉好的
+
+
+
+# ---------- 報告列印用整張圖 ----------
+
+def _tiled_sheet(d, w=6000, h=3000):
+    """在 d 寫一組圖磚＋meta.json：白底，(1000..2000, 500..1000) 一塊紅色。"""
+    import os
+    from PIL import Image, ImageDraw
+    img = Image.new("RGB", (w, h), "white")
+    ImageDraw.Draw(img).rectangle((1000, 500, 2000, 1000), fill=(255, 0, 0))
+    CV.write_tiles(img, d)
+    meta = {"version": 1, "width": w, "height": h, "tile_size": 512, "overlap": 0, "format": "png",
+            "max_level": CV.max_level(w, h), "transform": [10, 0, 0, 0, -10, h], "rendered_at": "2026-10-06T00:00:00+00:00"}
+    (d / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    os.utime(d / "meta.json", (1_700_000_000, 1_700_000_000))
+    return meta
+
+
+def test_print_image_stitches_level_within_limit_and_caches(tmp_path):
+    import os
+    d = tmp_path / "cad" / "1F-0"
+    _tiled_sheet(d)
+    p = CV.print_image(d, limit=5000)                                    # 6000 超過上限：用下一層（3000×1500）
+    img = Image.open(p)
+    assert img.size == (3000, 1500) and img.mode == "P"                  # 減成 256 色
+    rgb = img.convert("RGB")
+    assert rgb.getpixel((750, 375)) == (255, 0, 0) and rgb.getpixel((100, 100)) == (255, 255, 255)
+    first = p.stat().st_mtime
+    assert CV.print_image(d, limit=5000).stat().st_mtime == first        # 快取
+    os.utime(d / "meta.json", (first + 10, first + 10))                   # 圖重畫過（meta 比較新）：重做
+    assert CV.print_image(d, limit=8000).stat().st_mtime >= first
+    assert Image.open(d / "print.png").size == (6000, 3000)
+    (d / str(CV.max_level(6000, 3000))).joinpath("0_0.png").unlink()     # 少一塊：丟錯（報告退回簡化圖），不產生半張圖
+    os.utime(d / "meta.json", (first + 20, first + 20))
+    with pytest.raises(OSError):
+        CV.print_image(d, limit=8000)
+    assert not list(d.glob(".print.*"))
+
+
+
+def test_print_image_refuses_mixed_tiles_when_rerendered_midway(tmp_path, monkeypatch):
+    # 從圖磚拼到一半剛好重畫（meta.json 換了）：丟錯不存，報告退回簡化圖，下次再做
+    import os
+
+    from PIL import Image as PImage
+    d = tmp_path / "1F"
+    _tiled_sheet(d, w=1500, h=1000)
+    opened = []
+    real = PImage.open
+
+    def spy(p, *a, **k):
+        opened.append(p)
+        if len(opened) == 2:
+            os.utime(d / "meta.json", (1_800_000_000, 1_800_000_000))
+        return real(p, *a, **k)
+    monkeypatch.setattr(PImage, "open", spy)
+    with pytest.raises(OSError, match="重畫"):
+        CV.print_image(d)
+    assert not (d / "print.png").exists() and not list(d.glob(".print.*"))
+
+
+def test_backfill_print_one_at_a_time_then_stops(tmp_path):
+    from litian.drawing import worker as W
+    ok = tmp_path / "3" / "001_a.dxf.review" / "cad" / "1F"
+    done = tmp_path / "3" / "001_a.dxf.review" / "cad" / "2F"
+    bad = tmp_path / "4" / "002_b.dxf.review" / "cad" / "1F"
+    for d in (ok, done, bad):
+        _tiled_sheet(d, w=1200, h=800)
+    (done / "print.png").write_bytes(b"x")
+    next((bad / str(CV.max_level(1200, 800))).glob("*.png")).unlink()             # 缺一塊：做不出來
+    cad = W.CadRunner(tmp_path)
+    assert cad.backfill_print() is True and cad.backfill_print() is True           # 一次一張
+    assert (ok / "print.png").is_file() and not (bad / "print.png").exists() and str(bad) in cad.print_failed
+    assert cad.backfill_print() is False and cad.print_scanned                       # 掃完一輪：之後不再掃
+    busy = W.CadRunner(tmp_path)
+    busy.cur = {"job": {}}
+    assert busy.backfill_print() is False                                          # 正在畫原圖：不補（記憶體留給畫圖）
+    assert W.CadRunner(None).backfill_print() is False                              # 沒設案件資料夾：不做
