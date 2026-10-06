@@ -82,7 +82,8 @@ def bind(src: Path, case_dir: Path, out: Path, convert: Callable[[Path], Path] |
     "missing": [沒綁到的參考檔名（原始路徑的檔名）], "failed": [試過讀不了的上傳檔名（錯誤）], "path": 使用的 DXF}。
     上傳檔名是案件資料夾裡的存檔名（001_Area_1F.dwg），工作台用來標出哪個檔被併入。skip：不用的上傳檔名（處理失敗的）。
     同名的上傳檔最新的先試；讀不了、或看起來是同名主圖的另一版（自己也引用同名參考）就試較早上傳的；
-    候選全都自己也引用同名參考時（例：建築底圖 1F 又疊了結構圖 1F），照用最新的那份。
+    候選全都自己也引用同名參考時（例：建築底圖 1F 又疊了結構圖 1F），照用最新的那份；
+    但處理中的檔自己也叫這個名字時不這麼做（候選多半是它自己的舊版，綁進來等於疊著舊版檢核）。
     沒有外部參考、或一個都綁不到時不寫檔，path 為 src。"""
     from ezdxf import recover, xref
 
@@ -93,6 +94,7 @@ def bind(src: Path, case_dir: Path, out: Path, convert: Callable[[Path], Path] |
     if not refs:
         return info
     cands = case_candidates(case_dir, exclude=original)
+    own = name_key(original.name) if original else None
     for name, path in refs:
         key = ref_key(path)
         blk = doc.blocks.get(name)
@@ -100,6 +102,8 @@ def bind(src: Path, case_dir: Path, out: Path, convert: Callable[[Path], Path] |
         def load(p, key=key):
             d = recover.readfile(p)[0]
             if any(ref_key(x) == key for _, x in xref_blocks(d)):
+                del d
+                gc.collect()                                     # 整份圖先放掉再丟例外（例外會留著這層的變數）
                 raise _SameNameMain(p)
             return d
 
@@ -125,13 +129,12 @@ def bind(src: Path, case_dir: Path, out: Path, convert: Callable[[Path], Path] |
                 break
             except _SameNameMain:
                 held.append((cand, dxf))
-                gc.collect()                                     # 讀進來的整份圖先放掉，綁定子行程有記憶體上限
                 continue
             except Exception as e:                               # 版本較新、檔案損壞等：不中斷主圖處理
                 info["failed"].append(f"{cand.name}（{type(e).__name__}）")
                 if len(blk):                                     # 併到一半：不再拿別的檔疊上去
                     break
-        if not bound and held and not len(blk):
+        if not bound and held and not len(blk) and key != own:
             cand, dxf = held[0]
             blk.block.dxf.xref_path = str(Path(dxf).resolve())
             try:

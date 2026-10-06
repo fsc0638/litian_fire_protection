@@ -741,6 +741,14 @@ def test_xref_skip_main_versions_and_failed_with_alternative():
             return SimpleNamespace(fetchall=lambda: rows)
     assert W.xref_skip(Conn(), {"id": 9, "case_id": 1}) == ["002_1F.dwg", "004_B.dwg"]
 
+    class OnlyBaseFailed:                                  # 唯一的底圖處理失敗，旁邊只有同名主圖：照試，不略過
+        def execute(self, sql, params=None):
+            from types import SimpleNamespace
+            return SimpleNamespace(fetchall=lambda: [
+                {"path": "/c/1/002_1F.dwg", "status": "done", "stats": {"xref": {"bound_files": ["001_1F.dwg"]}}},
+                {"path": "/c/1/001_1F.dwg", "status": "failed", "stats": None}])
+    assert W.xref_skip(OnlyBaseFailed(), {"id": 9, "case_id": 1}) == ["002_1F.dwg"]
+
 
 def test_bind_xrefs_converts_newest_and_falls_back(tmp_path, monkeypatch):
     # 同名的最新上傳先送轉檔；轉不了改轉較早上傳的，主圖照樣處理；處理失敗的上傳檔不送

@@ -142,6 +142,10 @@ def requeue_xref_dependents(conn, job: dict) -> int:
     xstats = lambda r: (r.get("stats") or {}).get("xref") or {}
     if XR.main_version(stored, xstats(me)):
         return 0
+    # 這份自己也引用同名參考（例：底圖又疊了同名的結構圖）：同名的其他檔不排（多半是自己的舊版，排了會互相一直重跑）
+    mx = xstats(me)
+    self_ref = any(XR.ref_key(b) == key for b in mx.get("bound") or []) or \
+        any(XR.ref_key(XR.strip_note(m)) == key for m in mx.get("missing") or [])
     sha = {Path(r["path"]).name.lower(): r["sha256"] for r in rows}
     same = sorted((XR.upload_no(Path(r["path"]).name), Path(r["path"]).name.lower()) for r in rows
                   if r.get("kind") in ("dwg", "dxf") and XR.name_key(Path(r["path"]).name) == key
@@ -150,6 +154,8 @@ def requeue_xref_dependents(conn, job: dict) -> int:
 
     def stale(r: dict) -> bool:
         if r["id"] == job["id"] or not (r["status"] in ("done", "failed") or (r["status"] == "queued" and r["review_only"])):
+            return False
+        if self_ref and XR.name_key(Path(r["path"]).name) == key:
             return False
         x = xstats(r)
         tried = {XR.strip_note(f).lower() for f in x.get("failed") or [] if not str(f).endswith("（尚未轉檔）")}
@@ -182,7 +188,8 @@ def xref_skip(conn, job: dict) -> list[str]:
     out = []
     for r in rows:
         name = Path(r["path"]).name
-        others = [o for o in keys[XR.name_key(name)] if o is not r]
+        others = [o for o in keys[XR.name_key(name)] if o is not r
+                  and not XR.main_version(Path(o["path"]).name, (o.get("stats") or {}).get("xref"))]
         if XR.main_version(name, ((r.get("stats") or {}).get("xref"))) or \
                 (r["status"] == "failed" and any(o["status"] != "failed" for o in others)):
             out.append(name)

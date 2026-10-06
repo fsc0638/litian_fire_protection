@@ -250,3 +250,67 @@ def test_xref_bind_base_that_overlays_same_named_reference(tmp_path):
     doc.saveas(tmp_path / "001_Area_1F.converted.dxf")
     info, texts = _bind(tmp_path)
     assert info["bound_files"] == ["001_Area_1F.dwg"] and "辦公室" in texts and info["missing"] == ["TITLE-A1.dwg"]
+
+
+
+def _overlay_same_name(path, room=None):
+    """底圖又疊了同名的結構圖（沒上傳）；room：另加一個房名分辨版本。"""
+    doc = ezdxf.readfile(path)
+    doc.add_xref_def(r"..\結構\Area_1F.dwg", "STR_Area_1F")
+    doc.modelspace().add_blockref("STR_Area_1F", (0, 0))
+    if room:
+        doc.modelspace().add_text(room, dxfattribs={"insert": (500, 500), "height": 30})
+    doc.saveas(path)
+
+
+def test_reuploaded_self_referencing_base_cycle(tmp_path):
+    """底圖自己疊了同名參考、又重新上傳：新底圖不會把舊版當結構圖綁進去；主圖重排一次後改用新底圖，不會互相一直重跑。"""
+    import json
+    from types import SimpleNamespace
+
+    from litian.drawing import worker as W
+    make_host_and_xref(tmp_path)
+    _overlay_same_name(tmp_path / "001_Area_1F.converted.dxf")
+    _ref_copy(tmp_path, "005_Area_1F", "新版機房")
+    _overlay_same_name(tmp_path / "005_Area_1F.converted.dxf")
+    base = XR.bind(tmp_path / "005_Area_1F.converted.dxf", tmp_path, tmp_path / "005_Area_1F.bound.dxf",
+                   original=tmp_path / "005_Area_1F.dwg")
+    assert base["bound_files"] == [] and base["missing"] == ["Area_1F.dwg"]               # 不綁自己的舊版
+    stats = {1: {"xref": {"bound": ["Area_1F"], "bound_files": ["001_Area_1F.dwg"], "missing": []}},   # 主圖原本綁 001
+             2: {"xref": {k: base[k] for k in ("bound", "bound_files", "missing", "failed")}}}
+    paths = {1: "002_main.dwg", 2: "005_Area_1F.dwg", 3: "001_Area_1F.dwg"}
+    sha = {1: "m", 2: "new", 3: "old"}
+
+    class Conn:
+        def __init__(self):
+            self.requeued = []
+
+        def execute(self, sql, params=None):
+            if sql.lstrip().startswith("SELECT"):
+                return SimpleNamespace(fetchall=lambda: [
+                    {"id": i, "path": str(tmp_path / p), "kind": "dwg", "sha256": sha[i], "status": "done",
+                     "review_only": False, "stats": stats.get(i)} for i, p in paths.items()])
+            self.requeued.append(params[0])
+            return SimpleNamespace(rowcount=1)
+    conn = Conn()
+    assert W.requeue_xref_dependents(conn, {"id": 2, "case_id": 1, "path": str(tmp_path / paths[2])}) == 1
+    assert conn.requeued == [1]                                                          # 主圖重排；舊底圖不排
+    info, texts = _bind(tmp_path)                                                        # 主圖重新處理
+    assert info["bound_files"] == ["005_Area_1F.dwg"] and "新版機房" in texts
+    stats[1] = {"xref": {k: info[k] for k in ("bound", "bound_files", "missing", "failed")}}
+    conn = Conn()
+    assert W.requeue_xref_dependents(conn, {"id": 1, "case_id": 1, "path": str(tmp_path / paths[1])}) == 0
+    assert W.requeue_xref_dependents(conn, {"id": 2, "case_id": 1, "path": str(tmp_path / paths[2])}) == 0   # 不會再排
+
+
+def test_reuploaded_same_name_main_does_not_bind_its_old_version(tmp_path):
+    # 消防圖 1F 引用建築底圖 1F（沒上傳）：重新上傳的新版消防圖不能把舊版消防圖當底圖疊進來
+    for stored, label in (("001_1F", "舊版標註"), ("002_1F", "新版標註")):
+        doc = ezdxf.new("R2018")
+        doc.add_xref_def(r"d:\建築\1F.dwg", "1F")
+        doc.modelspace().add_blockref("1F", (0, 0))
+        doc.modelspace().add_text(label, dxfattribs={"insert": (0, 0), "height": 30})
+        doc.saveas(tmp_path / f"{stored}.converted.dxf")
+        (tmp_path / f"{stored}.dwg").write_bytes(b"AC1032")
+    info = XR.bind(tmp_path / "002_1F.converted.dxf", tmp_path, tmp_path / "002_1F.bound.dxf", original=tmp_path / "002_1F.dwg")
+    assert info["bound_files"] == [] and info["missing"] == ["1F.dwg"]
