@@ -1,0 +1,124 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 420" width="1200" height="420" role="img" aria-label="消防圖審系統：上傳圖檔、認房間與設備、逐項檢核、缺失附法規依據">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1220"/>
+      <stop offset="1" stop-color="#1e293b"/>
+    </linearGradient>
+    <pattern id="grid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <path d="M28 0H0V28" fill="none" stroke="#334155" stroke-width=".6" opacity=".55"/>
+    </pattern>
+    <pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <rect width="8" height="8" fill="#ef4444" fill-opacity=".16"/>
+      <line x1="0" y1="0" x2="0" y2="8" stroke="#ef4444" stroke-width="2" stroke-opacity=".75"/>
+    </pattern>
+    <linearGradient id="scan" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#fb923c" stop-opacity="0"/>
+      <stop offset="1" stop-color="#fb923c" stop-opacity=".75"/>
+    </linearGradient>
+    <clipPath id="plan"><rect x="722" y="62" width="396" height="296"/></clipPath>
+    <style>
+      text{font-family:'Noto Sans TC','PingFang TC','Microsoft JhengHei','Segoe UI',sans-serif}
+      .fade{opacity:0;animation:fade .9s ease-out forwards}
+      .d1{animation-delay:.15s}.d2{animation-delay:.45s}.d3{animation-delay:.75s}.d4{animation-delay:1.05s}.d5{animation-delay:1.35s}
+      .wall{fill:none;stroke:#e2e8f0;stroke-width:3;stroke-linejoin:round;stroke-dasharray:1400;stroke-dashoffset:1400;animation:draw 2.2s ease-out .3s forwards}
+      .part{fill:none;stroke:#94a3b8;stroke-width:1.8;stroke-dasharray:700;stroke-dashoffset:700;animation:draw 1.8s ease-out 1s forwards}
+      .lbl{fill:#94a3b8;font-size:13px;opacity:0;animation:fade .6s ease-out 2.3s forwards}
+      .head{fill:#fb923c;opacity:0;animation:fade .3s ease-out forwards}
+      .cov{fill:#fb923c;fill-opacity:.09;stroke:#fb923c;stroke-opacity:.45;stroke-width:1.2}
+      .gap{opacity:0;animation:blink 1.6s ease-in-out 4.4s infinite}
+      .pin{opacity:0;animation:fade .4s ease-out 4.4s forwards}
+      .badge{opacity:0;animation:fade .6s ease-out 4.9s forwards}
+      .scan{animation:scan 3.4s linear 3s infinite}
+      @keyframes fade{to{opacity:1}}
+      @keyframes draw{to{stroke-dashoffset:0}}
+      @keyframes blink{0%,100%{opacity:.4}50%{opacity:1}}
+      @keyframes scan{0%{transform:translateX(0)}100%{transform:translateX(396px)}}
+    </style>
+  </defs>
+
+  <rect width="1200" height="420" rx="24" fill="url(#bg)"/>
+  <rect width="1200" height="420" rx="24" fill="url(#grid)"/>
+
+  <!-- 左側文字 -->
+  <g class="fade d1">
+    <rect x="70" y="84" width="156" height="26" rx="13" fill="none" stroke="#fb923c" stroke-opacity=".7"/>
+    <text x="148" y="102" text-anchor="middle" fill="#fb923c" font-size="12" letter-spacing="2">FIRE PLAN REVIEW</text>
+  </g>
+  <text class="fade d2" x="68" y="184" fill="#f8fafc" font-size="62" font-weight="700">消防圖審系統</text>
+  <text class="fade d3" x="72" y="230" fill="#cbd5e1" font-size="22">把消防法規變成能逐條檢查圖面的規則</text>
+  <text class="fade d4" x="72" y="264" fill="#94a3b8" font-size="16">上傳 DWG ・ 認房間、認設備 ・ 逐項檢核 ・ 每條缺失附法規依據</text>
+  <g class="fade d5" font-size="14">
+    <rect x="72" y="298" width="96" height="32" rx="16" fill="#1e293b" stroke="#fb923c" stroke-opacity=".8"/>
+    <text x="120" y="319" text-anchor="middle" fill="#fed7aa">法規為本</text>
+    <rect x="184" y="298" width="96" height="32" rx="16" fill="#1e293b" stroke="#fb923c" stroke-opacity=".8"/>
+    <text x="232" y="319" text-anchor="middle" fill="#fed7aa">逐條有據</text>
+    <rect x="296" y="298" width="112" height="32" rx="16" fill="#1e293b" stroke="#fb923c" stroke-opacity=".8"/>
+    <text x="352" y="319" text-anchor="middle" fill="#fed7aa">設備師把關</text>
+  </g>
+  <text class="fade d5" x="72" y="372" fill="#64748b" font-size="14">給消防設備師與事務所的審圖助手 ・ 輸出為輔助資訊，簽證仍由設備師判斷</text>
+
+  <!-- 右側平面圖 -->
+  <rect x="700" y="40" width="440" height="340" rx="18" fill="#0f172a" stroke="#334155"/>
+  <g clip-path="url(#plan)">
+    <g class="cov">
+      <circle cx="760" cy="112" r="0"><animate attributeName="r" to="64" dur=".5s" begin="2.6s" fill="freeze"/></circle>
+      <circle cx="862" cy="112" r="0"><animate attributeName="r" to="64" dur=".5s" begin="2.68s" fill="freeze"/></circle>
+      <circle cx="760" cy="182" r="0"><animate attributeName="r" to="64" dur=".5s" begin="2.76s" fill="freeze"/></circle>
+      <circle cx="862" cy="182" r="0"><animate attributeName="r" to="64" dur=".5s" begin="2.84s" fill="freeze"/></circle>
+      <circle cx="936" cy="112" r="0"><animate attributeName="r" to="64" dur=".5s" begin="2.92s" fill="freeze"/></circle>
+      <circle cx="1009" cy="112" r="0"><animate attributeName="r" to="64" dur=".5s" begin="3s" fill="freeze"/></circle>
+      <circle cx="1082" cy="112" r="0"><animate attributeName="r" to="64" dur=".5s" begin="3.08s" fill="freeze"/></circle>
+      <circle cx="936" cy="182" r="0"><animate attributeName="r" to="64" dur=".5s" begin="3.16s" fill="freeze"/></circle>
+      <circle cx="1009" cy="182" r="0"><animate attributeName="r" to="64" dur=".5s" begin="3.24s" fill="freeze"/></circle>
+      <circle cx="1082" cy="182" r="0"><animate attributeName="r" to="64" dur=".5s" begin="3.32s" fill="freeze"/></circle>
+      <circle cx="760" cy="262" r="0"><animate attributeName="r" to="64" dur=".5s" begin="3.4s" fill="freeze"/></circle>
+      <circle cx="833" cy="262" r="0"><animate attributeName="r" to="64" dur=".5s" begin="3.48s" fill="freeze"/></circle>
+      <circle cx="906" cy="262" r="0"><animate attributeName="r" to="64" dur=".5s" begin="3.56s" fill="freeze"/></circle>
+      <circle cx="979" cy="262" r="0"><animate attributeName="r" to="64" dur=".5s" begin="3.64s" fill="freeze"/></circle>
+      <circle cx="760" cy="326" r="0"><animate attributeName="r" to="64" dur=".5s" begin="3.72s" fill="freeze"/></circle>
+      <circle cx="833" cy="326" r="0"><animate attributeName="r" to="64" dur=".5s" begin="3.8s" fill="freeze"/></circle>
+      <circle cx="906" cy="326" r="0"><animate attributeName="r" to="64" dur=".5s" begin="3.88s" fill="freeze"/></circle>
+      <circle cx="979" cy="326" r="0"><animate attributeName="r" to="64" dur=".5s" begin="3.96s" fill="freeze"/></circle>
+    </g>
+    <rect class="gap" x="1046" y="234" width="68" height="120" fill="url(#hatch)" stroke="#ef4444" stroke-width="1.5"/>
+    <rect class="scan" x="716" y="62" width="8" height="296" fill="url(#scan)"/>
+  </g>
+  <path class="wall" d="M722 62H1118V358H722Z"/>
+  <path class="part" d="M900 62V172M900 202V230M722 230H842M872 230H1118"/>
+  <text class="lbl" x="738" y="84">辦公室</text>
+  <text class="lbl" x="916" y="84">會議室</text>
+  <text class="lbl" x="738" y="252">倉庫</text>
+  <g>
+    <circle class="head" cx="760" cy="112" r="4" style="animation-delay:2.6s"/>
+    <circle class="head" cx="862" cy="112" r="4" style="animation-delay:2.68s"/>
+    <circle class="head" cx="760" cy="182" r="4" style="animation-delay:2.76s"/>
+    <circle class="head" cx="862" cy="182" r="4" style="animation-delay:2.84s"/>
+    <circle class="head" cx="936" cy="112" r="4" style="animation-delay:2.92s"/>
+    <circle class="head" cx="1009" cy="112" r="4" style="animation-delay:3s"/>
+    <circle class="head" cx="1082" cy="112" r="4" style="animation-delay:3.08s"/>
+    <circle class="head" cx="936" cy="182" r="4" style="animation-delay:3.16s"/>
+    <circle class="head" cx="1009" cy="182" r="4" style="animation-delay:3.24s"/>
+    <circle class="head" cx="1082" cy="182" r="4" style="animation-delay:3.32s"/>
+    <circle class="head" cx="760" cy="262" r="4" style="animation-delay:3.4s"/>
+    <circle class="head" cx="833" cy="262" r="4" style="animation-delay:3.48s"/>
+    <circle class="head" cx="906" cy="262" r="4" style="animation-delay:3.56s"/>
+    <circle class="head" cx="979" cy="262" r="4" style="animation-delay:3.64s"/>
+    <circle class="head" cx="760" cy="326" r="4" style="animation-delay:3.72s"/>
+    <circle class="head" cx="833" cy="326" r="4" style="animation-delay:3.8s"/>
+    <circle class="head" cx="906" cy="326" r="4" style="animation-delay:3.88s"/>
+    <circle class="head" cx="979" cy="326" r="4" style="animation-delay:3.96s"/>
+  </g>
+  <g class="pin">
+    <circle cx="1080" cy="294" r="10" fill="none" stroke="#ef4444" stroke-width="2">
+      <animate attributeName="r" from="10" to="28" dur="1.6s" begin="4.4s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" from=".9" to="0" dur="1.6s" begin="4.4s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="1080" cy="294" r="11" fill="#ef4444"/>
+    <text x="1080" y="299" text-anchor="middle" fill="#fff" font-size="12" font-weight="700">1</text>
+    <text x="1080" y="373" text-anchor="middle" fill="#f87171" font-size="11">撒水頭未涵蓋</text>
+  </g>
+  <g class="badge">
+    <rect x="938" y="8" width="182" height="28" rx="14" fill="#134e4a" stroke="#2dd4bf" stroke-opacity=".8"/>
+    <text x="1029" y="27" text-anchor="middle" fill="#99f6e4" font-size="13">✓ 檢核完成 ・ 缺失 1 處</text>
+  </g>
+</svg>
