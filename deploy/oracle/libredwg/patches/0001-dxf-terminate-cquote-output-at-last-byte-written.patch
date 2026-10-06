@@ -1,0 +1,57 @@
+From aa5f954bdef5f3359a8f0df7cfbcbbac114683de Mon Sep 17 00:00:00 2001
+From: Hallel <hallel.kula@gmail.com>
+Date: Wed, 9 Sep 2026 12:12:29 +0000
+Subject: [PATCH] dxf: terminate cquote's output at the last byte written
+
+cquote() stores its NUL at d[len - 1], the last byte of the destination
+buffer, and never at the position where it stopped writing.
+dxf_fixup_string() then calls strlen() on that buffer, so every byte
+between the end of the quoted string and the end of the allocation is
+read back as string content.  The buffer is malloc'd with
+(2 * emblen) + 1 bytes, so any string that grows by less than 2x under
+quoting leaves such a gap.
+
+Reproduces with the shipped test data, no allocator tricks needed:
+
+  programs/dwg2dxf --as r2018 -y -o out.dxf test/test-data/example_2018.dwg
+  grep -a Fgdt out.dxf
+
+  expected   {\Fgdt;r}%%v1%%v2%%v%%v%%v^J10
+  actual     {\Fgdt;r}%%v1%%v2%%v%%v%%v^J10v
+
+The trailing byte is whatever the allocation happened to hold: the value
+quotes to 30 bytes in a 59-byte buffer, and strlen() runs past the end of
+what was written.  Same on example_2004, _2007, _2010 and _2013.  Under
+MALLOC_PERTURB_ the residue grows to a long run rather than a single
+byte, which is how it was first spotted.
+
+This is the defect valgrind reported against MTEXT in 3c5ab3bb.  That
+commit moved the buffer to a zeroed static, which changed the residue
+from arbitrary heap to the previous call's tail rather than fixing the
+termination; the buffer is malloc'd again today.
+
+PR #1412
+
+	* src/out_dxf.c (cquote): Terminate after the last byte written,
+	clamped to the end of the buffer.
+---
+ src/out_dxf.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/src/out_dxf.c b/src/out_dxf.c
+index c20d415468..4d8fbfacb1 100644
+--- a/src/out_dxf.c
++++ b/src/out_dxf.c
+@@ -1393,6 +1393,12 @@ cquote (char *restrict dest, const size_t len, const char *restrict src)
+       else
+         *dest++ = c;
+     }
++  // Terminate after the LAST BYTE WRITTEN. Callers strlen() this buffer, so
++  // a NUL only at its end makes every byte the quoting did not reach part of
++  // the string -- uninitialized heap, for a buffer sized 2x the input.
++  if (dest >= dend)
++    dest = d + len - 1;
++  *dest = '\0';
+   d[len - 1] = '\0'; // add final delim, skipped above
+   return d;
+ }
