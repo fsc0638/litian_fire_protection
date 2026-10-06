@@ -15,7 +15,6 @@ import hashlib
 import os
 import re
 import sys
-import time
 from pathlib import Path
 
 from . import store as ST
@@ -52,10 +51,10 @@ def derived_files(path: str, kind: str) -> list[Path]:
     return [p.with_name(p.stem + s) for s in (".converted.dxf", ".bound.dxf") if kind == "dwg" or s == ".bound.dxf"]
 
 
-WAIT_S = 1800          # 等 worker 處理完手上的檔最多多久（大檔轉檔＋綁定＋抽取＋檢核可能要數十分鐘）
-LIVE = ("queued", "done", "failed", "processing", "reviewing")      # 要整個重跑的狀態（含處理中：等它處理完）
-# 有沒有別的連線在等這個交易的鎖（pg_locks 每次現查；pg_stat_activity 在交易裡會沿用第一次查的名單，看不到之後才連上的）
-BLOCKING_SQL = "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE NOT granted AND pg_backend_pid() = ANY(pg_blocking_pids(pid))) AS b"
+LOCK_TIMEOUT = "60s"   # 鎖不到就整個不動（認領、存檢核條件都只鎖一下子）
+# 沒鎖到的 DWG／DXF：處理中、檢核中，或鎖定之後才處理完、才上傳的
+UNLOCKED_SQL = ("SELECT case_id, name, status FROM case_file WHERE case_id = ANY(%s) AND kind IN ('dwg', 'dxf') "
+                "AND status <> 'skipped' AND NOT id = ANY(%s) ORDER BY id")
 
 
 def _deletable(f: Path) -> bool:
@@ -66,11 +65,11 @@ def _deletable(f: Path) -> bool:
 # - 全部在一個交易裡：先鎖住這些案件的 DWG／DXF（worker 認領、背景畫圖都 SKIP LOCKED 跳過），刪完所有轉檔結果才一起排入。
 #   逐檔提交的話，worker 可能先重跑主圖、綁到還沒刪的舊參考檔轉檔結果；參考檔之後重跑也不會再排主圖
 #   （requeue_xref_dependents 看的是綁了哪份上傳檔，同一份不排）。
-# - 處理中（ST.ACTIVE）的不略過，等它處理完一起重跑：它可能已讀進舊的參考檔轉檔結果，只重跑檢核的還用著自己舊的
-#   轉檔結果（之後的主圖會綁到）。其餘先鎖住，worker 就認領不到這些案件的檔，要等的只有手上那一個。等太久就整個不動。
-# - 等的期間不讓別人等這裡的鎖：有人在等（worker 處理完要更新相依檔、記畫圖結果；工作台存檢核條件；剛被認領的檔——
-#   PostgreSQL 等認領提交後雖然不回傳它，卻照樣鎖住新版本，worker 下一步就卡住），就全部放掉（rollback）稍後重鎖，
-#   不會互等。放掉時還沒刪任何檔。
+# - worker 正在處理這些案件的檔（ST.ACTIVE）就整個不動（rollback），等它處理完再執行一次：處理中的可能已讀進舊的
+#   參考檔轉檔結果，只重跑檢核的還用著自己舊的轉檔結果，略過它們會留下一半新、一半舊。
+#   鎖定後才查，和 worker 認領（FOR UPDATE SKIP LOCKED）不會錯過：認領碰到這裡鎖住的檔會跳過；在鎖定前提交的、
+#   或這裡等它提交的（PostgreSQL 重新判斷後不回傳），鎖定後一查都是處理中。鎖定後才處理完、才上傳的沒鎖到，也一樣停下；
+#   查的時候還沒提交的新上傳看不到，不在這批（worker 之後照常處理）。
 # - 刪檔無法復原：先確認每個都刪得掉才開始刪；還是刪不掉就整批不排（rollback）。
 # - 參考檔的 .converted.dxf 一定要刪：bind_xrefs 有就直接用。刪了之後主圖比參考檔先處理時，bind_xrefs 自己送轉檔
 #   （只看檔案在不在，不看參考檔在資料庫的狀態，排隊中也照轉），參考檔輪到自己時再轉一次、覆蓋同一個檔。
@@ -79,73 +78,40 @@ def _deletable(f: Path) -> bool:
 # - 轉檔服務交接資料夾裡沒人取走的舊結果：convert_client.submit 送件前先清掉（工作代號固定，不清會被拿去用）。
 # - 畫到一半的 CAD 原樣圖照畫（Linux 刪掉開著的檔照樣讀得到；還沒開檔就被刪的記失敗）；worker 重跑到那個檔時
 #   process() 會 reset_cad、取消畫圖。排隊中的原圖要檔案完成才會畫，不會用到刪掉的 DXF。
-def _lock_when_idle(conn, ids: list[int], deadline: float, poll_s: float, notify, shown: dict) -> list[dict] | None:
-    """（在交易裡）鎖住這些案件全部要重跑的檔；處理中的等 worker 處理完再鎖（等待期間才上傳、被認領的新檔也一起等）。
-    有人在等這裡的鎖：回傳 None，由呼叫端全部放掉再重來。等太久丟 ReprocessError。"""
-    import psycopg
-    locked: dict[int, dict] = {}
-    try:
-        while True:
-            for r in ST.lock_for_reprocess(conn, ids):
-                locked.setdefault(r["id"], r)
-            rest = conn.execute("SELECT id, case_id, name, status FROM case_file WHERE case_id = ANY(%s) "
-                                "AND kind IN ('dwg', 'dxf') AND status = ANY(%s) AND NOT id = ANY(%s) ORDER BY id",
-                                (ids, list(LIVE), list(locked))).fetchall()
-            if not rest:
-                return sorted(locked.values(), key=lambda r: r["id"])
-            if conn.execute(BLOCKING_SQL).fetchone()["b"]:
-                return None
-            busy = "、".join(f"案件 {r['case_id']} {r['name']}（{ST.ACTIVE[r['status']]}）" for r in rest
-                            if r["status"] in ST.ACTIVE)
-            if not busy:
-                continue                                 # 鎖定之後才變成可重跑（剛處理完、剛上傳）：再鎖一次
-            left = deadline - time.monotonic()
-            if left <= 0:
-                raise ReprocessError(f"worker 還在處理：{busy}，等太久了。沒有任何更動，等它完成後再執行一次。")
-            if notify and busy != shown.get("busy"):
-                notify(f"等 worker 處理完：{busy}（最多再等 {left / 60:.0f} 分鐘）")
-                shown["busy"] = busy
-            time.sleep(poll_s)
-    except psycopg.errors.DeadlockDetected:
-        return None
-    except psycopg.errors.LockNotAvailable as e:
-        raise ReprocessError("有其他程序鎖著這些檔超過 1 分鐘。沒有任何更動，稍後再執行一次。") from e
-
-
-def reprocess(conn, case_ids: list[int] | None, dry_run: bool = False, wait_s: float = WAIT_S, poll_s: float = 2.0,
-              notify=None) -> dict:
-    """case_ids 為 None：全部案件。回傳 {"cases": {案件ID: {name, queued, skipped, deleted, unsupported, waiting, undeletable}},
+def reprocess(conn, case_ids: list[int] | None, dry_run: bool = False) -> dict:
+    """case_ids 為 None：全部案件。回傳 {"cases": {案件ID: {name, queued, skipped, deleted, unsupported, busy, undeletable}},
     "missing": [沒有的案件ID]}；queued＝排入的檔名、skipped＝[(檔名, 原因)]、deleted＝刪掉的轉檔結果檔名、
-    unsupported＝不支援、不處理的檔數；waiting（試跑）＝[(處理中的檔名, 狀態)]，正式執行時會等它；
-    undeletable（試跑）＝刪不掉的轉檔結果，正式執行會在刪檔前停下。dry_run：只列出，不動。notify：等待時的進度訊息。"""
+    unsupported＝不支援、不處理的檔數；busy（試跑）＝[(worker 正在處理的檔名, 狀態)]，正式執行會停下；
+    undeletable（試跑）＝刪不掉的轉檔結果，正式執行會在刪檔前停下。dry_run：只列出，不動。"""
     sql = "SELECT id, name FROM review_case" + ("" if case_ids is None else " WHERE id = ANY(%s)") + " ORDER BY id"
     cases = conn.execute(sql, () if case_ids is None else (case_ids,)).fetchall()
-    rep = {c["id"]: {"name": c["name"], "queued": [], "skipped": [], "deleted": [], "unsupported": 0, "waiting": [],
+    rep = {c["id"]: {"name": c["name"], "queued": [], "skipped": [], "deleted": [], "unsupported": 0, "busy": [],
                      "undeletable": []} for c in cases}
     out = {"cases": rep, "missing": sorted(set(case_ids or ()) - set(rep))}
     ids = list(rep)
     if not ids:
         return out
     import psycopg
-    deadline, shown = time.monotonic() + wait_s, {}
-    while True:
+    try:
         with conn.transaction():
             if dry_run:
                 todo = conn.execute("SELECT id, case_id, name, kind, path, status FROM case_file WHERE case_id = ANY(%s) "
-                                    "AND status = ANY(%s) AND kind IN ('dwg', 'dxf') ORDER BY id", (ids, list(LIVE))).fetchall()
-                for r in todo:
-                    if r["status"] in ST.ACTIVE:
-                        rep[r["case_id"]]["waiting"].append((r["name"], ST.ACTIVE[r["status"]]))
+                                    "AND status IN ('queued', 'done', 'failed') AND kind IN ('dwg', 'dxf') ORDER BY id",
+                                    (ids,)).fetchall()
             else:
-                conn.execute("SET LOCAL lock_timeout = '60s'")
-                todo = _lock_when_idle(conn, ids, deadline, poll_s, notify, shown)
-                if todo is None:
-                    raise psycopg.Rollback()             # 有人在等這裡的鎖：全部放掉，讓它先做完
+                conn.execute(f"SET LOCAL lock_timeout = '{LOCK_TIMEOUT}'")
+                todo = ST.lock_for_reprocess(conn, ids)
+            busy = [(r["case_id"], r["name"], ST.ACTIVE.get(r["status"], "剛有變動"))
+                    for r in conn.execute(UNLOCKED_SQL, (ids, [r["id"] for r in todo]))]
+            if busy and not dry_run:
+                raise ReprocessError("worker 正在處理：" + "、".join(f"案件 {c} {n}（{s}）" for c, n, s in busy)
+                                     + "，沒有任何更動，等它處理完再執行一次。")
+            for c, n, s in busy:
+                rep[c]["busy"].append((n, s))
             _apply(conn, ids, rep, todo, dry_run)
-            return out
-        if time.monotonic() >= deadline:
-            raise ReprocessError("一直有其他更新在等這些檔，鎖不到全部。沒有任何更動，稍後再執行一次。")
-        time.sleep(poll_s)
+    except (psycopg.errors.LockNotAvailable, psycopg.errors.DeadlockDetected) as e:
+        raise ReprocessError("其他程序正鎖著這些檔。沒有任何更動，稍後再執行一次。") from e
+    return out
 
 
 def _apply(conn, ids: list[int], rep: dict, todo: list[dict], dry_run: bool) -> None:
@@ -187,7 +153,7 @@ def report_lines(res: dict, dry_run: bool) -> list[str]:
     for cid, c in res["cases"].items():
         lines.append(f"案件 {cid}「{c['name']}」：{verb}重新處理 {len(c['queued'])} 個檔"
                      + (f"；不支援的檔 {c['unsupported']} 個不處理" if c["unsupported"] else ""))
-        lines += [f"  {name}：{st}，正式執行時會先等它處理完再一起排入" for name, st in c["waiting"]]
+        lines += [f"  {name}（{st}）：worker 正在處理，正式執行會停下" for name, st in c["busy"]]
         lines += [f"  略過 {name}：{why}" for name, why in c["skipped"]]
         if c["deleted"]:
             lines.append(f"  {'會刪除' if dry_run else '已刪除'}轉檔結果 {len(c['deleted'])} 個：{'、'.join(c['deleted'])}")
@@ -226,13 +192,12 @@ def main(argv: list[str]) -> int:
         ST.ensure_schema(conn)
         if args.cmd == "reprocess":
             try:
-                res = reprocess(conn, None if args.all else args.cases, dry_run=args.dry_run,
-                                notify=lambda m: print(m, file=sys.stderr, flush=True))
+                res = reprocess(conn, None if args.all else args.cases, dry_run=args.dry_run)
             except ReprocessError as e:
                 print(e, file=sys.stderr)
                 return 1
             print("\n".join(report_lines(res, args.dry_run)))
-            return 1 if res["missing"] or any(c["undeletable"] for c in res["cases"].values()) else 0
+            return 1 if res["missing"] or any(c["undeletable"] or c["busy"] for c in res["cases"].values()) else 0
         if args.cmd == "ingest":
             cid = ingest(conn, args.name, args.files, Path(os.environ.get("CASES_DIR", "/data/cases")))
             print(f"案件 {cid}：已排入 {len(args.files)} 個檔案")

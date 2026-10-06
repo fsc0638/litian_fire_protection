@@ -1,6 +1,6 @@
 """整個重新處理（cli reprocess，轉檔器升級後用）：選案件、只刪轉檔結果、試跑不動、重跑一次結果相同、
-與 worker 同時跑時的鎖（等處理中的檔處理完、不讓別人等這裡）、刪不掉就不動，以及主圖比參考檔先重跑時會重新轉參考檔
-（不綁舊的轉檔結果）。全部用程式產生的檔。
+與 worker 同時跑時的鎖（worker 正在處理就整個不動、認領到一半不會只做一半）、刪不掉就不動，以及主圖比參考檔先重跑時
+會重新轉參考檔（不綁舊的轉檔結果）。全部用程式產生的檔。
 
 只在設定 TEST_DATABASE_URL 時執行（資料庫名稱必須以 _test 結尾，測試會清空這些資料表）。
 """
@@ -127,12 +127,17 @@ def test_reprocess_all_dry_run_changes_nothing_then_cli_runs(conn, tmp_path, mon
     monkeypatch.setenv("DATABASE_URL", URL)
     snap = conn.execute("SELECT * FROM case_file ORDER BY id").fetchall()
     files = _files(tmp_path)
-    assert CLI.main(["reprocess", "--all", "--dry-run"]) == 0
+    assert CLI.main(["reprocess", "--all", "--dry-run"]) == 1                              # 有檔在處理：結束碼 1
     out = capsys.readouterr().out
     assert conn.execute("SELECT * FROM case_file ORDER BY id").fetchall() == snap and _files(tmp_path) == files
-    assert "試跑" in out and "會刪除轉檔結果 3 個：001_A.converted.dxf、001_A.bound.dxf、002_B.bound.dxf" in out
-    assert "B.dxf：處理中，正式執行時會先等它處理完再一起排入" in out and "不支援的檔 1 個" in out
-    assert "合計 2 個案件：會排入 3 個檔、略過 0 個、會刪除轉檔結果 4 個" in out
+    assert "試跑" in out and "會刪除轉檔結果 2 個：001_A.converted.dxf、001_A.bound.dxf" in out
+    assert "B.dxf（處理中）：worker 正在處理，正式執行會停下" in out and "不支援的檔 1 個" in out
+    assert "合計 2 個案件：會排入 2 個檔、略過 0 個、會刪除轉檔結果 3 個" in out
+
+    assert CLI.main(["reprocess", "--all"]) == 1                                           # 正式執行：整個不動
+    cap = capsys.readouterr()
+    assert cap.out == "" and f"worker 正在處理：案件 {one} B.dxf（處理中），沒有任何更動，等它處理完再執行一次。" in cap.err
+    assert conn.execute("SELECT * FROM case_file ORDER BY id").fetchall() == snap and _files(tmp_path) == files
 
     ST.mark(conn, f["B.dxf"][0], "done")                                                   # worker 處理完 B
     assert CLI.main(["reprocess", "--all"]) == 0
@@ -146,83 +151,135 @@ def test_reprocess_all_dry_run_changes_nothing_then_cli_runs(conn, tmp_path, mon
     assert "案件 999999：沒有這個案件" in capsys.readouterr().out
 
 
-def test_reprocess_waits_for_files_in_progress_and_includes_them(conn, tmp_path):
-    """處理中的不略過：其餘先鎖住（worker 認領不到），等手上的處理完再一起排入；等待期間才上傳、被認領的新檔也一起等。
-    處理中的檔可能已綁到舊的參考檔轉檔結果；只重跑檢核的還用著自己舊的轉檔結果，都要一起重跑。"""
+@pytest.mark.parametrize("status", ["processing", "reviewing"])
+def test_reprocess_stops_while_worker_is_busy(conn, tmp_path, monkeypatch, capsys, status):
+    """worker 正在處理這些案件的檔（處理中、檢核中）：整個不動、說出是哪個檔，鎖隨即放掉（worker、工作台照常）；
+    處理完再執行一次就全部排入（處理中的可能已綁到舊的參考檔轉檔結果，只重跑檢核的還用著自己舊的轉檔結果）。"""
     import psycopg
     from psycopg.rows import dict_row
     from litian.drawing import cli as CLI
     from litian.drawing import store as ST
-    cid, f = _case(conn, tmp_path, "等", [("A.dwg", "done", [C, B]), ("Q.dwg", "queued", [C]),
-                                         ("X.dwg", "processing", [C]), ("R.dwg", "reviewing", [C, B])])
-    conn.execute("UPDATE case_file SET review_only = true WHERE id = %s", (f["R.dwg"][0],))
+    cid, f = _case(conn, tmp_path, "忙", [("A.dwg", "done", [C, B]), ("Q.dwg", "queued", [C]), ("X.dwg", status, [C, B])])
+    other, g = _case(conn, tmp_path, "別案", [("Z.dwg", "done", [C])])
+    conn.execute("UPDATE case_file SET review_only = %s WHERE id = %s", (status == "reviewing", f["X.dwg"][0]))
     ST.save_review(conn, f["A.dwg"][0], "done", {"floors": []}, None, "/x/a.review")
-    before, files_before = _rows(conn), _files(tmp_path)
-    with pytest.raises(CLI.ReprocessError, match=r"X\.dwg（處理中）.*R\.dwg（檢核中）.*沒有任何更動"):
-        CLI.reprocess(conn, [cid], wait_s=0)                                    # 等不到：整個不動
-    assert _rows(conn) == before and _files(tmp_path) == files_before
-
-    msgs, res = [], []
-    t = threading.Thread(target=lambda: res.append(CLI.reprocess(conn, [cid], wait_s=30, poll_s=0.05, notify=msgs.append)))
-    t.start()
+    monkeypatch.setenv("DATABASE_URL", URL)
+    before, files = _rows(conn), _files(tmp_path)
+    assert CLI.main(["reprocess", "--all"]) == 1
+    cap = capsys.readouterr()
+    assert cap.out == "" and cap.err.strip() == (f"worker 正在處理：案件 {cid} X.dwg（{ST.ACTIVE[status]}），"
+                                                 "沒有任何更動，等它處理完再執行一次。")
+    assert _rows(conn) == before and _files(tmp_path) == files                             # 別的案件也不動
     with psycopg.connect(URL, row_factory=dict_row, autocommit=True) as w:
-        for _ in range(100):
-            if msgs:
-                break
-            time.sleep(0.05)
-        assert "X.dwg（處理中）" in msgs[0] and "R.dwg（檢核中）" in msgs[0]
-        assert ST.claim(w) is None                                              # Q 鎖住了：worker 認領不到
-        n = tmp_path / str(cid) / "005_N.dwg"
-        n.write_bytes(b"AC1032")
-        with w.transaction():                                                   # 等待期間上傳、馬上被 worker 認領
-            new = ST.add_file(w, cid, "N.dwg", 6, "n" * 64, str(n))
-            assert ST.claim(w)["id"] == new
-        assert _files(tmp_path) == files_before | {f"{cid}/005_N.dwg"}           # 還沒刪任何檔
-        w.execute("SET lock_timeout = '5s'")
-        assert ST.requeue_reviews(w, cid) == 1                                  # 工作台存檢核條件：不必等到重新處理結束
-        n.with_name("005_N.converted.dxf").write_text("剛轉好", encoding="utf-8")
-        ST.mark(w, f["X.dwg"][0], "done", {"sheets": 0})                        # worker 處理完 X、R
-        ST.mark(w, f["R.dwg"][0], "done")
-        time.sleep(0.3)
-        assert t.is_alive() and _rows(w)[f["A.dwg"][0]][:2] == ("queued", True)    # 還沒排入（只重跑檢核是工作台排的）
-        ST.mark(w, new, "done", {"sheets": 0})
-        t.join(10)
-    assert not t.is_alive()
-    c = res[0]["cases"][cid]
-    assert c["queued"] == ["A.dwg", "Q.dwg", "X.dwg", "R.dwg", "N.dwg"] and c["skipped"] == []
-    assert set(c["deleted"]) == {"001_A.converted.dxf", "001_A.bound.dxf", "002_Q.converted.dxf", "003_X.converted.dxf",
-                                 "004_R.converted.dxf", "004_R.bound.dxf", "005_N.converted.dxf"}
-    assert set(_rows(conn).values()) == {("queued", False, 0)}
-    assert ST.claim(conn)["id"] == f["A.dwg"][0]
+        w.execute("SET lock_timeout = '2s'")
+        assert ST.requeue_reviews(w, cid) == 1                                             # 鎖都放掉了
+        assert ST.claim(w)["id"] == f["A.dwg"][0]
+        ST.mark(w, f["A.dwg"][0], "done")
+        ST.mark(w, f["X.dwg"][0], "done")                                                  # worker 處理完
+    c = CLI.reprocess(conn, [cid])["cases"][cid]
+    assert c["queued"] == ["A.dwg", "Q.dwg", "X.dwg"] and c["busy"] == [] and c["skipped"] == []
+    assert c["deleted"] == ["001_A.converted.dxf", "001_A.bound.dxf", "002_Q.converted.dxf", "003_X.converted.dxf",
+                            "003_X.bound.dxf"]
+    rows = _rows(conn)
+    assert {rows[f[n][0]] for n in f} == {("queued", False, 0)} and rows[g["Z.dwg"][0]] == before[g["Z.dwg"][0]]
 
 
-def test_reprocess_waits_for_claim_in_flight_then_for_the_file(conn, tmp_path):
-    """worker 剛認領、還沒提交：重新處理等它提交；變成處理中就等它處理完，再一起排入（處理中不刪它的檔）。"""
+@pytest.mark.parametrize("meanwhile", ["finished", "uploaded"])
+def test_reprocess_stops_when_a_file_finishes_or_appears_right_after_locking(conn, tmp_path, monkeypatch, meanwhile):
+    """鎖定之後、檢查之前 worker 剛處理完手上的檔（或剛上傳新檔）：那個檔沒鎖到，不能只排其餘的，一樣整個不動。"""
     import psycopg
     from psycopg.rows import dict_row
     from litian.drawing import cli as CLI
     from litian.drawing import store as ST
-    cid, f = _case(conn, tmp_path, "認領", [("A.dwg", "queued", [C]), ("B.dwg", "queued", [C])])
-    res = []
-    with psycopg.connect(URL, row_factory=dict_row) as w:                        # 不自動提交：認領停在交易裡
-        assert ST.claim(w)["id"] == f["A.dwg"][0]
-        t = threading.Thread(target=lambda: res.append(CLI.reprocess(conn, [cid], wait_s=30, poll_s=0.05)))
+    cid, f = _case(conn, tmp_path, "差一點", [("A.dwg", "done", [C]),
+                                             ("X.dwg", "processing" if meanwhile == "finished" else "done", [C, B])])
+    files, lock = _files(tmp_path), ST.lock_for_reprocess
+
+    def lock_then_worker(c, ids):
+        rows = lock(c, ids)
+        with psycopg.connect(URL, row_factory=dict_row, autocommit=True) as w:
+            if meanwhile == "finished":
+                ST.mark(w, f["X.dwg"][0], "done")
+            else:
+                ST.add_file(w, cid, "N.dwg", 6, "n" * 64, str(tmp_path / str(cid) / "003_N.dwg"))
+        return rows
+    monkeypatch.setattr(ST, "lock_for_reprocess", lock_then_worker)
+    name = "X.dwg" if meanwhile == "finished" else "N.dwg"
+    with pytest.raises(CLI.ReprocessError, match=f"worker 正在處理：案件 {cid} {name}（剛有變動），沒有任何更動"):
+        CLI.reprocess(conn, [cid])
+    rows = _rows(conn)
+    assert rows[f["A.dwg"][0]] == rows[f["X.dwg"][0]] == ("done", False, 2) and _files(tmp_path) == files
+
+
+def test_claim_in_flight_stops_reprocess_or_stays_out_of_it(conn, tmp_path, monkeypatch):
+    """worker 認領到一半（還沒提交）：認領的是這批的檔 → 等它提交、查到處理中，整個不動，鎖隨即放掉（PostgreSQL 等到認領
+    提交後雖不回傳它，卻鎖住它的新版本；worker 下一步要這把鎖）。認領的是查的時候還看不到的新上傳 → 不在這批、不動它，
+    其餘照常排入（這批的檔都鎖著，認領跳過）。不會只做一半。"""
+    import psycopg
+    from psycopg.rows import dict_row
+    from litian.drawing import cli as CLI
+    from litian.drawing import store as ST
+    cid, f = _case(conn, tmp_path, "認領", [("A.dwg", "queued", [C]), ("B.dwg", "done", [C, B]), ("Q.dwg", "queued", [C])])
+    a = f["A.dwg"][0]
+    before, files = _rows(conn), _files(tmp_path)
+    res, err = [], []
+
+    def run():
+        try:
+            res.append(CLI.reprocess(conn, [cid]))
+        except CLI.ReprocessError as e:
+            err.append(str(e))
+    with psycopg.connect(URL, row_factory=dict_row) as w:                       # 不自動提交：認領停在交易裡
+        assert ST.claim(w)["id"] == a
+        t = threading.Thread(target=run)
         t.start()
         time.sleep(0.5)
         assert t.is_alive()                                                     # 等認領的鎖
         w.commit()
-        time.sleep(0.3)
-        assert t.is_alive() and f["A.dwg"][1].with_name("001_A.converted.dxf").is_file()   # 等 A 處理完、還沒刪
-        # PostgreSQL 等到認領提交後雖不回傳 A，卻鎖住了它的新版本：worker 的下一步（process 的 reset_cad）會等這把鎖，
-        # 重新處理要先放掉，不然兩邊互等到逾時
-        w.execute("SET lock_timeout = '5s'")
-        ST.reset_cad(w, f["A.dwg"][0])
-        ST.mark(w, f["A.dwg"][0], "done")
-        w.commit()
         t.join(10)
-    c = res[0]["cases"][cid]
-    assert c["queued"] == ["A.dwg", "B.dwg"] and c["skipped"] == []
-    assert c["deleted"] == ["001_A.converted.dxf", "002_B.converted.dxf"]
+        assert not t.is_alive() and res == [] and err == [
+            f"worker 正在處理：案件 {cid} A.dwg（處理中），沒有任何更動，等它處理完再執行一次。"]
+        assert {i: r for i, r in _rows(conn).items() if i != a} == {i: r for i, r in before.items() if i != a}
+        assert _files(tmp_path) == files
+        w.execute("SET lock_timeout = '2s'")
+        ST.reset_cad(w, a)                                                      # worker 的下一步不卡
+        ST.mark(w, a, "done")
+        w.commit()
+
+    n = tmp_path / str(cid) / "004_N.dwg"
+    n.write_bytes(b"AC1032")
+    lock, new = ST.lock_for_reprocess, []
+    with psycopg.connect(URL, row_factory=dict_row) as w:
+
+        def lock_then_upload(c, ids):
+            rows = lock(c, ids)
+            new.append(ST.add_file(w, cid, "N.dwg", 6, "n" * 64, str(n)))     # 上傳、馬上被認領，還沒提交
+            assert ST.claim(w)["id"] == new[0]                                  # Q 鎖著：認領跳過
+            return rows
+        monkeypatch.setattr(ST, "lock_for_reprocess", lock_then_upload)
+        c = CLI.reprocess(conn, [cid])["cases"][cid]
+        monkeypatch.undo()
+        w.commit()
+    assert c["queued"] == ["A.dwg", "B.dwg", "Q.dwg"] and c["busy"] == []
+    assert c["deleted"] == ["001_A.converted.dxf", "002_B.converted.dxf", "002_B.bound.dxf", "003_Q.converted.dxf"]
+    rows = _rows(conn)
+    assert {rows[f[x][0]] for x in f} == {("queued", False, 0)} and rows[new[0]] == ("processing", False, 1)
+    assert n.is_file()
+
+
+def test_reprocess_stops_when_rows_stay_locked(conn, tmp_path, monkeypatch):
+    """別的程序一直鎖著這批的檔：鎖不到就整個不動、說明原因（不是丟出資料庫錯誤）。"""
+    import psycopg
+    from psycopg.rows import dict_row
+    from litian.drawing import cli as CLI
+    cid, f = _case(conn, tmp_path, "鎖著", [("A.dwg", "done", [C]), ("B.dwg", "done", [C])])
+    monkeypatch.setattr(CLI, "LOCK_TIMEOUT", "200ms")
+    before, files = _rows(conn), _files(tmp_path)
+    with psycopg.connect(URL, row_factory=dict_row) as w:
+        w.execute("SELECT id FROM case_file WHERE id = %s FOR UPDATE", (f["B.dwg"][0],))
+        with pytest.raises(CLI.ReprocessError, match="其他程序正鎖著這些檔。沒有任何更動"):
+            CLI.reprocess(conn, [cid])
+    assert _rows(conn) == before and _files(tmp_path) == files
 
 
 def test_reprocess_stops_before_deleting_anything_when_a_file_cannot_be_deleted(conn, tmp_path, monkeypatch, capsys):
