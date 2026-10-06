@@ -6,7 +6,7 @@
 
 | 路徑 | 內容 |
 |---|---|
-| `src/litian/lawdb/` | 法規庫：消防署行政規則與附件（nfa）、下載（fetch）、解析（parse）、場所代碼（occupancy）、交叉引用（xref）、建置（build）、載入（store）、檢索（search）、評測（evaluate） |
+| `src/litian/lawdb/` | 法規庫：消防署行政規則與附件（nfa）、下載（fetch）、解析（parse）、場所代碼（occupancy）、交叉引用（xref）、建置（build）、載入（store）、檢索（search）、評測（evaluate）、條文方框表格轉區塊（boxtable） |
 | `src/litian/api.py` | FastAPI 服務 |
 | `src/litian/drawing/` | 圖面管線：DWG 轉檔佇列、圖面中介資料抽取（文字、圖塊、圖紙）、背景處理程序 |
 | `src/litian/plan/` | 平面理解：展開圖塊幾何、由牆柱門窗圍出房間、判斷房間種類（廁所、樓梯、機電室、挑空…）、樓地板範圍、可走區域 |
@@ -105,6 +105,8 @@ bash /opt/litian/repo/deploy/oracle/11_install_autodeploy.sh
 | GET | `/api/law/ask/status` | AI 回答是否啟用、每日上限 |
 | POST | `/api/law/ask` | 法規問答（SSE 串流）：先回檢索到的條文，再串流 AI 回答與引用；需 `X-Access-Code` |
 
+條文節點（檢索結果、`/api/law/nodes`、問答來源）的 `text` 有方框字元表格時另附 `blocks`（`article_text` 有表格時附 `article_blocks`）：依原文順序的文字／表格（儲存格含跨列、跨欄與表頭列數）／原樣區塊，前端照此畫成真正的表格；格式見 `src/litian/lawdb/boxtable.py`。
+
 ## 法規問答網頁
 
 - AI 使用 OpenAI `gpt-5.6-sol`（Responses API，`reasoning.effort` medium，`store=false` 不在 OpenAI 端保存對話；2026-10-01 使用者決定）。
@@ -163,7 +165,7 @@ bash /opt/litian/repo/deploy/oracle/11_install_autodeploy.sh
 
 | 方法 | 路徑 | 用途 |
 |---|---|---|
-| GET | `/api/cases/{id}/reviews` | 檢核結果、引用條文、審核結果、檢核條件；各樓層 `cad`＝原圖狀態（done／pending／rendering／failed） |
+| GET | `/api/cases/{id}/reviews` | 檢核結果、引用條文（全文；有方框表格時附 `blocks`）、審核結果、檢核條件；各樓層 `cad`＝原圖狀態（done／pending／rendering／failed） |
 | PUT | `/api/cases/{id}/context` | 存檢核條件並排入重跑檢核 |
 | POST | `/api/cases/{id}/files/{fid}/decisions` | 缺失接受／退回／撤回 |
 | GET | `/api/cases/{id}/files/{fid}/review/{樓層}.svg` | 各層檢核標示圖（簡化） |
