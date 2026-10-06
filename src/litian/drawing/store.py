@@ -170,7 +170,8 @@ def requeue_review(conn, file_id: int) -> bool:
 
 def lock_for_reprocess(conn, case_ids: list[int]) -> list[dict]:
     """（在交易裡呼叫）鎖住這些案件裡可以整個重新處理的檔：DWG／DXF、不在處理中。鎖到交易結束：worker 認領與背景畫圖
-    （SKIP LOCKED）都會跳過；剛被認領還沒提交的，等它提交後重新判斷（變成處理中就不回傳、不鎖）。
+    （SKIP LOCKED）都會跳過；剛被認領還沒提交的，等它提交後重新判斷（變成處理中就不回傳，但 PostgreSQL 照樣鎖住
+    它的新版本到交易結束：要等 worker 時先全部放掉，見 cli._lock_when_idle）。
     FOR NO KEY UPDATE：不擋工作台寫審核決定（外鍵只要 KEY SHARE）。"""
     return conn.execute("SELECT id, case_id, name, kind, path, status FROM case_file "
                         "WHERE case_id = ANY(%s) AND status IN ('queued', 'done', 'failed') AND kind IN ('dwg', 'dxf') "
