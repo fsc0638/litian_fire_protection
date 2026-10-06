@@ -72,6 +72,14 @@ h2 { font-size: 1rem; margin: 0 0 10px; }
 .answer .body p { margin: 0 0 .7em; }
 .answer .body ul, .answer .body ol { margin: 0 0 .7em; padding-left: 1.4em; }
 .answer .body li { margin: .15em 0; }
+.answer .body h3, .answer .body h4, .answer .body h5, .answer .body h6 { margin: 1em 0 .4em; line-height: 1.45; }
+.answer .body h3 { font-size: 1.05rem; }
+.answer .body h4 { font-size: 1rem; }
+.answer .body h5, .answer .body h6 { font-size: .95rem; }
+.answer .body h6 { color: var(--muted); }
+.answer .body > :first-child { margin-top: 0; }
+.answer .body hr { border: 0; border-top: 1px solid var(--border); margin: 1em 0; }
+.answer .body .tbl { margin: 0 0 .7em; }
 .cite {
   display: inline-block; min-width: 1.4em; padding: 0 .35em; margin: 0 1px; border-radius: 6px;
   background: var(--accent-soft); color: var(--accent-text); font-size: .75em; font-weight: 700;
@@ -100,6 +108,8 @@ article.src h3 { font-size: .98rem; margin: 0; line-height: 1.45; overflow-wrap:
 pre.box { margin: 8px 0 0; padding: 10px; background: var(--surface-2); border-radius: 8px; overflow-x: auto; font-size: .8rem; line-height: 1.4; }
 .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .actions button { font-size: .85rem; padding: 3px 10px; }
+.actions button.sub { background: transparent; color: var(--muted); }
+.actions button.sub:hover { color: var(--text); }
 .more { margin-top: 10px; padding: 10px 12px; background: var(--surface-2); border-radius: 8px; white-space: pre-wrap; font-size: .92rem; overflow-x: auto; }
 .more.scroll { white-space: normal; }
 .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
@@ -109,6 +119,15 @@ table.law th, table.law td { border: 1px solid var(--border); padding: 4px 6px; 
 table.law th { background: var(--surface); }
 table.law td:first-child, table.law th:first-child { min-width: 15em; }
 table.law td:not(:first-child) { min-width: 6em; }
+/* 條文內文與 AI 回答裡的表格：跟著內容寬度，太寬時左右捲動 */
+.blocks { margin: 8px 0 0; white-space: normal; }
+.blocks > * { margin: 8px 0 0; }
+.blocks > :first-child, .more .blocks { margin-top: 0; }
+.tbl { overflow-x: auto; max-width: 100%; }
+table.law.flow { min-width: 0; font-size: .88rem; line-height: 1.55; }
+table.law.flow th, table.law.flow td { min-width: 4.5em; padding: 6px 10px; white-space: pre-line; }
+table.law.flow th { background: var(--surface-2); font-weight: 600; }
+table.law.flow td { background: var(--surface); }
 .part-title { font-weight: 600; margin: 12px 0 6px; }
 .formula { font-family: ui-monospace, Consolas, monospace; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; margin: 6px 0; overflow-x: auto; white-space: pre; }
 .vars { margin: 4px 0 8px; padding-left: 1.2em; font-size: .88rem; }
@@ -172,7 +191,104 @@ footer p { margin: 0 0 .4em; }
 (() => {
   const EXAMPLES = ["KTV 要不要裝自動撒水設備？", "旅館屬於哪一類場所？", "第三層可以選設哪些避難器具？", "誰可以做消防安全設備的設計和監造？", "密閉式撒水頭向下型的圖例"];
   const $ = (s) => document.querySelector(s);
+  // ---------- 排版純函式（條文 blocks、回答的極簡 Markdown；tests/test_index_page.py 用 node 跑）----------
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  // 條文 blocks（後端把方框字元表格拆成 text／table／pre）轉成 HTML：表格直接是真表格，拆不了的才保留原樣
+  function blocksHtml(list) {
+    const cell = (tag, c) => {
+      const rs = Math.max(1, (c && c.rowspan) | 0), cs = Math.max(1, (c && c.colspan) | 0);
+      return "<" + tag + (rs > 1 ? ' rowspan="' + rs + '"' : "") + (cs > 1 ? ' colspan="' + cs + '"' : "") + ">" + esc(c && c.text) + "</" + tag + ">";
+    };
+    let h = "";
+    for (const b of list || []) {
+      if (!b) continue;
+      if (b.type === "table") {
+        // 表頭列用 th；全部放同一個 tbody，表頭的跨列儲存格才不會被 thead 切斷
+        const head = Math.max(0, b.header_rows | 0);
+        h += '<div class="tbl"><table class="law flow"><tbody>' +
+          (b.rows || []).map((r, i) => "<tr>" + (r || []).map((c) => cell(i < head ? "th" : "td", c)).join("") + "</tr>").join("") +
+          "</tbody></table></div>";
+      } else if (b.type === "pre") {
+        h += '<pre class="box">' + esc(b.text) + "</pre>";
+      } else {
+        // 去掉頭尾空行，保留第一行的縮排
+        const t = String(b.text ?? "").replace(/^(?:[ \t\u3000]*\n)+/, "").replace(/\s+$/, "");
+        if (t) h += '<p class="text">' + esc(t) + "</p>";
+      }
+    }
+    return '<div class="blocks">' + h + "</div>";
+  }
+
+  // Markdown 表格的一列拆成儲存格：頭尾的 | 可有可無，\| 是字面上的 |；全形「｜」不算
+  function mdCells(line) {
+    let t = line.trim();
+    if (t.startsWith("|")) t = t.slice(1);
+    if (t.endsWith("|") && !t.endsWith("\\|")) t = t.slice(0, -1);
+    const out = [];
+    let cur = "";
+    for (let i = 0; i < t.length; i++) {
+      if (t[i] === "\\" && t[i + 1] === "|") { cur += "|"; i++; }
+      else if (t[i] === "|") { out.push(cur.trim()); cur = ""; }
+      else cur += t[i];
+    }
+    out.push(cur.trim());
+    return out;
+  }
+  // 分隔列（|---|:--:|）：一定要有 |，才不會跟分隔線 --- 搞混
+  const isMdSep = (line) => line.includes("|") && /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/.test(line);
+
+  // 極簡 Markdown：段落、條列、粗體、標題、分隔線、表格；chip(n) 產生 [n] 的引用標記
+  function mdHtml(s, chip) {
+    let html = "", list = null, para = [];
+    const inline = (t) => esc(t)
+      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+      .replace(/\[(\d+(?:\s*[,，、]\s*\d+)*)\]/g, (_, ns) => ns.split(/\s*[,，、]\s*/).map(chip).join(""));
+    const flushPara = () => { if (para.length) { html += "<p>" + para.map(inline).join("<br>") + "</p>"; para = []; } };
+    const flushList = () => { if (list) { html += "<" + list.tag + (list.tag === "ol" && list.start !== 1 ? ' start="' + list.start + '"' : "") + ">" + list.items.map((t) => "<li>" + inline(t) + "</li>").join("") + "</" + list.tag + ">"; list = null; } };
+    const lines = s.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      // 表格：有 | 的一列，下一列是分隔列才算；串流中分隔列還沒到時先當一般段落
+      if (line.includes("|") && i + 1 < lines.length && isMdSep(lines[i + 1])) {
+        flushPara(); flushList();
+        const head = mdCells(line);
+        const align = mdCells(lines[i + 1]).map((c) => /^:-*:$/.test(c) ? "center" : /-:$/.test(c) ? "right" : "");
+        const rows = [];
+        for (i += 2; i < lines.length && lines[i].trim() && lines[i].includes("|"); i++) rows.push(mdCells(lines[i]));
+        i--;
+        // 欄數參差時補空格，多出來的欄也照樣顯示，不丟內容
+        const n = Math.max(head.length, ...rows.map((r) => r.length));
+        const td = (tag, t, j) => "<" + tag + (align[j] ? ' style="text-align:' + align[j] + '"' : "") + ">" + inline(t ?? "") + "</" + tag + ">";
+        const tr = (r, tag) => "<tr>" + Array.from({ length: n }, (_, j) => td(tag, r[j], j)).join("") + "</tr>";
+        html += '<div class="tbl"><table class="law flow"><thead>' + tr(head, "th") + "</thead>" +
+          (rows.length ? "<tbody>" + rows.map((r) => tr(r, "td")).join("") + "</tbody>" : "") + "</table></div>";
+        continue;
+      }
+      const hd = line.match(/^\s{0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/);
+      if (hd) {
+        // 回答卡片裡的標題：# 對到 h3，往下依序縮小
+        flushPara(); flushList();
+        const tag = "h" + Math.min(hd[1].length + 2, 6);
+        html += "<" + tag + ">" + inline(hd[2]) + "</" + tag + ">";
+        continue;
+      }
+      if (/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/.test(line)) { flushPara(); flushList(); html += "<hr>"; continue; }
+      // 編號清單必須是「1. 」「1) 」（後面有空白）或「1、」，避免把「2.5 公尺」這類小數當成編號而改掉數字
+      const ul = line.match(/^\s*[-•*]\s+(.*)$/), ol = line.match(/^\s*(\d+)(?:[.)]\s+|、\s*)(.*)$/);
+      if (ul || ol) {
+        flushPara();
+        const tag = ul ? "ul" : "ol";
+        if (!list || list.tag !== tag) { flushList(); list = { tag, items: [], start: ol ? Number(ol[1]) : 1 }; }
+        list.items.push(ul ? ul[1] : ol[2]);
+      } else if (!line.trim()) { flushPara(); flushList(); }
+      else if (list && /^\s{2,}/.test(line)) { list.items[list.items.length - 1] += " " + line.trim(); }
+      else { flushList(); para.push(line); }
+    }
+    flushPara(); flushList();
+    return html;
+  }
+  // ---------- 排版純函式結束 ----------
   const store = {
     get(k) { try { return localStorage.getItem(k) || ""; } catch { return ""; } },
     set(k, v) { try { localStorage.setItem(k, v); } catch {} },
@@ -298,36 +414,17 @@ footer p { margin: 0 0 .4em; }
     }
   }
 
-  // ---------- 回答：極簡 Markdown（段落、條列、粗體）＋引用標記 ----------
+  // ---------- 回答：極簡 Markdown（mdHtml）＋引用標記 ----------
   function renderAnswer() {
     let s = "";
     for (const k of [...blocks.keys()].sort((a, b) => a - b)) s += blocks.get(k).text;
-    let html = "", list = null, para = [];
     // 回答裡的 [1]、[2,3] 轉成引用標記；不在這次條文範圍內的編號標成警示
     const chip = (x) => {
       const n = Number(x);
       if (n >= 1 && n <= sources.length) { markCited(n); return '<a class="cite" href="#src-' + n + '" data-n="' + n + '">' + n + "</a>"; }
       return '<span class="cite bad" title="不在這次檢索的條文中">' + n + "?</span>";
     };
-    const inline = (t) => esc(t)
-      .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
-      .replace(/\[(\d+(?:\s*[,，、]\s*\d+)*)\]/g, (_, ns) => ns.split(/\s*[,，、]\s*/).map(chip).join(""));
-    const flushPara = () => { if (para.length) { html += "<p>" + para.map(inline).join("<br>") + "</p>"; para = []; } };
-    const flushList = () => { if (list) { html += "<" + list.tag + (list.tag === "ol" && list.start !== 1 ? ' start="' + list.start + '"' : "") + ">" + list.items.map((t) => "<li>" + inline(t) + "</li>").join("") + "</" + list.tag + ">"; list = null; } };
-    for (const line of s.split("\n")) {
-      // 編號清單必須是「1. 」「1) 」（後面有空白）或「1、」，避免把「2.5 公尺」這類小數當成編號而改掉數字
-      const ul = line.match(/^\s*[-•*]\s+(.*)$/), ol = line.match(/^\s*(\d+)(?:[.)]\s+|、\s*)(.*)$/);
-      if (ul || ol) {
-        flushPara();
-        const tag = ul ? "ul" : "ol";
-        if (!list || list.tag !== tag) { flushList(); list = { tag, items: [], start: ol ? Number(ol[1]) : 1 }; }
-        list.items.push(ul ? ul[1] : ol[2]);
-      } else if (!line.trim()) { flushPara(); flushList(); }
-      else if (list && /^\s{2,}/.test(line)) { list.items[list.items.length - 1] += " " + line.trim(); }
-      else { flushList(); para.push(line); }
-    }
-    flushPara(); flushList();
-    $("#answer").innerHTML = html;
+    $("#answer").innerHTML = mdHtml(s, chip);
   }
 
   document.addEventListener("click", (e) => {
@@ -353,10 +450,13 @@ footer p { margin: 0 0 .4em; }
     const el = document.createElement("article");
     el.className = "card src"; el.id = "src-" + n;
     const meta = [s.law_name, s.law_modified ? "修正 " + s.law_modified : "", s.chapter].filter(Boolean).join("｜");
-    const boxAt = (s.text || "").search(/[┌│└├]/);   // 方框字元排版的表格：原文預設收起
+    const boxAt = (s.text || "").search(/[┌│└├]/);   // 方框字元排版的表格
+    const hasBlocks = Array.isArray(s.blocks) && s.blocks.length > 0;
     let h = '<header><span class="num">' + n + '</span><div><h3>' + esc(s.citation) + '</h3><p class="meta">' + esc(meta) + "</p></div></header>";
     if (s.parents && s.parents.length) h += '<p class="parents">' + esc(s.parents.join(" ＞ ")) + "</p>";
-    h += '<p class="text">' + esc(boxAt >= 0 ? (s.text.slice(0, boxAt).trim() || "（本條為表格）") : s.text) + "</p>";
+    // 後端拆好的 blocks：表格直接畫成真表格；沒有 blocks（舊資料）才退回原文收起表格的做法
+    h += hasBlocks ? blocksHtml(s.blocks)
+      : '<p class="text">' + esc(boxAt >= 0 ? (s.text.slice(0, boxAt).trim() || "（本條為表格）") : s.text) + "</p>";
     if (s.legend && s.legend.symbol_urls && s.legend.symbol_urls.length) {
       h += '<div class="legend">' + s.legend.symbol_urls.map((u) => '<img src="' + esc(u) + '" alt="' + esc(s.legend.name) + ' 圖例" loading="lazy">').join("") + "</div>";
       if (s.legend.note) h += '<p class="meta">備註：' + esc(s.legend.note) + "</p>";
@@ -366,7 +466,7 @@ footer p { margin: 0 0 .4em; }
     const acts = [];
     if (s.article_text && s.article_text !== s.text) acts.push('<button type="button" data-act="article">看整條</button>');
     if (s.table && s.table.url) acts.push('<button type="button" data-act="table">看表格</button>');
-    if (boxAt >= 0) acts.push('<button type="button" data-act="raw">看原文排版</button>');
+    if (boxAt >= 0) acts.push('<button type="button" class="sub" data-act="raw">看原文排版</button>');   // 核對法規原文用
     if (acts.length) h += '<div class="actions">' + acts.join("") + "</div>";
     h += '<div class="more hidden" data-more="article"></div><div class="more scroll hidden" data-more="table"></div><pre class="box hidden" data-more="raw"></pre>';
     el.innerHTML = h;
@@ -375,7 +475,10 @@ footer p { margin: 0 0 .4em; }
       if (!b) return;
       const panel = el.querySelector('[data-more="' + b.dataset.act + '"]');
       if (!panel.classList.contains("hidden")) { panel.classList.add("hidden"); return; }
-      if (b.dataset.act === "article" || b.dataset.act === "raw") {
+      if (b.dataset.act === "article" && Array.isArray(s.article_blocks) && s.article_blocks.length) {
+        panel.innerHTML = blocksHtml(s.article_blocks);
+        panel.classList.remove("hidden");
+      } else if (b.dataset.act === "article" || b.dataset.act === "raw") {
         panel.textContent = b.dataset.act === "article" ? s.article_text : s.text;
         panel.classList.remove("hidden");
       } else {
