@@ -779,3 +779,41 @@ def test_bind_xrefs_converts_newest_and_falls_back(tmp_path, monkeypatch):
     calls.clear()
     W.bind_xrefs(job, tmp_path / "001_main.converted.dxf", tmp_path, skip=["004_Area_1F.dwg"])
     assert calls == [("f7x0u3", "003_Area_1F.dwg")]                    # 較早的已轉好：最新的再試一次，失敗就用轉好的
+
+
+
+# ---------- 報告列印用整張圖 ----------
+
+def _tiled_sheet(d, w=6000, h=3000):
+    """在 d 寫一組圖磚＋meta.json：白底，(1000..2000, 500..1000) 一塊紅色。"""
+    import os
+    from PIL import Image, ImageDraw
+    img = Image.new("RGB", (w, h), "white")
+    ImageDraw.Draw(img).rectangle((1000, 500, 2000, 1000), fill=(255, 0, 0))
+    CV.write_tiles(img, d)
+    meta = {"version": 1, "width": w, "height": h, "tile_size": 512, "overlap": 0, "format": "png",
+            "max_level": CV.max_level(w, h), "transform": [10, 0, 0, 0, -10, h], "rendered_at": "2026-10-06T00:00:00+00:00"}
+    (d / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    os.utime(d / "meta.json", (1_700_000_000, 1_700_000_000))
+    return meta
+
+
+def test_print_image_stitches_level_within_limit_and_caches(tmp_path):
+    import os
+    d = tmp_path / "cad" / "1F-0"
+    _tiled_sheet(d)
+    p = CV.print_image(d, limit=5000)                                    # 6000 超過上限：用下一層（3000×1500）
+    img = Image.open(p)
+    assert img.size == (3000, 1500) and img.mode == "P"                  # 減成 256 色
+    rgb = img.convert("RGB")
+    assert rgb.getpixel((750, 375)) == (255, 0, 0) and rgb.getpixel((100, 100)) == (255, 255, 255)
+    first = p.stat().st_mtime
+    assert CV.print_image(d, limit=5000).stat().st_mtime == first        # 快取
+    os.utime(d / "meta.json", (first + 10, first + 10))                   # 圖重畫過（meta 比較新）：重做
+    assert CV.print_image(d, limit=8000).stat().st_mtime >= first
+    assert Image.open(d / "print.png").size == (6000, 3000)
+    (d / str(CV.max_level(6000, 3000))).joinpath("0_0.png").unlink()     # 少一塊：丟錯（報告退回簡化圖），不產生半張圖
+    os.utime(d / "meta.json", (first + 20, first + 20))
+    with pytest.raises(OSError):
+        CV.print_image(d, limit=8000)
+    assert not list(d.glob(".print.*"))

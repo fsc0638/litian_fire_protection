@@ -395,6 +395,41 @@ def _backend(base):
     return _BACKEND
 
 
+PRINT_MAX = 5000                      # 報告列印用整張圖的長邊上限（A4 橫印約 370 dpi）
+
+
+def print_image(sheet_dir: str | Path, limit: int = PRINT_MAX) -> Path:
+    """報告（列印、存成 PDF）用的整張原圖：從圖磚拼回長邊不超過 limit 的那一層，減成 256 色存成 print.png。
+    快取在圖磚資料夾（圖重畫時整個資料夾換掉，舊的跟著消失；meta.json 比較新時也重做）。回傳檔案路徑。"""
+    import uuid
+
+    from PIL import Image
+    d = Path(sheet_dir)
+    meta_path, out = d / "meta.json", d / "print.png"
+    if out.is_file() and out.stat().st_mtime >= meta_path.stat().st_mtime:
+        return out
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    W, H, L, T = int(meta["width"]), int(meta["height"]), int(meta["max_level"]), int(meta.get("tile_size") or TILE)
+    k = 0
+    while math.ceil(max(W, H) / 2 ** k) > limit and k < L:
+        k += 1
+    w, h = math.ceil(W / 2 ** k), math.ceil(H / 2 ** k)
+    img = Image.new("RGB", (w, h), "white")
+    for col in range(math.ceil(w / T)):
+        for row in range(math.ceil(h / T)):
+            with Image.open(d / str(L - k) / f"{col}_{row}.png") as tile:       # 少一塊就整張失敗（呼叫端退回簡化圖）
+                img.paste(tile.convert("RGB"), (col * T, row * T))
+    q = img.quantize(colors=256, method=Image.Quantize.MAXCOVERAGE, dither=Image.Dither.NONE)   # 白底維持純白，約 0.5 MB
+    del img
+    tmp = d / f".print.{uuid.uuid4().hex}.tmp"
+    try:
+        q.save(tmp, format="PNG")
+        os.replace(tmp, out)                                                 # 同時有好幾個請求在做：誰先做完都一樣
+    finally:
+        tmp.unlink(missing_ok=True)
+    return out
+
+
 def max_level(w: int, h: int) -> int:
     return max(0, math.ceil(math.log2(max(w, h, 1))))
 

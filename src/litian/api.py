@@ -1160,32 +1160,51 @@ def cases_decide(case_id: int, file_id: int, body: DecisionBody, user: dict = De
 
 
 def _report_inputs(case_id: int):
+    """報告用的資料：檢核結果、各樓層的簡化標示圖（SVG），以及原圖已畫好的樓層的原圖資訊
+    （列印圖網址、meta.json 的尺寸與座標換算、缺失疊圖資料）；原圖沒好的樓層報告照用簡化圖。"""
     case = _case_or_404(case_id)
     b = _review_bundle(case_id)
     occ = {r["code"]: r["text"] for r in _all("SELECT code, text FROM occupancy_code")}
-    svgs = {}
+    svgs, cads = {}, {}
     root = CASES_DIR.resolve()
+
+    def inside(p: Path) -> Path | None:
+        p = p.resolve()
+        return p if root in p.parents and p.is_file() else None
+
     for r in b["reviews"]:
         for fl in (r["result"] or {}).get("floors", []):
-            if r.get("svg_dir") and REVIEW_LABEL.match(_svg_name(fl) or ""):
-                p = (Path(r["svg_dir"]) / f"{_svg_name(fl)}.svg").resolve()
-                if root in p.parents and p.is_file():
-                    svgs[(r["file_id"], _svg_name(fl))] = p.read_text(encoding="utf-8")
-    return case, b, occ, svgs
+            name = _svg_name(fl)
+            if not r.get("svg_dir") or not REVIEW_LABEL.fullmatch(name or ""):
+                continue
+            base = Path(r["svg_dir"])
+            if p := inside(base / f"{name}.svg"):
+                svgs[(r["file_id"], name)] = p.read_text(encoding="utf-8")
+            mp, op = inside(base / "cad" / name / "meta.json"), inside(base / f"{name}.overlay.json")
+            if fl.get("cad") != "done" or not mp or not op:
+                continue
+            try:
+                meta, ov = json.loads(mp.read_text(encoding="utf-8")), json.loads(op.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            v = re.sub(r"[^0-9A-Za-z:+.-]", "", str(meta.get("rendered_at") or ""))
+            cads[(r["file_id"], name)] = {"src": f"/api/cases/{case_id}/files/{r['file_id']}/cad/{name}/print.png?v={v}",
+                                          "meta": meta, "overlay": ov}
+    return case, b, occ, svgs, cads
 
 
 @app.get("/api/cases/{case_id}/report", include_in_schema=False)
 def cases_report(case_id: int, user: dict = Depends(current_user)):
     from .review import report as RP
-    case, b, occ, svgs = _report_inputs(case_id)
-    html = RP.build_html(case, b["context"], occ, b["reviews"], b["decisions"], b["laws"], svgs, user["username"])
+    case, b, occ, svgs, cads = _report_inputs(case_id)
+    html = RP.build_html(case, b["context"], occ, b["reviews"], b["decisions"], b["laws"], svgs, user["username"], cads=cads)
     return HTMLResponse(html, headers={"Cache-Control": "private, no-store"})
 
 
 @app.get("/api/cases/{case_id}/report.csv", include_in_schema=False)
 def cases_report_csv(case_id: int, user: dict = Depends(current_user)):
     from .review import report as RP
-    case, b, _occ, _svgs = _report_inputs(case_id)
+    case, b, _occ, _svgs, _cads = _report_inputs(case_id)
     data = RP.build_csv(case, b["reviews"], b["decisions"], b["laws"])
     return Response(data.encode("utf-8"), media_type="text/csv; charset=utf-8", headers={
         "Content-Disposition": f"attachment; filename=\"case-{case_id}-findings.csv\"", "Cache-Control": "private, no-store"})
@@ -1229,6 +1248,20 @@ def cases_cad_meta(case_id: int, file_id: int, name: str, user: dict = Depends(c
     """圖磚資訊：尺寸、層級、公尺座標 → 像素的換算。"""
     return FileResponse(_review_file(case_id, file_id, name, "cad", name, "meta.json"),
                         media_type="application/json", headers=JSON_HEADERS)
+
+
+@app.get("/api/cases/{case_id}/files/{file_id}/cad/{name}/print.png", include_in_schema=False)
+def cases_cad_print(case_id: int, file_id: int, name: str, user: dict = Depends(current_user)):
+    """報告列印用的整張原圖：從圖磚拼回（第一次要幾秒，之後用快取）。"""
+    from .review import cadview as CV
+    meta = _review_file(case_id, file_id, name, "cad", name, "meta.json")
+    try:
+        p = CV.print_image(meta.parent)
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        log.warning("cad print image failed file=%s name=%s: %s", file_id, name, e)
+        raise HTTPException(404, "原圖還沒準備好")
+    return FileResponse(p, media_type="image/png",
+                        headers={"Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff"})
 
 
 @app.get("/api/cases/{case_id}/files/{file_id}/cad/{name}/{level}/{tile}", include_in_schema=False)

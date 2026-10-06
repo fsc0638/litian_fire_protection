@@ -191,10 +191,57 @@ def test_report_html_and_csv(client, monkeypatch, tmp_path):
     html = client.get("/api/cases/3/report").text
     assert "消防安全設備圖說自審報告" in html and "丁-2　中度危險工作場所" in html and "<title>plan</title>" in html
     assert "辦公室有 30 ㎡" in html and "已退回的缺失" not in html and "1F 天花板高度" in html and "室內消防栓設備" in html
+    assert "print.png" not in html and "@page plan" in html                    # 原圖沒好：用簡化圖
     csv = client.get("/api/cases/3/report.csv")
     assert csv.headers["content-disposition"].startswith("attachment") and csv.content.startswith("\ufeff".encode())
     text = csv.content.decode("utf-8-sig")
     assert text.count("\n") == 4 and "退回" in text and "接受" in text and "未審核" in text
+
+
+def test_report_uses_cad_original_with_vector_marks(client, monkeypatch, tmp_path):
+    """原圖已畫好的樓層：報告放列印用整張原圖＋向量缺失標示（編號同缺失表、退回的不畫），另附簡化圖當載不到時的退路。"""
+    import json
+
+    from litian.review import cadview as CV
+    from .test_cadview import _tiled_sheet
+    client.cookies.set("__Host-fr_session", "good-token")
+    rev = tmp_path / "3" / "001.dxf.review"
+    (rev / "cad" / "1F").mkdir(parents=True)
+    (rev / "1F.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"><title>plan</title></svg>', encoding="utf-8")
+    meta = _tiled_sheet(rev / "cad" / "1F", w=1200, h=800)
+    (rev / "cad" / "status.json").write_text(json.dumps({"state": "done", "sheets": {"1F": "done"}}), encoding="utf-8")
+    sq = [[[10, 10], [20, 10], [20, 20], [10, 20], [10, 10]]]
+    ov = {"version": 1, "findings": [
+        {"no": 1, "key": "aaaaaaaaaaaa", "severity": "RED", "geom": {"type": "Polygon", "coordinates": sq}, "anchor": [15, 15]},
+        {"no": 2, "key": "bbbbbbbbbbbb", "severity": "BLUE", "geom": {"type": "Point", "coordinates": [50, 50]}, "anchor": None},
+        {"no": 3, "key": "cccccccccccc", "severity": "RED", "geom": {"type": "Polygon", "coordinates": sq}, "anchor": [12, 12]}]}
+    (rev / "1F.overlay.json").write_text(json.dumps(ov), encoding="utf-8")
+    f1 = {"no": 1, "key": "aaaaaaaaaaaa", "rule": "HYD-34", "severity": "RED", "category": "距離超過", "floor": "1F",
+          "title": "辦公室不在消防栓 25 m 內", "why": "水平距離", "fix": "增設", "law": [], "missing": [], "rooms": []}
+    result = {"floors": [{"label": "1F", "svg_name": "1F", "number": "F-101", "title": "壹層", "area": 450,
+                          "equipment": {"hydrant": 1}, "notes": [],
+                          "findings": [f1, dict(f1, no=2, key="bbbbbbbbbbbb", severity="BLUE"), dict(f1, no=3, key="cccccccccccc")]}],
+              "building": None}
+    monkeypatch.setattr(api, "CASES_DIR", tmp_path)
+    monkeypatch.setattr(api, "_one", lambda sql, *a: {"svg_dir": str(rev)} if "svg_dir" in sql else
+                        {"id": 3, "name": "測試案", "created_by": "amy", "created_at": "t"})
+    monkeypatch.setattr(api, "_all", lambda sql, *a: [{"file_id": 7, "name": "F.dxf", "status": "done", "error": None, "result": result,
+                                                       "svg_dir": str(rev), "created_at": "t", "cad_state": "done"}]
+                        if "file_review" in sql else [])
+    monkeypatch.setattr(api.DS, "get_context", lambda c, cid: {})
+    monkeypatch.setattr(api.DS, "decisions", lambda c, cid: {"7": {"cccccccccccc": {"decision": "reject", "note": None}}})
+    html = client.get("/api/cases/3/report").text
+    assert "/api/cases/3/files/7/cad/1F/print.png?v=2026-10-06T00:00:00+00:00" in html
+    marks = html[html.index('<svg class="marks"'):html.index("</svg>", html.index('<svg class="marks"'))]
+    assert f'viewBox="0 0 {meta["width"]} {meta["height"]}"' in marks
+    assert ">1</text>" in marks and ">2</text>" in marks and ">3</text>" not in marks          # 退回的不畫
+    assert 'fill="none" fill-opacity="0.2" stroke="#1a73e8"' in marks                           # 「建議」只畫外框
+    assert "M100.0,700.0L200.0,700.0" in marks                                                 # 公尺 → 原尺寸像素（meta.transform）
+    assert "class='plan fallback'" in html and "<title>plan</title>" in html and "id='print'" in html and " disabled>" in html
+    r = client.get("/api/cases/3/files/7/cad/1F/print.png")
+    assert r.status_code == 200 and r.headers["content-type"] == "image/png" and r.content[:4] == b"\x89PNG"
+    client.cookies.clear()
+    assert client.get("/api/cases/3/files/7/cad/1F/print.png").status_code == 401
 
 
 # ---------- 檔案處理狀態的白話說明（note）與外部參考（xref_of） ----------
