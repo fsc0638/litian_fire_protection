@@ -56,6 +56,53 @@ def test_wait_success_failure_and_timeout(tmp_path):
     assert not (spool / "in/f3.dwg").exists()                       # 逾時要撤回輸入
 
 
+def _deliver(spool: Path, job: str, text: str, delay: float = 0.1) -> threading.Thread:
+    """模擬轉檔服務：看到這次的輸入 in/<job>.dwg 後才交件（DXF 先、結果 json 最後，都用改名）。"""
+    def run():
+        for _ in range(500):
+            src = spool / "in" / f"{job}.dwg"
+            if src.exists():
+                time.sleep(delay)
+                (spool / "out" / f"{job}.dxf.part").write_text(text, encoding="utf-8")
+                (spool / "out" / f"{job}.dxf.part").replace(spool / "out" / f"{job}.dxf")
+                (spool / "out" / f"{job}.json.part").write_text(json.dumps({"ok": True}))
+                (spool / "out" / f"{job}.json.part").replace(spool / "out" / f"{job}.json")
+                src.unlink()
+                return
+            time.sleep(0.01)
+    t = threading.Thread(target=run)
+    t.start()
+    return t
+
+
+def test_convert_ignores_stale_result_of_same_job(tmp_path):
+    """工作代號固定（f<檔案id>）：上次逾時、worker 重啟後才交出、沒人取走的舊結果（例：轉檔器升級前的）不可以被這次拿去用。"""
+    spool = tmp_path / "spool"
+    (spool / "out").mkdir(parents=True)
+    (spool / "out/f5.dxf").write_text("舊轉檔器的結果", encoding="utf-8")
+    (spool / "out/f5.json").write_text(json.dumps({"ok": True}))
+    src = tmp_path / "001_A.dwg"
+    src.write_bytes(b"AC1027")
+    t = _deliver(spool, "f5", "新的結果")
+    dst = W._convert(spool, "f5", src, tmp_path / "001_A.converted.dxf")
+    t.join()
+    assert dst.read_text(encoding="utf-8") == "新的結果" and not list((spool / "out").iterdir())
+
+
+def test_wait_keeps_waiting_when_result_has_no_dxf(tmp_path):
+    """舊工作交件到一半（DXF 已寫、結果還沒寫）時被 submit 清掉 DXF：只剩結果的那份不收，等這次送出的。"""
+    spool = tmp_path
+    (spool / "out").mkdir()
+    (spool / "in").mkdir()
+    (spool / "in/f8.dwg").write_bytes(b"x")
+    (spool / "out/f8.json").write_text(json.dumps({"ok": True}))
+    t = _deliver(spool, "f8", "DXF")
+    dxf, res = CC.wait(spool, "f8", 5, poll_s=0.01)
+    got = dxf.read_text(encoding="utf-8") if dxf.exists() else None        # 收下的當下 DXF 就要在
+    t.join()
+    assert res["ok"] and got == "DXF"
+
+
 def test_converter_converts_and_repairs(tmp_path, monkeypatch):
     conv = load_converter(monkeypatch, tmp_path)
     # 假的 dwg2dxf：輸出一個含「值裡夾換行」的 DXF，修補程式要把它接回去
