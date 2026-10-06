@@ -56,8 +56,8 @@ def test_line_break_rules():
 
 # ---------- 中文換行 ----------
 
-def _lines(doc):
-    """照 cadview 的前端畫模型空間，每行由上而下：（該行文字, 左緣 x, 右緣 x）。"""
+def _texts(doc):
+    """照 cadview 的前端畫模型空間，依序每段畫出的文字：（文字, 左緣 x, 右緣 x, 基線 y）。"""
     from ezdxf.addons.drawing import Frontend, RenderContext
     from ezdxf.addons.drawing.recorder import Recorder
     fe = CV._frontend(Frontend)(RenderContext(doc, export_mode=True), Recorder())
@@ -72,8 +72,13 @@ def _lines(doc):
 
     fe.pipeline.draw_text = record
     fe.draw_layout(doc.modelspace())
+    return out
+
+
+def _lines(doc):
+    """照 cadview 的前端畫模型空間，每行由上而下：（該行文字, 左緣 x, 右緣 x）。"""
     rows = {}
-    for t, x0, x1, y in out:
+    for t, x0, x1, y in _texts(doc):
         r = rows.setdefault(y, ["", x0, x1])
         r[0] += t
         r[1], r[2] = min(r[1], x0), max(r[2], x1)
@@ -161,6 +166,32 @@ def test_indent_guard_also_for_latin_and_width_zero_mtext():
     rows = _lines(_doc(r"\pxl150;一、消防安全設備之設置\P二、應依各類場所辦理", 0.0, h))
     assert [r[0] for r in rows] == ["一、消防安全設備之設置", "二、應依各類場所辦理"]
     assert all(r[1] == pytest.approx(100 + 150, abs=1e-6) for r in rows)
+
+
+@need_font
+@pytest.mark.parametrize("short, long", [("AB", "ABCDEFGHIJKLMNOPQRSTUV"), ("一、", "一、消防安全設備之設置")])
+def test_width_zero_indent_does_not_depend_on_text_length(short, long):
+    """欄寬 0：同樣的縮排碼、同樣的字高，縮排量不能因字串長短而不同（ezdxf 依內容估的寬度不能當換算門檻）。
+    \\pl3、\\pr2 不到 INDENT_W0 倍字高：照 ezdxf 乘字高。靠右時比右緣（與沒有縮排的同一則比：欄寬 0 的框寬本來就依內容估）。"""
+    h = 2.5
+    for code, base, edge, shift in ((r"\pxl3;", "", 1, 3 * h), (r"\pxr2,qr;", r"\pxqr;", 2, -2 * h)):
+        for text in (short, long):
+            (row,), (ref,) = _lines(_doc(code + text, 0.0, h)), _lines(_doc(base + text, 0.0, h))
+            assert row[edge] - ref[edge] == pytest.approx(shift, abs=1e-6), (code, text)
+
+
+@need_font
+def test_rescaled_indent_also_rescales_tab_stops():
+    """縮排改當圖面單位時，同一碼的定位點一起換算：懸掛縮排（\\pi-500,l500,t500）第一行定位字元後的內文與
+    接續行對齊在 500（定位點照乘字高會超出欄寬被丟掉，改跳到預設的 4 倍字高＝400）。"""
+    h, width = 100.0, 3000.0
+    texts = _texts(_doc(r"\pxi-500,l500,t500;1.^I" + LONG, width, h))
+    ys = sorted({y for *_, y in texts}, reverse=True)
+    first = [(t, x0) for t, x0, _, y in texts if y == ys[0]]
+    assert len(ys) >= 3 and first[0][0] == "1." and first[0][1] == pytest.approx(100, abs=1e-6)
+    assert first[1][1] == pytest.approx(100 + 500, abs=1e-6)                       # 第一行：定位字元後在 500
+    for y in ys[1:]:                                                                # 接續行：左縮排 500
+        assert min(x0 for _, x0, _, yy in texts if yy == y) == pytest.approx(100 + 500, abs=1e-6), y
 
 
 # ---------- 字寬 ----------
@@ -260,6 +291,19 @@ def test_inline_font_switch_without_braces_switches_back():
     assert row[2] - row[1] == pytest.approx(2 * h * CT.MINGLIU + 2 * h * CT.JHENGHEI)
     doc = _shx_doc([r"{\fMicrosoft JhengHei Light|b0|i0|c136|p34;中文}"], h, style="JH")
     assert next(iter(doc.modelspace())).text == "{中文}"                            # 全與樣式相同：拿掉
+
+
+@need_font
+def test_escaped_backslash_before_f_is_not_a_font_code():
+    """\\\\ 是字面的反斜線：後面的 f…; 是一般文字（AutoCAD 顯示「\\fire;x」），不能改寫或拿掉；
+    \\\\ 之後真的 \\f 碼（\\\\\\f）照常處理。"""
+    assert CT.INLINE_FONT.sub(r"\1", r"\\fire;x \\\fArial;y") == r"\\fire;x \\y"   # 沒有中文字型時拿掉
+    h = 10.0
+    doc = _shx_doc([r"\\fire;x {\fPMingLiU|b0;中}"], h)
+    assert next(iter(doc.modelspace())).text.startswith(r"\\fire;x {\f" + CT.ALIAS_FAMILY)
+    texts = _texts(doc)
+    assert [t for t, *_ in texts] == [r"\fire;x", "中"]
+    assert texts[1][2] - texts[1][1] == pytest.approx(h * CT.MINGLIU)
 
 
 # ---------- 照出圖畫 ----------

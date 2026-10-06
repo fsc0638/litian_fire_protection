@@ -143,7 +143,7 @@ def prepare(doc, font: str | None) -> dict:
                 cur = style_fonts.get(e.dxf.get("style", "Standard").lower(), font)
                 e.text = cadtext.inline_fonts(e.text, font, cur)
             else:
-                e.text = cadtext.INLINE_FONT.sub("", e.text)
+                e.text = cadtext.INLINE_FONT.sub(r"\1", e.text)       # 留下字面的反斜線
             out["mtext"] += 1
         if e.dxf.is_supported("layer"):
             used.add(e.dxf.get("layer", "0"))

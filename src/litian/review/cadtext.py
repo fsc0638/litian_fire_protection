@@ -177,7 +177,9 @@ def style_font(substitute: str, font: str, bigfont: str, family: str, alias: boo
     return name
 
 
-INLINE_FONT = re.compile(r"\\([fF])([^|;\\]*)[^;\\]*;")    # 多行文字內嵌的字型切換：\f新細明體|b0|i0;、\Ftxt.shx;
+# 多行文字內嵌的字型切換：\f新細明體|b0|i0;、\Ftxt.shx;。前面偶數個反斜線（\\ 是字面的反斜線，不是格式碼）
+# 放在第 1 組、取代時留著；第 2 組 f／F、第 3 組字族或檔名
+INLINE_FONT = re.compile(r"(?<!\\)((?:\\\\)*)\\([fF])([^|;\\]*)[^;\\]*;")
 
 
 def inline_fonts(text: str, substitute: str, current: str) -> str:
@@ -185,19 +187,19 @@ def inline_fonts(text: str, substitute: str, current: str) -> str:
     （AutoCAD 照內嵌的字型畫，不是樣式的字型）。全部與樣式的字型 current 相同時直接拿掉（照樣式畫）；
     否則每段改成別名的字族（不能只拿掉相同的那段：沒有大括號時，前一段的字型會延續下去）。"""
     def target(m) -> tuple[str, str, str]:
-        name = m.group(2).strip()
-        return (name, "", "") if m.group(1) == "F" else ("", "", name)
+        name = m.group(3).strip()
+        return (name, "", "") if m.group(2) == "F" else ("", "", name)
 
-    codes = [m for m in INLINE_FONT.finditer(text) if m.group(2).strip()]
-    if any(m.group(2).lower().startswith(ALIAS_FAMILY) for m in codes):    # 已改寫過（prepare 跑第二次）
+    codes = [m for m in INLINE_FONT.finditer(text) if m.group(3).strip()]
+    if any(m.group(3).lower().startswith(ALIAS_FAMILY) for m in codes):    # 已改寫過（prepare 跑第二次）
         return text
     if all(style_font(substitute, *target(m)) == current for m in codes):
-        return INLINE_FONT.sub("", text)
+        return INLINE_FONT.sub(r"\1", text)
 
     def repl(m) -> str:
-        if not m.group(2).strip():                       # 字族空白：ezdxf 不換字型
-            return ""
-        return f"\\f{style_font(substitute, *target(m), alias=True)}|b0|i0;"
+        if not m.group(3).strip():                       # 字族空白：ezdxf 不換字型
+            return m.group(1)
+        return f"{m.group(1)}\\f{style_font(substitute, *target(m), alias=True)}|b0|i0;"
 
     return INLINE_FONT.sub(repl, text)
 
@@ -238,13 +240,27 @@ def split_cjk(word: str) -> list[str]:
     return segs
 
 
+# 欄寬 0 的多行文字：縮排超過幾倍字高才改當圖面單位（見 _paragraph）。正式圖存成圖面單位的值是 150、137（字高 800），
+# 當字高倍數的縮排、定位點一般只有幾倍（ezdxf 預設定位點 4、8、12…）
+INDENT_W0 = 20.0
+
+
+def _tab_unit(stop, cap: float):
+    """定位點改當圖面單位（ezdxf 會乘字高，先除掉）：數值，或帶 c／r 前置（置中、靠右）的字串。"""
+    return f"{stop[0]}{float(stop[1:]) / cap}" if isinstance(stop, str) else stop / cap
+
+
 def _paragraph(p: ParagraphProperties, cap: float, width: float, tol: float) -> ParagraphProperties:
     """段落屬性（縮排是字高倍數）：
     - ezdxf 把 \\pi、\\pl、\\pr 的值乘上字高；不少圖存的是圖面單位（例：字高 800、\\pl150 → 接續行被推到 12 萬單位外，
-      在視埠外看不到）。乘上字高會超出欄寬的就改當圖面單位（AutoCAD 的語意沒有文件，這只是合理化）；
+      在視埠外看不到）。乘上字高會超出欄寬 width 的就改當圖面單位，同一碼的定位點（\\pt）一起換算（AutoCAD 的語意
+      沒有文件，這只是合理化）。欄寬 0（width＝0）時改看是否超過 INDENT_W0 倍字高：ezdxf 依內容估的寬度不能當門檻，
+      否則同樣的碼會因字串長短換算或不換算；
     - 容許超出量 tol 加在不影響位置的一側：靠左加在右邊、置中兩邊各半、靠右加在左邊（左右對齊不加）。"""
-    if width > 0 and max(abs(p.left), abs(p.left + p.indent), abs(p.right)) * cap > width:
-        p = p._replace(indent=p.indent / cap, left=p.left / cap, right=p.right / cap)
+    big = max(abs(p.left), abs(p.left + p.indent), abs(p.right))
+    if (big * cap > width) if width > 0 else (big > INDENT_W0):
+        p = p._replace(indent=p.indent / cap, left=p.left / cap, right=p.right / cap,
+                       tab_stops=tuple(_tab_unit(t, cap) for t in p.tab_stops))
     align = int(p.align)                       # 0 預設、1 靠左、2 靠右、3 置中、4/5 左右對齊
     if align in (0, 1):
         p = p._replace(right=p.right - tol)
@@ -301,12 +317,13 @@ def _layout(r: ComplexMTextRenderer, mtext, tol: float, split: bool) -> tl.Layou
     else:
         col_w = width
         layout.append_column(renderer=bg)
+    fixed_w = col_w if mtext.has_columns or mtext.dxf.get("width", 0.0) >= 1e-6 else 0.0   # 欄寬 0：沒有欄寬可比
     ctx = r.make_mtext_context(mtext)
     items: list = []
 
     def append_paragraph():
         c = ctx.copy()
-        p = c.paragraph = _paragraph(ctx.paragraph, cap, col_w, tol)
+        p = c.paragraph = _paragraph(ctx.paragraph, cap, fixed_w, tol)
         cells = _cells(r, items, False)
         left = p.left * cap
         room = col_w - max(left, left + p.indent * cap) - p.right * cap
