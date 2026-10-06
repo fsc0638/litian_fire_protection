@@ -692,8 +692,8 @@ def test_requeue_mains_when_newer_same_name_base_processed():
     from litian.drawing import worker as W
 
     def row(i, stored, status="done", sha="s", review_only=False, **x):
-        return {"id": i, "path": f"/cases/1/{stored}", "sha256": sha, "status": status, "review_only": review_only,
-                "stats": {"xref": {"bound": [], "missing": [], **x}} if x else {"sheets": 1}}
+        return {"id": i, "path": f"/cases/1/{stored}", "kind": "dwg", "sha256": sha, "status": status,
+                "review_only": review_only, "stats": {"xref": {"bound": [], "missing": [], **x}} if x else {"sheets": 1}}
     rows = [row(9, "005_Area_1F.dwg", sha="new"),                                                    # 剛處理完的新底圖
             row(10, "002_Area_1F.dwg", sha="old"),
             row(11, "003_Area_1F.dwg", sha="new"),                                                   # 內容和新的一樣
@@ -713,10 +713,33 @@ def test_requeue_mains_when_newer_same_name_base_processed():
     # 數字開頭的參考檔名（民國日期）：不能把日期當成上傳序號
     conn = _RowsConn([row(9, "005_1130315_A-1F.dwg"), row(1, "001_M.dwg", missing=["1130315_A-1F.dwg"])])
     assert W.requeue_xref_dependents(conn, {"id": 9, "case_id": 1, "path": "/cases/1/005_1130315_A-1F.dwg"}) == 1
-    # 這份自己也引用同名參考（同名主圖的新版）：不是底圖，不排別人
+    # 這份綁進過別的同名上傳檔（同名主圖的新版）：不是底圖，不排別人
     conn = _RowsConn([row(9, "005_1F.dwg", bound=["1F"], bound_files=["001_1F.dwg"]), row(1, "001_1F.dwg"),
                       row(2, "002_1F.dwg", bound=["1F"], bound_files=["001_1F.dwg"])])
     assert W.requeue_xref_dependents(conn, {"id": 9, "case_id": 1, "path": "/cases/1/005_1F.dwg"}) == 0
+    # 底圖自己又疊了同名但沒上傳的參考（只記在 missing）：仍是底圖，主圖照樣重排
+    conn = _RowsConn([row(9, "005_1F.dwg", missing=["1F.dwg"]), row(1, "001_M.dwg", bound=["1F"], bound_files=["003_1F.dwg"]),
+                      row(3, "003_1F.dwg", sha="old")])
+    assert W.requeue_xref_dependents(conn, {"id": 9, "case_id": 1, "path": "/cases/1/005_1F.dwg"}) == 1
+    # 主圖上次就是這份讀不了：不再重排（不會互相一直重跑）
+    conn = _RowsConn([row(9, "005_Area_1F.dwg", sha="new"),
+                      row(1, "001_M.dwg", missing=["Area_1F.dwg"], failed=["005_Area_1F.dwg（DXFStructureError）"])])
+    assert W.requeue_xref_dependents(conn, {"id": 9, "case_id": 1, "path": "/cases/1/005_Area_1F.dwg"}) == 0
+
+
+def test_xref_skip_main_versions_and_failed_with_alternative():
+    from litian.drawing import worker as W
+
+    class Conn:
+        def execute(self, sql, params=None):
+            from types import SimpleNamespace
+            rows = [{"path": "/c/1/002_1F.dwg", "status": "done", "stats": {"xref": {"bound_files": ["001_1F.dwg"]}}},  # 同名主圖舊版
+                    {"path": "/c/1/001_1F.dwg", "status": "done", "stats": {}},
+                    {"path": "/c/1/004_B.dwg", "status": "failed", "stats": None},                                   # 有 003 可用 → 略過
+                    {"path": "/c/1/003_B.dwg", "status": "done", "stats": {}},
+                    {"path": "/c/1/005_C.dwg", "status": "failed", "stats": None}]                                   # 只有這份 → 照試
+            return SimpleNamespace(fetchall=lambda: rows)
+    assert W.xref_skip(Conn(), {"id": 9, "case_id": 1}) == ["002_1F.dwg", "004_B.dwg"]
 
 
 def test_bind_xrefs_converts_newest_and_falls_back(tmp_path, monkeypatch):

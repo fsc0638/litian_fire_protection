@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import gc
 import re
 from pathlib import Path, PureWindowsPath
 from typing import Callable
@@ -53,7 +54,13 @@ def name_key(stored: str) -> str:
 
 
 class _SameNameMain(Exception):
-    """候選檔自己也引用同名的外部參考：是同名主圖的另一個版本，不是底圖。"""
+    """候選檔自己也引用同名的外部參考：可能是同名主圖的另一個版本，先試別的候選。"""
+
+
+def main_version(stored: str, xref_stats: dict | None) -> bool:
+    """這個上傳檔綁進過另一份同名的上傳檔：是同名主圖的一個版本（不是底圖）。舊資料沒有 bound_files 時不判斷。"""
+    key = name_key(stored)
+    return any(name_key(b) == key and str(b).lower() != stored.lower() for b in (xref_stats or {}).get("bound_files") or [])
 
 
 def case_candidates(case_dir: Path, exclude: Path | None = None) -> dict[str, list[Path]]:
@@ -74,7 +81,8 @@ def bind(src: Path, case_dir: Path, out: Path, convert: Callable[[Path], Path] |
     """把 src（主圖 DXF）的外部參考併進來，寫到 out。回傳 {"bound": [圖塊名], "bound_files": [綁進來的上傳檔名],
     "missing": [沒綁到的參考檔名（原始路徑的檔名）], "failed": [試過讀不了的上傳檔名（錯誤）], "path": 使用的 DXF}。
     上傳檔名是案件資料夾裡的存檔名（001_Area_1F.dwg），工作台用來標出哪個檔被併入。skip：不用的上傳檔名（處理失敗的）。
-    同名的上傳檔最新的先試；讀不了、或其實是同名主圖的另一版（自己也引用同名參考）就試較早上傳的。
+    同名的上傳檔最新的先試；讀不了、或看起來是同名主圖的另一版（自己也引用同名參考）就試較早上傳的；
+    候選全都自己也引用同名參考時（例：建築底圖 1F 又疊了結構圖 1F），照用最新的那份。
     沒有外部參考、或一個都綁不到時不寫檔，path 為 src。"""
     from ezdxf import recover, xref
 
@@ -95,7 +103,7 @@ def bind(src: Path, case_dir: Path, out: Path, convert: Callable[[Path], Path] |
                 raise _SameNameMain(p)
             return d
 
-        bound = False
+        bound, held = False, []                                  # held：自己也引用同名參考的候選
         for cand in cands.get(key, []):                          # 同名的最新上傳先試
             if cand.name.lower() in skip:
                 continue
@@ -116,11 +124,23 @@ def bind(src: Path, case_dir: Path, out: Path, convert: Callable[[Path], Path] |
                 bound = True
                 break
             except _SameNameMain:
+                held.append((cand, dxf))
+                gc.collect()                                     # 讀進來的整份圖先放掉，綁定子行程有記憶體上限
                 continue
             except Exception as e:                               # 版本較新、檔案損壞等：不中斷主圖處理
                 info["failed"].append(f"{cand.name}（{type(e).__name__}）")
                 if len(blk):                                     # 併到一半：不再拿別的檔疊上去
                     break
+        if not bound and held and not len(blk):
+            cand, dxf = held[0]
+            blk.block.dxf.xref_path = str(Path(dxf).resolve())
+            try:
+                xref.embed(blk, load_fn=lambda p: recover.readfile(p)[0])
+                info["bound"].append(name)
+                info["bound_files"].append(cand.name)
+                bound = True
+            except Exception as e:
+                info["failed"].append(f"{cand.name}（{type(e).__name__}）")
         if not bound:
             info["missing"].append(PureWindowsPath(path).name or name)
     if info["bound"]:

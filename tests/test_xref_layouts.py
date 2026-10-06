@@ -239,3 +239,14 @@ def test_dictionary_norm_layer_fallback_and_defaults():
     with pytest.raises(ValueError, match="不在附件三"):
         E.Dictionary(legend, blocks=[("^X$", "不存在的設備")])
     E.Dictionary.default()                                                    # 隨附字典的圖例名稱都存在
+
+
+def test_xref_bind_base_that_overlays_same_named_reference(tmp_path):
+    # 建築底圖 Area_1F 自己又疊了同名的結構圖（沒上傳）：候選只有它時照樣綁上，不能當成同名主圖丟掉
+    make_host_and_xref(tmp_path)
+    doc = ezdxf.readfile(tmp_path / "001_Area_1F.converted.dxf")
+    doc.add_xref_def(r"..\結構\Area_1F.dwg", "STR_Area_1F")
+    doc.modelspace().add_blockref("STR_Area_1F", (0, 0))
+    doc.saveas(tmp_path / "001_Area_1F.converted.dxf")
+    info, texts = _bind(tmp_path)
+    assert info["bound_files"] == ["001_Area_1F.dwg"] and "辦公室" in texts and info["missing"] == ["TITLE-A1.dwg"]

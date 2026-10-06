@@ -278,6 +278,26 @@ def test_reuploaded_base_drawing_notes():
     assert after[6][0] == "建築底圖（外部參考），已併入「1F.dwg」一起檢核"                # 同名主圖不算較新的底圖
 
 
+def test_same_name_main_and_unreadable_base_notes():
+    # 主圖和底圖同名、主圖沒認出樓層：照實說「沒有認出樓層平面圖」，不能被當成底圖淡化
+    files = [_file(1, "1F.dwg", stats={"xref": {"bound": ["1F"], "bound_files": ["001_1F.dwg"]}}), _file(2, "1F.dwg"),
+             _file(3, "1F.dwg")]
+    info = {1: _summary(1, "002_1F.dwg"), 2: _summary(2, "001_1F.dwg"), 3: _summary(3, "003_1F.dwg")}
+    out = {f["id"]: f for f in api._file_notes(files, info)}
+    assert out[1]["note"] == api.NO_FLOOR_NOTE and not out[1]["superseded"] and out[1]["xref_of"] is None
+    # 讀不了、主圖也沒有其他同名檔可用：一樣警告（不叫使用者去上傳主圖）
+    files = [_file(1, "M.dwg", stats={"xref": {"bound": [], "bound_files": [], "missing": ["B.dwg"],
+                                                "failed": ["002_B.dwg（DXFStructureError）"]}}), _file(2, "B.dwg")]
+    out = {f["id"]: f for f in api._file_notes(files, {1: _summary(1, "001_M.dwg", "done", 1, 0), 2: _summary(2, "002_B.dwg")})}
+    assert out[2]["xref_warn"] and out[2]["note"] == "這份讀不了（DXFStructureError），主圖沒有用到；請確認檔案後重新上傳"
+    # 內容相同又剛好排隊只重跑檢核：寫「照用原本那份」，不寫「完成後改用這份」
+    files = [_file(1, "M.dwg", status="queued", stats={"xref": {"bound": ["B"], "bound_files": ["002_B.dwg"]}}),
+             _file(2, "B.dwg"), _file(3, "B.dwg")]
+    info = {1: _summary(1, "001_M.dwg"), 2: {**_summary(2, "002_B.dwg"), "sha256": "x"}, 3: {**_summary(3, "003_B.dwg"), "sha256": "x"}}
+    out = {f["id"]: f for f in api._file_notes(files, info)}
+    assert out[3]["note"] == "內容與「M.dwg」已併入的同名檔相同，照用原本那份"
+
+
 def test_unreviewed_list_keeps_superseded_files_muted():
     html = _html()
     js = html[html.index("function unreviewedHtml("):html.index("function renderUnreviewed(")]
