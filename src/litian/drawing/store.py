@@ -173,7 +173,7 @@ def lock_for_reprocess(conn, case_ids: list[int]) -> list[dict]:
     （SKIP LOCKED）都會跳過；剛被認領還沒提交的，等它提交後重新判斷（變成處理中就不回傳，但 PostgreSQL 照樣鎖住
     它的新版本到交易結束：cli.reprocess 隨即查到它處理中、整個放掉）。
     FOR NO KEY UPDATE：不擋工作台寫審核決定（外鍵只要 KEY SHARE）。"""
-    return conn.execute("SELECT id, case_id, name, kind, path, status FROM case_file "
+    return conn.execute("SELECT id, case_id, name, kind, path, status, stats FROM case_file "
                         "WHERE case_id = ANY(%s) AND status IN ('queued', 'done', 'failed') AND kind IN ('dwg', 'dxf') "
                         "ORDER BY id FOR NO KEY UPDATE", (case_ids,)).fetchall()
 
