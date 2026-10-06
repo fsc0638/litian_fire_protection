@@ -107,11 +107,15 @@ def bind_xrefs(job: dict, src: Path, spool: Path) -> tuple[Path, dict]:
         return src, {}
     cands = XR.case_candidates(path.parent, exclude=path)
     for k, (_name, _ref, key) in enumerate(refs):
-        cand = cands.get(key)
-        if cand is not None and cand.suffix.lower() == ".dwg":
+        for j, cand in enumerate(cands.get(key, [])):            # 同名的最新上傳先轉；轉不了改用較早上傳的
             conv = cand.with_name(cand.stem + ".converted.dxf")
-            if not conv.exists():
-                _convert(spool, f"f{job['id']}x{k}", cand, conv)
+            if cand.suffix.lower() != ".dwg" or conv.exists():
+                break
+            try:
+                _convert(spool, f"f{job['id']}x{k}" + (f"v{j}" if j else ""), cand, conv)
+                break
+            except CC.ConvertError as e:
+                log.warning("xref convert failed file=%s ref=%s: %s", job["id"], cand.name, e)
     out = path.with_name(path.stem + ".bound.dxf")
     info = json.loads(_run(["litian.drawing.xref", "bind", str(src), str(path.parent), str(out), str(path)],
                            BIND_TIMEOUT, "外部參考綁定"))
@@ -119,11 +123,21 @@ def bind_xrefs(job: dict, src: Path, spool: Path) -> tuple[Path, dict]:
 
 
 def requeue_xref_dependents(conn, job: dict) -> int:
-    """剛處理完的檔若是別的檔缺的外部參考，把那些檔重新排入處理（完整重跑，才能綁定）。"""
-    key = XR.UPLOAD_PREFIX.sub("", Path(job["path"]).stem).lower()
+    """剛處理完的檔若是別的檔的外部參考，把那些檔重新排入處理（完整重跑，才能綁定）：
+    缺這個參考的；綁的是同名但較早上傳的（重新上傳底圖：改用最新的）；舊資料只記圖塊名、綁過同名參考的。"""
+    stored = Path(job["path"]).name
+    key, no = XR.name_key(stored), XR.upload_no(stored)
     rows = conn.execute("SELECT id, stats FROM case_file WHERE case_id = %s AND id <> %s AND status IN ('done', 'failed') "
                         "AND stats ? 'xref'", (job["case_id"], job["id"])).fetchall()
-    ids = [r["id"] for r in rows if any(XR.ref_key(m) == key for m in (r["stats"]["xref"].get("missing") or []))]
+
+    def stale(x: dict) -> bool:
+        if any(XR.name_key(m) == key for m in x.get("missing") or []):
+            return True
+        if isinstance(x.get("bound_files"), list):
+            return any(XR.name_key(b) == key and XR.upload_no(b) < no for b in x["bound_files"])
+        return any(XR.name_key(b) == key for b in x.get("bound") or [])
+
+    ids = [r["id"] for r in rows if stale(r["stats"]["xref"] or {})]
     for i in ids:
         conn.execute("UPDATE case_file SET status = 'queued', review_only = false, attempts = 0, updated_at = now() "
                      "WHERE id = %s", (i,))

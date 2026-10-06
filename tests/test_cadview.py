@@ -671,3 +671,61 @@ def test_model_frame_clips_block_content_outside_frame(tmp_path, monkeypatch):
     sheet = {"name": "1F-1", "sheet": 0, "bbox": [-5, -5, 45, 15], "meta": {}, "scale": 1.0, "layout": None}
     img, meta, _ = CV.render_sheet(doc, sheet, bbox.Cache(), long_px=400)
     assert 40 <= len(n) < 60 and meta["source"] == "model"
+
+
+
+# ---------- 同名底圖重新上傳 ----------
+
+class _RowsConn:
+    def __init__(self, rows):
+        self.rows, self.requeued = rows, []
+
+    def execute(self, sql, params=None):
+        from types import SimpleNamespace
+        if sql.lstrip().startswith("SELECT"):
+            return SimpleNamespace(fetchall=lambda: self.rows)
+        self.requeued.append(params[0])
+        return SimpleNamespace(rowcount=1)
+
+
+def test_requeue_mains_when_newer_same_name_base_processed():
+    from litian.drawing import worker as W
+    x = lambda **k: {"stats": {"xref": {"bound": [], "missing": [], **k}}}
+    rows = [{"id": 1, **x(bound=["Area_1F"], bound_files=["002_Area_1F.dwg"])},        # 綁的是較早的 → 重排
+            {"id": 2, **x(bound=["Area_1F"], bound_files=["005_Area_1F.dwg"])},        # 已經是這份 → 不動
+            {"id": 3, **x(bound=["AREA_1F"])},                                         # 舊資料只有圖塊名 → 重排
+            {"id": 4, **x(missing=["Area_1F.dwg"])},                                   # 缺這個參考 → 重排
+            {"id": 5, **x(missing=["002_Area_1F.dwg（DXFStructureError）"])},          # 上次讀不了 → 重排
+            {"id": 6, **x(bound=["Area_2F"], bound_files=["003_Area_2F.dwg"])},        # 別的參考 → 不動
+            {"id": 7, **x(bound=["Area_1F"], bound_files=["009_Area_1F.dwg"])}]        # 綁的比這份新 → 不動
+    conn = _RowsConn(rows)
+    assert W.requeue_xref_dependents(conn, {"id": 9, "case_id": 1, "path": "/cases/1/005_Area_1F.dwg"}) == 4
+    assert conn.requeued == [1, 3, 4, 5]
+
+
+def test_bind_xrefs_converts_newest_and_falls_back(tmp_path, monkeypatch):
+    # 同名的最新上傳先送轉檔；轉不了改轉較早上傳的，主圖照樣處理
+    from litian.drawing import convert_client as CC
+    from litian.drawing import worker as W
+    for n in ("003_Area_1F.dwg", "002_Area_1F.dwg", "001_main.dwg"):
+        (tmp_path / n).write_bytes(b"AC1027")
+    calls = []
+
+    def run(args, timeout, what):
+        if args[1] == "list":
+            return json.dumps([["Area_1F", "Area_1F.dwg", "area_1f"]])
+        return json.dumps({"path": args[2], "bound": [], "bound_files": [], "missing": []})
+
+    def convert(spool, jid, src, dst):
+        calls.append((jid, src.name))
+        if src.name.startswith("003_"):
+            raise CC.ConvertError("轉檔失敗")
+        dst.write_bytes(b"x")
+        return dst
+    monkeypatch.setattr(W, "_run", run)
+    monkeypatch.setattr(W, "_convert", convert)
+    W.bind_xrefs({"id": 7, "path": str(tmp_path / "001_main.dwg")}, tmp_path / "001_main.converted.dxf", tmp_path)
+    assert calls == [("f7x0", "003_Area_1F.dwg"), ("f7x0v1", "002_Area_1F.dwg")]
+    calls.clear()
+    W.bind_xrefs({"id": 7, "path": str(tmp_path / "001_main.dwg")}, tmp_path / "001_main.converted.dxf", tmp_path)
+    assert calls == [("f7x0", "003_Area_1F.dwg")]                    # 較早的已轉好：最新的再試一次，失敗就用轉好的

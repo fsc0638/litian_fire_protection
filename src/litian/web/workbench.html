@@ -670,7 +670,7 @@ ol.findings > li.flash { animation: liflash 2s ease-out; }
   // 處理完成卻沒有檢核的檔：寫出原因與怎麼做；當外部參考併進主圖一起檢核的只列一行（不算問題）
   function unreviewedHtml(files) {
     const idle = files.filter((f) => f.status === "done" && !f.review);
-    const miss = idle.filter((f) => !f.xref_of), refs = idle.filter((f) => f.xref_of);
+    const miss = idle.filter((f) => !f.xref_of && !f.superseded), refs = idle.filter((f) => f.xref_of || f.superseded);
     const busy = files.some((f) => ["queued", "processing", "reviewing"].includes(f.status));
     return (miss.length ? '<div class="unrev"><span class="badge b-skipped">未檢核</span> <b>沒有認出樓層平面圖</b><ul>' +
       miss.map((f) => "<li>" + esc(f.name) + "</li>").join("") + "</ul>" +

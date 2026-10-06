@@ -16,7 +16,7 @@ from typing import Callable
 
 from .cli import safe_name
 
-UPLOAD_PREFIX = re.compile(r"^\d{3}_")
+UPLOAD_PREFIX = re.compile(r"^\d{3,}_")              # 上傳序號（001_；第 1000 個起是 4 位數）
 
 
 def xref_blocks(doc) -> list[tuple[str, str]]:
@@ -35,15 +35,28 @@ def ref_key(xref_path: str) -> str:
     return Path(safe_name(name)).stem.lower()
 
 
-def case_candidates(case_dir: Path, exclude: Path | None = None) -> dict[str, Path]:
-    """案件資料夾裡的上傳檔：檔名主體 → 原始檔（DWG／DXF）。"""
-    out: dict[str, Path] = {}
-    for p in sorted(case_dir.iterdir()):
+def upload_no(name: str) -> int:
+    """存檔名的上傳序號（001_Area_1F.dwg → 1）；沒有序號的當 0（最早）。"""
+    m = UPLOAD_PREFIX.match(name)
+    return int(m.group(0)[:-1]) if m else 0
+
+
+def name_key(name: str) -> str:
+    """上傳檔名、存檔名或外部參考路徑 → 比對用的檔名主體（去掉資料夾、上傳序號、「（錯誤）」註記，不分大小寫）。"""
+    name = re.sub(r"（[^（）]*）$", "", str(name))
+    return UPLOAD_PREFIX.sub("", ref_key(name))
+
+
+def case_candidates(case_dir: Path, exclude: Path | None = None) -> dict[str, list[Path]]:
+    """案件資料夾裡的上傳檔：檔名主體 → 原始檔（DWG／DXF）清單，同名重新上傳時最新的排最前（綁定優先用最新的，
+    讀不了才退回較早上傳的）。"""
+    out: dict[str, list[Path]] = {}
+    for p in sorted(case_dir.iterdir(), key=lambda p: (-upload_no(p.name), p.name)):
         if not p.is_file() or p.suffix.lower() not in (".dwg", ".dxf") or ".converted" in p.name or ".bound" in p.name:
             continue
         if exclude is not None and p.resolve() == exclude.resolve():
             continue
-        out.setdefault(UPLOAD_PREFIX.sub("", p.stem).lower(), p)
+        out.setdefault(UPLOAD_PREFIX.sub("", p.stem).lower(), []).append(p)
     return out
 
 
@@ -62,27 +75,33 @@ def bind(src: Path, case_dir: Path, out: Path, convert: Callable[[Path], Path] |
     cands = case_candidates(case_dir, exclude=original)
     for name, path in refs:
         key = ref_key(path)
-        cand = cands.get(key)
-        if cand is None:
+        if not cands.get(key):
             info["missing"].append(PureWindowsPath(path).name or name)
             continue
-        dxf = cand
-        if cand.suffix.lower() == ".dwg":
-            conv = cand.with_name(cand.stem + ".converted.dxf")
-            if not conv.exists():
-                if convert is None:
-                    info["missing"].append(cand.name)
-                    continue
-                conv = convert(cand)
-            dxf = conv
         blk = doc.blocks.get(name)
-        blk.block.dxf.xref_path = str(Path(dxf).resolve())      # 指向案件裡的檔，ezdxf 才找得到
-        try:
-            xref.embed(blk, load_fn=lambda p: recover.readfile(p)[0])
-            info["bound"].append(name)
-            info["bound_files"].append(cand.name)
-        except Exception as e:                                   # 版本較新、檔案損壞等：不中斷主圖處理
-            info["missing"].append(f"{cand.name}（{type(e).__name__}）")
+        failed = []
+        for cand in cands[key]:                                  # 同名的最新上傳先試；讀不了（轉檔失敗、損壞）再試較早的
+            dxf = cand
+            if cand.suffix.lower() == ".dwg":
+                conv = cand.with_name(cand.stem + ".converted.dxf")
+                if not conv.exists():
+                    if convert is None:
+                        failed.append(cand.name)
+                        continue
+                    conv = convert(cand)
+                dxf = conv
+            blk.block.dxf.xref_path = str(Path(dxf).resolve())   # 指向案件裡的檔，ezdxf 才找得到
+            try:
+                xref.embed(blk, load_fn=lambda p: recover.readfile(p)[0])
+                info["bound"].append(name)
+                info["bound_files"].append(cand.name)
+                break
+            except Exception as e:                               # 版本較新、檔案損壞等：不中斷主圖處理
+                failed.append(f"{cand.name}（{type(e).__name__}）")
+                if len(blk):                                     # 併到一半：不再拿別的檔疊上去
+                    break
+        else:
+            info["missing"].extend(failed)
     if info["bound"]:
         doc.saveas(str(out))
         info["path"] = str(out)

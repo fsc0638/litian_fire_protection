@@ -137,6 +137,57 @@ def test_xref_key_matches_windows_paths_and_upload_prefix(tmp_path):
     assert set(XR.case_candidates(tmp_path)) == {"area_3f"}
 
 
+def test_case_candidates_newest_upload_first(tmp_path):
+    # 同名重新上傳：最新的排最前（第 1000 個起序號是 4 位數，照數字比，不照字串比）
+    for n in ("002_Area_1F.dwg", "010_Area_1F.dwg", "1000_Area_1F.dxf", "003_Other.dxf", "999_area_1f.DWG"):
+        (tmp_path / n).write_bytes(b"x")
+    (tmp_path / "1000_Area_1F.bound.dxf").write_bytes(b"x")
+    got = XR.case_candidates(tmp_path, exclude=tmp_path / "003_Other.dxf")
+    assert set(got) == {"area_1f"}
+    assert [p.name for p in got["area_1f"]] == ["1000_Area_1F.dxf", "999_area_1f.DWG", "010_Area_1F.dwg", "002_Area_1F.dwg"]
+    assert XR.upload_no("1000_Area_1F.dxf") == 1000 and XR.upload_no("Area_1F.dwg") == 0
+    assert XR.name_key("012_Area_1F.dwg（DXFStructureError）") == XR.name_key(r"d:\圖\AREA_1F.dwg") == "area_1f"
+
+
+def _ref_copy(case, stored, room):
+    """同名底圖的另一個上傳版本（房名不同，才分得出綁的是哪一份）。"""
+    doc = ezdxf.new("R2018")
+    for layer, polys in P.layers(0.01).items():
+        for pts in polys:
+            doc.modelspace().add_lwpolyline(pts, dxfattribs={"layer": layer})
+    doc.modelspace().add_text(room, dxfattribs={"insert": (500, 500), "height": 30})
+    doc.saveas(case / (stored + ".converted.dxf"))
+    (case / (stored + ".dwg")).write_bytes(b"AC1027")
+
+
+def _bind(case):
+    info = XR.bind(case / "002_main.converted.dxf", case, case / "002_main.bound.dxf", original=case / "002_main.dwg")
+    texts = {t["t"] for t in IR.extract(info["path"], expand=info["bound"])["texts"] if t.get("src") == "xref:Area_1F"}
+    return info, texts
+
+
+def test_xref_bind_uses_newest_same_name_upload(tmp_path):
+    make_host_and_xref(tmp_path)
+    _ref_copy(tmp_path, "003_Area_1F", "新版機房")
+    info, texts = _bind(tmp_path)
+    assert info["bound_files"] == ["003_Area_1F.dwg"] and info["missing"] == ["TITLE-A1.dwg"]
+    assert "新版機房" in texts and "辦公室" not in texts
+
+
+def test_xref_bind_falls_back_to_older_when_newest_unreadable(tmp_path):
+    make_host_and_xref(tmp_path)
+    (tmp_path / "004_Area_1F.converted.dxf").write_bytes(b"\x00\x01 not a dxf")   # 最新的壞了
+    (tmp_path / "004_Area_1F.dwg").write_bytes(b"AC1027")
+    (tmp_path / "003_Area_1F.dwg").write_bytes(b"AC1027")                          # 次新的還沒轉檔（也不能用）
+    info, texts = _bind(tmp_path)
+    assert info["bound_files"] == ["001_Area_1F.dwg"] and info["missing"] == ["TITLE-A1.dwg"]   # 有綁到就不算缺
+    assert "辦公室" in texts
+    for p in tmp_path.glob("00[1-3]_Area_1F*"):                                    # 都讀不了：全部列出來
+        p.unlink()
+    info, _ = _bind(tmp_path)
+    assert info["bound_files"] == [] and info["missing"][0].startswith("004_Area_1F.dwg（") and "TITLE-A1.dwg" in info["missing"]
+
+
 def test_explode_keeps_only_wanted_layers_inside_windows():
     """竣工圖全部展開要數 GB：只展開牆柱門窗圖層、樓層平面圖範圍附近的實體。"""
     from litian.plan import geometry as G
