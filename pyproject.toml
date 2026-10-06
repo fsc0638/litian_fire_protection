@@ -10,7 +10,7 @@ dependencies = [
     "psycopg[binary,pool]>=3.2",
     "pyyaml>=6.0",
     "openai>=3.22,<4",
-    "ezdxf>=1.4,<2",
+    "ezdxf==1.4.4",              # 鎖定：CAD 原樣圖用到它的私有成員與複製的排版程式（review/cadtext.py）
     "python-multipart>=0.0.9",
     "shapely>=2.0,<3",
     "scipy>=1.13,<2",
