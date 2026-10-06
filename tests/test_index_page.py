@@ -149,3 +149,10 @@ def test_source_card_uses_blocks():
     # 原文排版留著當次要按鈕；看表格（結構化表格）不變
     assert re.search(r'class="sub" data-act="raw">看原文排版<', card) and 'data-act="table">看表格<' in card
     assert "mdHtml(s, chip)" in html
+
+
+def test_md_separator_check_is_linear_on_long_spaces(tmp_path):
+    # 分隔列判斷不能因為一長串空白回溯到卡住頁面（串流時每收一段就重算一次）
+    got = _run_js(tmp_path, "| a | b |\n|---" + " " * 20000 + "x",
+                  "const t = Date.now(); const h = mdHtml(D, chip); return [Date.now() - t, h.includes('<table')];")
+    assert got[0] < 1000 and got[1] is False

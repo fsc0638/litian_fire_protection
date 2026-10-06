@@ -895,6 +895,7 @@ ol.findings > li.flash { animation: liflash 2s ease-out; }
       }
       if (b && b.type === "pre") return '<pre class="lawpre">' + esc(b.text) + "</pre>";
       const t = String((b && b.text) || "").replace(/^[\r\n]+/, "").replace(/\s+$/, "");   // 區塊頭尾的空行不要（行首縮排保留）
+      if (/[─-╿]/.test(t)) return '<pre class="lawpre">' + esc(t) + "</pre>";   // 公式的根號線：等寬才對得齊
       return t ? '<div class="lawtext">' + esc(t) + "</div>" : "";
     }).join("");
     const warn = l && l.warning ? '<p class="lawwarn">' + esc(l.warning) +
@@ -1159,6 +1160,9 @@ ol.findings > li.flash { animation: liflash 2s ease-out; }
       pop = { btn, pinned: false };
     }
     placeLaw();
+    popEl.querySelectorAll(".lawtbl, .lawpre").forEach((el) => {             // 放不下、要左右捲的：可用 Tab 停留後用方向鍵捲
+      if (el.scrollWidth > el.clientWidth) { el.tabIndex = 0; el.setAttribute("aria-label", "條文表格，可左右捲動"); }
+    });
     if (pinned && pop && !pop.pinned) { pop.pinned = true; popEl.focus({ preventScroll: true }); }
   }
   function closeLaw(refocus) {
@@ -1220,10 +1224,12 @@ ol.findings > li.flash { animation: liflash 2s ease-out; }
     closeLaw(popEl.contains(document.activeElement) || document.activeElement === pop.btn);
   });
   // 浮窗放在頁尾：用 Tab／Shift+Tab 離開時先把焦點交回條文按鈕，瀏覽器再從按鈕接著往後或往前（不會跳到頁首、頁尾）
+  // 寬表格（左右捲動）也排進 Tab 順序，鍵盤才捲得到右半邊。Shift+Tab 收起時焦點停在條文按鈕本身
   popEl.addEventListener("keydown", (e) => {
     if (e.key !== "Tab" || !pop) return;
-    const f = [...popEl.querySelectorAll("a[href], button")], a = document.activeElement;
-    if (e.shiftKey ? (a === popEl || a === f[0]) : (a === f[f.length - 1] || (a === popEl && !f.length))) closeLaw(true);
+    const f = [...popEl.querySelectorAll("a[href], button, [tabindex='0']")], a = document.activeElement;
+    if (e.shiftKey && (a === popEl || a === f[0])) { e.preventDefault(); closeLaw(true); }
+    else if (!e.shiftKey && (a === f[f.length - 1] || (a === popEl && !f.length))) closeLaw(true);
   });
   addEventListener("scroll", (e) => { if (pop && !popEl.contains(e.target)) placeLaw(); }, true);
   addEventListener("resize", () => { if (pop) placeLaw(); });
