@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 240" width="1200" height="240" role="img" aria-label="進度：第 0 期法規庫已完成，第 1 期逐項檢核進行中，下一步規劃中">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1220"/>
+      <stop offset="1" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#fff" stop-opacity="0"/>
+      <stop offset=".5" stop-color="#fff" stop-opacity=".7"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <style>
+      text{font-family:'Noto Sans TC','PingFang TC','Microsoft JhengHei','Segoe UI',sans-serif}
+      .t{fill:#f1f5f9;font-size:18px;font-weight:700;text-anchor:middle}
+      .s{fill:#94a3b8;font-size:13px;text-anchor:middle}
+      .p{font-size:12px;text-anchor:middle}
+      .fade{opacity:0;animation:fade .8s ease-out forwards}
+      .f1{animation-delay:.2s}.f2{animation-delay:1.2s}.f3{animation-delay:2s}
+      @keyframes fade{to{opacity:1}}
+    </style>
+  </defs>
+
+  <rect width="1200" height="240" rx="24" fill="url(#bg)"/>
+
+  <!-- 軌道 -->
+  <line x1="160" y1="130" x2="1040" y2="130" stroke="#334155" stroke-width="6" stroke-linecap="round"/>
+  <line x1="160" y1="130" x2="600" y2="130" stroke="#2dd4bf" stroke-width="6" stroke-linecap="round"/>
+  <rect x="600" y="127" width="0" height="6" rx="3" fill="#fb923c">
+    <animate attributeName="width" from="0" to="250" dur="1.6s" begin=".6s" fill="freeze"/>
+  </rect>
+  <rect x="600" y="126" width="60" height="8" rx="4" fill="url(#shine)">
+    <animate attributeName="x" from="580" to="800" dur="1.8s" begin="2.4s" repeatCount="indefinite"/>
+  </rect>
+
+  <!-- 第 0 期 -->
+  <g class="fade f1">
+    <rect x="124" y="40" width="72" height="24" rx="12" fill="#134e4a" stroke="#2dd4bf" stroke-opacity=".8"/>
+    <text class="p" x="160" y="57" fill="#99f6e4">已完成</text>
+    <text class="t" x="160" y="94">第 0 期 ・ 法規庫</text>
+    <circle cx="160" cy="130" r="18" fill="#2dd4bf"/>
+    <path d="M151 130l6 6 12-12" fill="none" stroke="#0b1220" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <text class="s" x="160" y="176">結構化條文 ・ 關鍵詞＋向量檢索</text>
+    <text class="s" x="160" y="196">法規問答，引用由程式查核</text>
+  </g>
+
+  <!-- 第 1 期 -->
+  <g class="fade f2">
+    <rect x="564" y="40" width="72" height="24" rx="12" fill="#7c2d12" stroke="#fb923c" stroke-opacity=".9"/>
+    <text class="p" x="600" y="57" fill="#fed7aa">進行中</text>
+    <text class="t" x="600" y="94">第 1 期 ・ 逐項檢核</text>
+    <circle cx="600" cy="130" r="18" fill="none" stroke="#fb923c" stroke-width="3">
+      <animate attributeName="r" from="18" to="34" dur="2s" begin="1.4s" repeatCount="indefinite"/>
+      <animate attributeName="opacity" from=".9" to="0" dur="2s" begin="1.4s" repeatCount="indefinite"/>
+    </circle>
+    <circle cx="600" cy="130" r="18" fill="#0f172a" stroke="#fb923c" stroke-width="4"/>
+    <circle cx="600" cy="130" r="6" fill="#fb923c"/>
+    <text class="s" x="600" y="176">圖面管線 ・ 認房間與設備 ・ 第一批規則</text>
+    <text class="s" x="600" y="196">CAD 原樣圖 ・ 缺失審核與報告 ・ 真實竣工圖實測中</text>
+  </g>
+
+  <!-- 下一步 -->
+  <g class="fade f3">
+    <rect x="1004" y="40" width="72" height="24" rx="12" fill="#1e293b" stroke="#64748b"/>
+    <text class="p" x="1040" y="57" fill="#cbd5e1">規劃中</text>
+    <text class="t" x="1040" y="94">下一步</text>
+    <circle cx="1040" cy="130" r="18" fill="#0f172a" stroke="#64748b" stroke-width="3" stroke-dasharray="5 4"/>
+    <text class="s" x="1040" y="176">設備師校對法定表格與答案測試集</text>
+    <text class="s" x="1040" y="196">更多規則與設備類別 ・ 正式網域</text>
+  </g>
+</svg>

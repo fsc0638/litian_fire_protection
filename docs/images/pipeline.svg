@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300" role="img" aria-label="流程：上傳圖檔、分析圖面、逐項檢核、缺失與建議">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1220"/>
+      <stop offset="1" stop-color="#1e293b"/>
+    </linearGradient>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0L10 5 0 10Z" fill="#64748b"/>
+    </marker>
+    <style>
+      text{font-family:'Noto Sans TC','PingFang TC','Microsoft JhengHei','Segoe UI',sans-serif}
+      .card{fill:#111a2e;stroke:#334155;stroke-width:1.2}
+      .ring{fill:none;stroke:#fb923c;stroke-width:2;opacity:0;animation:ring 6s ease-in-out infinite}
+      .r1{animation-delay:0s}.r2{animation-delay:1.5s}.r3{animation-delay:3s}.r4{animation-delay:4.5s}
+      .ico{fill:none;stroke:#fb923c;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+      .t{fill:#f1f5f9;font-size:20px;font-weight:700}
+      .s{fill:#94a3b8;font-size:13px}
+      .n{fill:#0b1220;font-size:13px;font-weight:700}
+      .arrow{stroke:#64748b;stroke-width:2;marker-end:url(#arr)}
+      @keyframes ring{0%{opacity:0}6%{opacity:1}22%{opacity:1}30%{opacity:0}100%{opacity:0}}
+    </style>
+  </defs>
+
+  <rect width="1200" height="300" rx="24" fill="url(#bg)"/>
+
+  <!-- 1 上傳圖檔 -->
+  <g transform="translate(40,50)">
+    <rect class="card" width="220" height="190" rx="16"/>
+    <rect class="ring r1" x="-3" y="-3" width="226" height="196" rx="18"/>
+    <circle cx="24" cy="24" r="13" fill="#fb923c"/><text class="n" x="24" y="29" text-anchor="middle">1</text>
+    <g class="ico" transform="translate(110,74)">
+      <path d="M-16 -24h20l12 12v34h-32z"/><path d="M4 -24v12h12"/><path d="M0 16V-4M-8 4l8-8 8 8"/>
+    </g>
+    <text class="t" x="110" y="130" text-anchor="middle">上傳圖檔</text>
+    <text class="s" x="110" y="156" text-anchor="middle">DWG／DXF 拖放上傳</text>
+    <text class="s" x="110" y="176" text-anchor="middle">配置頁、建築底圖自動處理</text>
+  </g>
+
+  <line class="arrow" x1="272" y1="145" x2="326" y2="145"/>
+  <circle r="5" fill="#fb923c"><animateMotion dur="1.4s" repeatCount="indefinite" path="M272 145H322"/></circle>
+
+  <!-- 2 分析圖面 -->
+  <g transform="translate(340,50)">
+    <rect class="card" width="220" height="190" rx="16"/>
+    <rect class="ring r2" x="-3" y="-3" width="226" height="196" rx="18"/>
+    <circle cx="24" cy="24" r="13" fill="#fb923c"/><text class="n" x="24" y="29" text-anchor="middle">2</text>
+    <g class="ico" transform="translate(110,74)">
+      <rect x="-24" y="-22" width="48" height="44" rx="2"/>
+      <path d="M-24 2h18M4 2h20M0 -22v10M0 -4v24"/>
+      <circle cx="-12" cy="-10" r="2.5" fill="#fb923c"/><circle cx="12" cy="-10" r="2.5" fill="#fb923c"/>
+      <circle cx="-12" cy="12" r="2.5" fill="#fb923c"/><circle cx="12" cy="12" r="2.5" fill="#fb923c"/>
+    </g>
+    <text class="t" x="110" y="130" text-anchor="middle">分析圖面</text>
+    <text class="s" x="110" y="156" text-anchor="middle">圖框、圖號、牆柱門窗 → 房間</text>
+    <text class="s" x="110" y="176" text-anchor="middle">圖例與圖塊字典 → 設備</text>
+  </g>
+
+  <line class="arrow" x1="572" y1="145" x2="626" y2="145"/>
+  <circle r="5" fill="#fb923c"><animateMotion dur="1.4s" begin=".45s" repeatCount="indefinite" path="M572 145H622"/></circle>
+
+  <!-- 3 逐項檢核 -->
+  <g transform="translate(640,50)">
+    <rect class="card" width="220" height="190" rx="16"/>
+    <rect class="ring r3" x="-3" y="-3" width="226" height="196" rx="18"/>
+    <circle cx="24" cy="24" r="13" fill="#fb923c"/><text class="n" x="24" y="29" text-anchor="middle">3</text>
+    <g class="ico" transform="translate(110,74)">
+      <rect x="-24" y="-24" width="48" height="48" rx="6"/>
+      <path d="M-15 -11l4 4 7-8M-15 3l4 4 7-8M2 -10h14M2 4h14M2 18h8"/>
+      <circle cx="-10" cy="17" r="3.5" fill="#ef4444" stroke="none"/>
+    </g>
+    <text class="t" x="110" y="130" text-anchor="middle">逐項檢核</text>
+    <text class="s" x="110" y="156" text-anchor="middle">距離、數量、規格、管徑、應設設備</text>
+    <text class="s" x="110" y="176" text-anchor="middle">每條規則綁定法規條文</text>
+  </g>
+
+  <line class="arrow" x1="872" y1="145" x2="926" y2="145"/>
+  <circle r="5" fill="#fb923c"><animateMotion dur="1.4s" begin=".9s" repeatCount="indefinite" path="M872 145H922"/></circle>
+
+  <!-- 4 缺失與建議 -->
+  <g transform="translate(940,50)">
+    <rect class="card" width="220" height="190" rx="16"/>
+    <rect class="ring r4" x="-3" y="-3" width="226" height="196" rx="18"/>
+    <circle cx="24" cy="24" r="13" fill="#fb923c"/><text class="n" x="24" y="29" text-anchor="middle">4</text>
+    <g class="ico" transform="translate(110,74)">
+      <path d="M-18 -24h24l10 10v38h-34z"/><path d="M6 -24v10h10"/>
+      <path d="M-10 -6h16M-10 2h16M-10 10h8"/>
+      <circle cx="12" cy="14" r="8" fill="#ef4444" stroke="none"/>
+      <path d="M12 9.5v5M12 18v.5" stroke="#fff" stroke-width="2"/>
+    </g>
+    <text class="t" x="110" y="130" text-anchor="middle">缺失與建議</text>
+    <text class="s" x="110" y="156" text-anchor="middle">缺失＋依據條文＋合規建議</text>
+    <text class="s" x="110" y="176" text-anchor="middle">要補的資料、接受／退回、匯出報告</text>
+  </g>
+
+  <text x="600" y="276" text-anchor="middle" fill="#64748b" font-size="13">每一步都在主機上自動進行；處理狀態與白話說明在工作台即時更新</text>
+</svg>
