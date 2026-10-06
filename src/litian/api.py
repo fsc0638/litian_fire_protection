@@ -35,6 +35,7 @@ from . import auth as AU
 from . import line_login as LL
 from .drawing import store as DS
 from .drawing.cli import safe_name
+from .lawdb import boxtable as BT
 from .lawdb import search as S
 from .lawdb import tables as T
 from .lawdb import vectors as V
@@ -95,13 +96,23 @@ def _law_names() -> dict[str, dict]:
     return {r["pcode"]: r for r in _all("SELECT pcode, name, short, modified, effective, source_update FROM law")}
 
 
+@lru_cache(maxsize=1024)
+def _blocks(text: str | None) -> list[dict] | None:
+    """條文有方框字元表格時，切成文字／表格區塊給前端畫真正的表格；沒有表格回 None。每次請求都會用到，快取起來。"""
+    return BT.blocks(text) if text and BT.has_table(text) else None
+
+
 def _present(n: dict, laws: dict, with_article: bool = True) -> dict:
     law = laws[n["pcode"]]
     out = {"node_id": n["node_id"], "citation": n["citation"], "law_name": law["name"], "law_modified": law["modified"],
            "level": n["level"], "chapter": n["chapter"], "text": n["text"]}
+    if b := _blocks(n["text"]):
+        out["blocks"] = b
     art = n if n["level"] == "article" else _node(f'{n["pcode"]}/{n["article"]}')
     if with_article and n["level"] != "article":
         out["article_text"] = art["text"]
+        if b := _blocks(art["text"]):
+            out["article_blocks"] = b
     if n["level"] == "legend":
         lg = _one("SELECT category, name, note, symbols, note_images FROM drawing_legend WHERE node_id = %s", n["node_id"])
         if lg:
@@ -946,7 +957,9 @@ def _review_bundle(case_id: int) -> dict:
     laws = {}
     if ids:
         for x in _all("SELECT node_id, citation, text FROM law_node WHERE node_id = ANY(%s)", sorted(ids)):
-            laws[x["node_id"]] = {"citation": x["citation"], "text": (x["text"] or "")[:600]}
+            laws[x["node_id"]] = {"citation": x["citation"], "text": x["text"] or ""}
+            if b := _blocks(x["text"]):
+                laws[x["node_id"]]["blocks"] = b
     with pool.connection() as c:
         ctx = DS.get_context(c, case_id)
         dec = DS.decisions(c, case_id)
