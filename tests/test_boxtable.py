@@ -195,6 +195,14 @@ def test_dash_inside_cell_is_text_not_rule():
     assert _texts(t["rows"][2]) == ["一六○", "八", "二四○", "八", "─", "─", "─", "─", "二四○", "八"]
 
 
+def test_alignment_spaces_inside_cells_removed():
+    # 原文為了對齊在中文字之間塞空白：表格裡拿掉；英數與中文之間只留一個
+    cells = {c["text"] for b in BT.blocks(_text("D0120029/99")) if b["type"] == "table" for r in b["rows"] for c in r}
+    assert "滅火藥劑種類" in cells and "Ｘ值" in cells and not any("  " in c for c in cells)
+    assert BT._tidy("Ⅰ      型") == "Ⅰ型" and BT._tidy("10  以下") == "10 以下" and BT._tidy("A 級") == "A 級"
+    assert BT._tidy("丁醇 、乙醇") == "丁醇、乙醇" and BT._tidy("（Double deck） 或") == "（Double deck）或"
+
+
 def test_wrapped_ascii_words_keep_a_space():
     t = BT.blocks("┌────┬──┐\n│（Double│中文│\n│deck）  │交換│\n└────┴──┘")[0]
     assert _texts(t["rows"][0]) == ["（Double deck）", "中文交換"]

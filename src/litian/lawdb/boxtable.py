@@ -77,6 +77,23 @@ def _join(parts: list[str]) -> str:
     return out
 
 
+def _tidy(s: str) -> str:
+    """格內對齊用的空白：兩側都是全形字（中文、Ⅰ、Ｘ）時拿掉（「滅  火  藥  劑」→「滅火藥劑」），其餘連續空白縮成一個。"""
+    out, i = [], 0
+    while i < len(s):
+        if not s[i].isspace():
+            out.append(s[i])
+            i += 1
+            continue
+        j = i
+        while j < len(s) and s[j].isspace():
+            j += 1
+        if out and j < len(s) and not (_width(out[-1]) == 2 and _width(s[j]) == 2):
+            out.append(" ")
+        i = j
+    return "".join(out)
+
+
 def _alnum(ch: str) -> bool:
     return ch.isascii() and ch.isalnum()
 
@@ -189,7 +206,7 @@ def _parse(lines: list[str]) -> dict:
         bs = [band[l] for l in range(l0, l1 + 1) if band[l] >= 0]
         if not bs or starts[min(bs)] != l0 or ends[max(bs)] != l1:
             raise ValueError("儲存格與分隔線對不齊")
-        text = _join(["".join(content[l][i] for i in range(s0, s1 + 1)).strip() for l in range(l0, l1 + 1)])
+        text = _tidy(_join(["".join(content[l][i] for i in range(s0, s1 + 1)).strip() for l in range(l0, l1 + 1)]))
         cells.append({"r": (min(bs), max(bs) + 1), "c": (s0, s1 + 1), "text": text})
     if not cells:
         raise ValueError("沒有儲存格")
