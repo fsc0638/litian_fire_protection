@@ -8,7 +8,8 @@
 - cad/<svg_name>/<層級>/<欄>_<列>.png：Deep Zoom 層級規則（最大層＝原尺寸，每往下一層長寬減半、無條件進位，第 0 層 1×1）
 - cad/status.json：整批狀態 pending（排隊）｜rendering｜done｜failed、各張結果、警告（例：找不到中文字型）
 
-繪圖：ezdxf 繪圖模組＋matplotlib（Agg 點陣，授權寬鬆）；線寬照出圖紙上的實際粗細。
+繪圖：ezdxf 繪圖模組＋matplotlib（Agg 點陣，授權寬鬆）；線寬照出圖紙上的實際粗細；照出圖畫（配置頁只畫出圖範圍、
+不出圖的圖層不畫）；文字的字寬與中文換行貼近 AutoCAD（review.cadtext）。
 命令列：python -m litian.review.cadview <dxf> <ir.json> <review.json> <review_dir>
 （worker 在背景用子行程呼叫：限時、限記憶體、低優先順序；排隊與重畫見 drawing.worker 的 CadRunner）
 """
@@ -37,7 +38,6 @@ A3_PX = round(420 / 25.4 * DPI)        # A3 長邊 300 dpi ≈ 4961 px：最低�
 MAX_PX = 8000                         # 長邊上限（8000×5700 RGB 約 140 MB，再大子行程記憶體會不夠）
 FONTS = ("NotoSansCJK-Regular.ttc", "NotoSansTC-Regular.ttf", "msjh.ttc")   # 依序找第一個有的中文字型
 NAME = re.compile(r"^[0-9A-Z]{1,6}(-\d{1,4})?$")                            # 與 API 的 REVIEW_LABEL 相同
-INLINE_FONT = re.compile(r"\\[fF][^;\\]*;")                                  # 多行文字內嵌的字型切換（\f新細明體|b0|i0;）
 RATIO = re.compile(r"1\s*[:：/]\s*(\d+(?:\.\d+)?)")
 
 
@@ -113,26 +113,37 @@ def _paper_vp(vp) -> bool:
 def prepare(doc, font: str | None) -> dict:
     """只改記憶體中的 doc：
     1) .shx、沒有副檔名或本機沒有的字型改用中文字型（否則中文變方框），找不到的字型一律退回中文字型；
-    2) 多行文字內嵌的字型切換拿掉（改用上面的中文字型）；
+       中文字寬依原字型校正（SHX 大字體、正黑體等，見 cadtext.style_font）；
+    2) 多行文字內嵌的字型切換也改用中文字型，中文字寬依內嵌的原字型校正（與樣式相同就拿掉，見 cadtext.inline_fonts）；
     3) 視埠狀態不可靠（轉檔後常是「關閉」0；也有內容視埠是 1）：ezdxf 只畫狀態 >0 的視埠，
        且把排第一個、狀態 1 的當成整張紙丟掉。所以整張紙以外的視埠一律設成 ≥2、整張紙的一律關閉，
        畫哪些視埠就只看 _paper_vp，不靠 ezdxf 依狀態猜；
-    4) 實體用到、圖層表卻沒有的圖層補上（預設白／黑色，跟 AutoCAD 開檔時一樣；否則 ezdxf 一律畫成白色）。"""
+    4) 實體用到、圖層表卻沒有的圖層補上（預設白／黑色，跟 AutoCAD 開檔時一樣；否則 ezdxf 一律畫成白色）；
+    5) Defpoints 圖層設成不出圖（AutoCAD 出圖一律不印這層；畫圖照出圖畫，不出圖的圖層不畫）。"""
     from ezdxf.fonts import fonts
+
+    from litian.review import cadtext
     out = {"styles": 0, "mtext": 0, "viewports": 0, "layers": 0}
+    style_fonts = {}                           # 樣式名（小寫）→ 替換後的字型名
     if font:
         fm = fonts.font_manager
         fm._fallback_font_name = font          # ezdxf 沒有公開的設定方法
         for st in doc.styles:
             f = st.dxf.get("font", "") or ""
-            if f.lower().endswith(".shx") or "." not in f or st.dxf.get("bigfont", "") or not fm.has_font(f):
-                st.dxf.font = font
+            big = st.dxf.get("bigfont", "") or ""
+            if f.lower().endswith(".shx") or "." not in f or big or not fm.has_font(f):
+                st.dxf.font = cadtext.style_font(font, f, big, st.get_extended_font_data()[0])
                 st.dxf.bigfont = ""
                 out["styles"] += 1
+            style_fonts[st.dxf.name.lower()] = st.dxf.font
     used = set()
     for e in doc.entitydb.values():
-        if e.dxftype() == "MTEXT" and INLINE_FONT.search(e.text or ""):
-            e.text = INLINE_FONT.sub("", e.text)
+        if e.dxftype() == "MTEXT" and cadtext.INLINE_FONT.search(e.text or ""):
+            if font:                           # 樣式不存在時 ezdxf 用預設字型（＝替代字型）
+                cur = style_fonts.get(e.dxf.get("style", "Standard").lower(), font)
+                e.text = cadtext.inline_fonts(e.text, font, cur)
+            else:
+                e.text = cadtext.INLINE_FONT.sub(r"\1", e.text)       # 留下字面的反斜線
             out["mtext"] += 1
         if e.dxf.is_supported("layer"):
             used.add(e.dxf.get("layer", "0"))
@@ -151,6 +162,8 @@ def prepare(doc, font: str | None) -> dict:
             if vp.dxf.get("status", 0) != want:
                 vp.dxf.status = want
                 out["viewports"] += 1
+    if doc.layers.has_entry("Defpoints"):
+        doc.layers.get("Defpoints").dxf.plot = 0
     return out
 
 
@@ -211,10 +224,13 @@ def _union(boxes):
 
 
 def _paper_box(lay, cache):
-    """配置頁要畫的紙面範圍：紙面上所有實體（視埠取其外框，整張紙的視埠不算）。"""
+    """配置頁要畫的紙面範圍：紙面上所有畫得出來的實體（視埠取其外框，整張紙的視埠不算；其他實體在關閉、凍結、
+    不出圖的圖層上就不算，例：停在圖框外 Defpoints 上的東西）。全都不算時照全部實體。"""
     from ezdxf import bbox
     from ezdxf.math import BoundingBox2d, Vec2
-    parts = []
+    hidden = {ly.dxf.name.lower() for ly in lay.doc.layers
+              if ly.is_off() or ly.is_frozen() or not ly.dxf.get("plot", 1)}
+    parts, rest = [], []
     for e in lay:
         if e.dxftype() == "VIEWPORT":
             if _paper_vp(e) or e.dxf.get("status", 0) <= 0:
@@ -224,8 +240,40 @@ def _paper_box(lay, cache):
         else:
             b = bbox.extents((e,), fast=True, cache=cache)
             if b.has_data:
-                parts.append(BoundingBox2d([Vec2(b.extmin), Vec2(b.extmax)]))
-    return _union(parts)
+                box = BoundingBox2d([Vec2(b.extmin), Vec2(b.extmax)])
+                (rest if e.dxf.get("layer", "0").lower() in hidden else parts).append(box)
+    return _union(parts) if parts else _union(rest)
+
+
+def _plot_area(lay, box):
+    """配置頁的出圖範圍（AutoCAD 只印這塊）：出圖設定是視窗（plot_type 4）取出圖視窗、是圖面範圍（2）取 limits；
+    其他出圖方式或範圍不合理（沒涵蓋全部內容視埠、與紙面內容範圍 box 重疊不到一半）時 None（照紙面內容範圍）。"""
+    from ezdxf.math import BoundingBox2d, Vec2
+    d = lay.dxf_layout.dxf
+    kind = d.get("plot_type", 5)
+    if kind == 4:
+        x1, y1, x2, y2 = (float(d.get(k, 0.0)) for k in ("plot_window_x1", "plot_window_y1", "plot_window_x2",
+                                                          "plot_window_y2"))
+    elif kind == 2:
+        (x1, y1), (x2, y2) = Vec2(d.get("limmin", (0, 0))), Vec2(d.get("limmax", (0, 0)))
+    else:
+        return None
+    x1, x2 = sorted((x1, x2))
+    y1, y2 = sorted((y1, y2))
+    if x2 - x1 <= 0 or y2 - y1 <= 0 or not box.has_data:
+        return None
+    tol = max(x2 - x1, y2 - y1) * 0.02
+    for vp in lay.query("VIEWPORT"):
+        if _paper_vp(vp) or vp.dxf.get("status", 0) <= 0:
+            continue
+        c, w, h = vp.dxf.center, float(vp.dxf.width) / 2, float(vp.dxf.height) / 2
+        if c.x - w < x1 - tol or c.x + w > x2 + tol or c.y - h < y1 - tol or c.y + h > y2 + tol:
+            return None
+    ix = min(box.extmax.x, x2) - max(box.extmin.x, x1)
+    iy = min(box.extmax.y, y2) - max(box.extmin.y, y1)
+    if ix <= 0 or iy <= 0 or ix * iy < 0.5 * box.size.x * box.size.y:
+        return None
+    return BoundingBox2d([Vec2(x1, y1), Vec2(x2, y2)])
 
 
 def _pad(box, k: float = 0.01):
@@ -267,6 +315,8 @@ def render_sheet(doc, sheet: dict, cache, long_px: int | None = None):
     from matplotlib.figure import Figure
     from PIL import Image
 
+    from litian.review import cadtext
+
     scale = sheet.get("scale")
     if not scale:
         raise ValueError("無法判斷圖面單位")
@@ -281,9 +331,21 @@ def render_sheet(doc, sheet: dict, cache, long_px: int | None = None):
         box = _paper_box(lay, cache)
         if not box.has_data:
             raise ValueError("配置頁沒有內容")
+        area, clip = _plot_area(lay, box), None
+        if area is not None:                                     # 只畫出圖範圍；外擴長邊 0.12%：邊上的圖框線不被切掉一半
+            box = area
+            m = max(area.size.x, area.size.y) * 0.0012
+            clip = (area.extmin - Vec2(m, m), area.extmax + Vec2(m, m))
         unit_mm = 25.4 if lay.dxf_layout.dxf.get("plot_paper_units", 1) == 0 else 1.0
         paper_mm = max(box.size.x, box.size.y) * unit_mm
-        source, draw = "layout", (lambda fe: fe.draw_layout(lay, finalize=True))
+
+        def draw(fe) -> None:
+            if clip is not None:                                 # 紙面實體與視埠內容一起裁切
+                from ezdxf.tools.clipping_portal import ClippingRect
+                fe.pipeline.push_clipping_shape(ClippingRect(clip), None)
+            fe.draw_layout(lay, finalize=True)
+
+        source = "layout"
     else:
         msp = doc.modelspace()
         if sheet.get("bbox"):
@@ -330,7 +392,9 @@ def render_sheet(doc, sheet: dict, cache, long_px: int | None = None):
                                color_policy=config.ColorPolicy.COLOR,
                                image_policy=config.ImagePolicy.RECT,   # 圖片只畫外框：DXF 可指向任意本機檔案
                                lineweight_scaling=72 / 25.4)           # 這個繪圖後端把線寬（mm）直接當點數：換算成點
-    draw(Frontend(RenderContext(doc), _backend(MatplotlibBackend)(ax, adjust_figure=False), config=cfg, bbox_cache=cache))
+    # 照出圖畫（export_mode：不出圖的圖層不畫）
+    draw(_frontend(Frontend)(RenderContext(doc, export_mode=True), _backend(MatplotlibBackend)(ax, adjust_figure=False),
+                             config=cfg, bbox_cache=cache))
     # 畫完才設範圍（finalize 會自動縮放到全部圖元）：兩軸同一個比例（像素取整數後長寬比有微小差，多的平均留白）
     bw, bh = fig.bbox.width, fig.bbox.height
     s = min(bw / w, bh / h)                                      # 像素／圖面單位
@@ -355,8 +419,27 @@ def render_sheet(doc, sheet: dict, cache, long_px: int | None = None):
     meta = {"version": 1, "width": img.width, "height": img.height, "tile_size": TILE, "overlap": 0, "format": "png",
             "max_level": max_level(img.width, img.height), "transform": _affine(to_px), "source": source,
             "layout": sheet.get("layout") if source == "layout" else None, "dpi": round(dpi),
-            "rendered_at": _now(), "renderer": f"ezdxf {ezdxf.__version__} + matplotlib {matplotlib.__version__}"}
+            "rendered_at": _now(),
+            "renderer": f"ezdxf {ezdxf.__version__} + matplotlib {matplotlib.__version__} + {cadtext.REVISION}"}
     return img, meta, notes
+
+
+_FRONTEND = None
+
+
+def _frontend(base):
+    """ezdxf 的繪圖前端，含中文、有欄寬的多行文字改用 cadtext 的排版（可在中文字間換行，ezdxf 只在空白換行）。"""
+    global _FRONTEND
+    if _FRONTEND is None:
+        from litian.review import cadtext
+
+        class Frontend(base):
+            def draw_mtext_entity(self, entity, properties):
+                if not cadtext.draw_mtext(self, entity, properties):
+                    super().draw_mtext_entity(entity, properties)
+
+        _FRONTEND = Frontend
+    return _FRONTEND
 
 
 _BACKEND = None
