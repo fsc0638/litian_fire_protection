@@ -918,14 +918,22 @@ def _file_note(f: dict, r: dict, hosts: list[dict], info: dict[int, dict] | None
     return NO_FLOOR_NOTE
 
 
+def _refs_own_name(f: dict, key: str) -> bool:
+    """這個檔自己也引用同名的外部參考：是同名主圖的一個版本，不是底圖。"""
+    x = (f.get("stats") or {}).get("xref") or {}
+    return any(XR.ref_key(b) == key for b in x.get("bound") or []) or \
+        any(XR.ref_key(XR.strip_note(m)) == key for m in x.get("missing") or [])
+
+
 def _same_name(f: dict, files: list[dict], stored: dict[int, str]):
-    """同案件裡檔名相同（去掉上傳序號、不分大小寫）的其他 CAD 檔：（較新上傳且處理完成的, 較早上傳的）。"""
+    """同案件裡檔名相同（去掉上傳序號、不分大小寫）的其他 CAD 底圖：（較新上傳且處理完成的, 較早上傳的）。
+    同名主圖的其他版本（自己也引用同名參考）不算。"""
     me = stored.get(f["id"])
     if not me or f.get("kind") not in ("dwg", "dxf"):
         return [], []
     key, no = XR.name_key(me), XR.upload_no(me)
     same = [g for g in files if g["id"] != f["id"] and g.get("kind") in ("dwg", "dxf") and stored.get(g["id"])
-            and XR.name_key(stored[g["id"]]) == key]
+            and XR.name_key(stored[g["id"]]) == key and not _refs_own_name(g, key)]
     newer = [g for g in same if XR.upload_no(stored[g["id"]]) > no and g["status"] == "done"]
     older = [g for g in same if XR.upload_no(stored[g["id"]]) < no]
     return newer, older
@@ -933,7 +941,7 @@ def _same_name(f: dict, files: list[dict], stored: dict[int, str]):
 
 def _file_notes(files: list[dict], info: dict[int, dict]) -> list[dict]:
     """每個檔加上 note（白話說明）、review（檢核狀態，沒檢核過為 None）、xref_of（被哪個主圖當外部參考併入）、
-    superseded（同名底圖重新上傳後，舊的這份不再使用）。info：store.file_reviews 的結果（檔案 id → 存檔路徑與檢核摘要）。
+    superseded（同名底圖重新上傳後，舊的這份不再使用）、xref_warn（重新上傳的底圖讀不了，主圖改用較早的）。info：store.file_reviews 的結果（檔案 id → 存檔路徑與檢核摘要）。
     同名底圖重新上傳：主圖重新處理（自動排入）前，新的那份寫「重新處理後改用這份」；之後舊的寫「不再使用」。"""
     stored = {i: Path(r["path"]).name for i, r in info.items() if r.get("path")}
     hosts = _xref_hosts(files, stored)
@@ -942,27 +950,35 @@ def _file_notes(files: list[dict], info: dict[int, dict]) -> list[dict]:
         r = info.get(f["id"]) or {}
         f["review"] = r.get("review")
         f["xref_of"] = ((hosts.get(f["id"]) or [{}])[0]).get("name")
-        f["superseded"] = False
+        f["superseded"] = f["xref_warn"] = False
         f["note"] = _file_note(f, r, hosts.get(f["id"]) or [], info)
         if f["status"] != "done" or r.get("review") or hosts.get(f["id"]):
             continue
         newer, older = _same_name(f, files, stored)
         if newer:
-            last = max(XR.upload_no(stored[g["id"]]) for g in newer)
             f["superseded"] = True
-            f["note"] = f"已有較新上傳的同名檔，這份不再使用（改用第 {last} 個上傳的版本）"
+            f["note"] = "已有較新上傳的同名檔，這份不再使用"
             continue
-        mains = [h for g in older for h in hosts.get(g["id"]) or []]
-        if mains:
-            main = [by_id.get(h["id"]) or {} for h in mains]
-            names = "、".join(dict.fromkeys(f"「{h['name']}」" for h in mains))
-            f["xref_of"] = mains[0]["name"]
-            if any(m.get("status") in ("queued", "processing", "reviewing") for m in main):
-                f["note"] = f"較新上傳的建築底圖：{names}重新處理中，完成後改用這份"
-            elif all(isinstance(((m.get("stats") or {}).get("xref") or {}).get("bound_files"), list) for m in main):
-                f["note"] = f"較新上傳的建築底圖，但{names}仍併入較早上傳的同名檔（這份可能讀不了，請確認檔案）"
-            else:                                          # 改成「同名取最新」之前綁的：主圖下次重新處理時改用這份
-                f["note"] = f"較新上傳的建築底圖：{names}下次重新處理時改用這份"
+        used = [g for g in older if hosts.get(g["id"])]
+        mains = [h for g in used for h in hosts[g["id"]]]
+        if not mains:
+            continue
+        main = [by_id.get(h["id"]) or {} for h in mains]
+        names = "、".join(dict.fromkeys(f"「{h['name']}」" for h in mains))
+        me = stored[f["id"]].lower()
+        bad = [x for m in main for x in ((m.get("stats") or {}).get("xref") or {}).get("failed") or []
+               if XR.strip_note(x).lower() == me]
+        f["xref_of"] = mains[0]["name"]
+        if any(m.get("status") in ("queued", "processing", "reviewing") for m in main):
+            f["note"] = f"較新上傳的建築底圖：{names}重新處理中，完成後改用這份"
+        elif bad:                                          # 綁定時試過、讀不了：要使用者處理，不淡化
+            f["xref_of"] = None
+            f["xref_warn"] = True
+            f["note"] = f"這份讀不了（{bad[0][len(me):].strip('（）') or '原因不明'}），{names}改用較早上傳的同名檔；請確認檔案後重新上傳"
+        elif all(r.get("sha256") and r.get("sha256") == (info.get(g["id"]) or {}).get("sha256") for g in used):
+            f["note"] = f"內容與{names}已併入的同名檔相同，照用原本那份"
+        else:
+            f["note"] = f"較新上傳的建築底圖：{names}重新處理後改用這份"
     return files
 
 

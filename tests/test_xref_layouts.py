@@ -176,16 +176,34 @@ def test_xref_bind_uses_newest_same_name_upload(tmp_path):
 
 def test_xref_bind_falls_back_to_older_when_newest_unreadable(tmp_path):
     make_host_and_xref(tmp_path)
-    (tmp_path / "004_Area_1F.converted.dxf").write_bytes(b"\x00\x01 not a dxf")   # 最新的壞了
+    (tmp_path / "004_Area_1F.converted.dxf").write_bytes(b"\x00\x01 not a dxf")    # 最新的壞了
     (tmp_path / "004_Area_1F.dwg").write_bytes(b"AC1027")
     (tmp_path / "003_Area_1F.dwg").write_bytes(b"AC1027")                          # 次新的還沒轉檔（也不能用）
     info, texts = _bind(tmp_path)
     assert info["bound_files"] == ["001_Area_1F.dwg"] and info["missing"] == ["TITLE-A1.dwg"]   # 有綁到就不算缺
+    assert info["failed"][0].startswith("004_Area_1F.dwg（") and info["failed"][1] == "003_Area_1F.dwg（尚未轉檔）"
     assert "辦公室" in texts
-    for p in tmp_path.glob("00[1-3]_Area_1F*"):                                    # 都讀不了：全部列出來
+    for p in tmp_path.glob("00[1-3]_Area_1F*"):                                    # 都讀不了
         p.unlink()
     info, _ = _bind(tmp_path)
-    assert info["bound_files"] == [] and info["missing"][0].startswith("004_Area_1F.dwg（") and "TITLE-A1.dwg" in info["missing"]
+    assert info["bound_files"] == [] and info["missing"] == ["Area_1F.dwg", "TITLE-A1.dwg"]  # 缺的一律記原始參考名
+    assert info["failed"][0].startswith("004_Area_1F.dwg（")
+
+
+def test_xref_bind_skips_failed_uploads_and_same_name_main_versions(tmp_path):
+    # 處理失敗的上傳檔不用；同名主圖的另一版（自己也引用同名參考）不是底圖，退回真正的底圖
+    make_host_and_xref(tmp_path)
+    _ref_copy(tmp_path, "003_Area_1F", "新版機房")
+    info = XR.bind(tmp_path / "002_main.converted.dxf", tmp_path, tmp_path / "002_main.bound.dxf",
+                   original=tmp_path / "002_main.dwg", skip=["003_AREA_1F.dwg"])
+    assert info["bound_files"] == ["001_Area_1F.dwg"]
+    main_v2 = ezdxf.new("R2018")
+    main_v2.add_xref_def(r"..\建築\Area_1F.dwg", "Area_1F")                         # 同名主圖：也引用 Area_1F
+    main_v2.modelspace().add_blockref("Area_1F", (0, 0))
+    main_v2.saveas(tmp_path / "005_Area_1F.converted.dxf")
+    (tmp_path / "005_Area_1F.dwg").write_bytes(b"AC1032")
+    info, texts = _bind(tmp_path)
+    assert info["bound_files"] == ["003_Area_1F.dwg"] and "新版機房" in texts and info["failed"] == []
 
 
 def test_explode_keeps_only_wanted_layers_inside_windows():

@@ -41,10 +41,19 @@ def upload_no(name: str) -> int:
     return int(m.group(0)[:-1]) if m else 0
 
 
-def name_key(name: str) -> str:
-    """上傳檔名、存檔名或外部參考路徑 → 比對用的檔名主體（去掉資料夾、上傳序號、「（錯誤）」註記，不分大小寫）。"""
-    name = re.sub(r"（[^（）]*）$", "", str(name))
-    return UPLOAD_PREFIX.sub("", ref_key(name))
+def strip_note(name: str) -> str:
+    """去掉結尾的「（錯誤）」註記（綁定失敗時記的「001_B.dwg（DXFStructureError）」）。"""
+    return re.sub(r"（[^（）]*）$", "", str(name))
+
+
+def name_key(stored: str) -> str:
+    """案件資料夾裡的存檔名（001_Area_1F.dwg）→ 比對用的檔名主體：去掉上傳序號與註記，不分大小寫。
+    外部參考的原始路徑用 ref_key（檔名本身可能就是「20240315_」這類數字開頭，不能當序號去掉）。"""
+    return UPLOAD_PREFIX.sub("", ref_key(strip_note(stored)))
+
+
+class _SameNameMain(Exception):
+    """候選檔自己也引用同名的外部參考：是同名主圖的另一個版本，不是底圖。"""
 
 
 def case_candidates(case_dir: Path, exclude: Path | None = None) -> dict[str, list[Path]]:
@@ -61,47 +70,59 @@ def case_candidates(case_dir: Path, exclude: Path | None = None) -> dict[str, li
 
 
 def bind(src: Path, case_dir: Path, out: Path, convert: Callable[[Path], Path] | None = None,
-         original: Path | None = None) -> dict:
+         original: Path | None = None, skip=()) -> dict:
     """把 src（主圖 DXF）的外部參考併進來，寫到 out。回傳 {"bound": [圖塊名], "bound_files": [綁進來的上傳檔名],
-    "missing": [參考檔名], "path": 使用的 DXF}。上傳檔名是案件資料夾裡的存檔名（001_Area_1F.dwg），工作台用來標出哪個檔被併入。
+    "missing": [沒綁到的參考檔名（原始路徑的檔名）], "failed": [試過讀不了的上傳檔名（錯誤）], "path": 使用的 DXF}。
+    上傳檔名是案件資料夾裡的存檔名（001_Area_1F.dwg），工作台用來標出哪個檔被併入。skip：不用的上傳檔名（處理失敗的）。
+    同名的上傳檔最新的先試；讀不了、或其實是同名主圖的另一版（自己也引用同名參考）就試較早上傳的。
     沒有外部參考、或一個都綁不到時不寫檔，path 為 src。"""
     from ezdxf import recover, xref
 
     doc, _ = recover.readfile(str(src))
     refs = xref_blocks(doc)
-    info = {"bound": [], "bound_files": [], "missing": [], "path": str(src)}
+    info = {"bound": [], "bound_files": [], "missing": [], "failed": [], "path": str(src)}
+    skip = {str(s).lower() for s in skip}
     if not refs:
         return info
     cands = case_candidates(case_dir, exclude=original)
     for name, path in refs:
         key = ref_key(path)
-        if not cands.get(key):
-            info["missing"].append(PureWindowsPath(path).name or name)
-            continue
         blk = doc.blocks.get(name)
-        failed = []
-        for cand in cands[key]:                                  # 同名的最新上傳先試；讀不了（轉檔失敗、損壞）再試較早的
+
+        def load(p, key=key):
+            d = recover.readfile(p)[0]
+            if any(ref_key(x) == key for _, x in xref_blocks(d)):
+                raise _SameNameMain(p)
+            return d
+
+        bound = False
+        for cand in cands.get(key, []):                          # 同名的最新上傳先試
+            if cand.name.lower() in skip:
+                continue
             dxf = cand
             if cand.suffix.lower() == ".dwg":
                 conv = cand.with_name(cand.stem + ".converted.dxf")
                 if not conv.exists():
                     if convert is None:
-                        failed.append(cand.name)
+                        info["failed"].append(f"{cand.name}（尚未轉檔）")
                         continue
                     conv = convert(cand)
                 dxf = conv
             blk.block.dxf.xref_path = str(Path(dxf).resolve())   # 指向案件裡的檔，ezdxf 才找得到
             try:
-                xref.embed(blk, load_fn=lambda p: recover.readfile(p)[0])
+                xref.embed(blk, load_fn=load)
                 info["bound"].append(name)
                 info["bound_files"].append(cand.name)
+                bound = True
                 break
+            except _SameNameMain:
+                continue
             except Exception as e:                               # 版本較新、檔案損壞等：不中斷主圖處理
-                failed.append(f"{cand.name}（{type(e).__name__}）")
+                info["failed"].append(f"{cand.name}（{type(e).__name__}）")
                 if len(blk):                                     # 併到一半：不再拿別的檔疊上去
                     break
-        else:
-            info["missing"].extend(failed)
+        if not bound:
+            info["missing"].append(PureWindowsPath(path).name or name)
     if info["bound"]:
         doc.saveas(str(out))
         info["path"] = str(out)
@@ -111,7 +132,7 @@ def bind(src: Path, case_dir: Path, out: Path, convert: Callable[[Path], Path] |
 def main(argv: list[str]) -> int:
     """worker 用子行程呼叫（讀不可信的 DXF，限時限記憶體）：
     python -m litian.drawing.xref list <主圖.dxf>                         → 未綁定的外部參考 [[圖塊名, 路徑, 比對鍵]]
-    python -m litian.drawing.xref bind <主圖.dxf> <案件資料夾> <輸出.dxf> [原始上傳檔] → 綁定結果"""
+    python -m litian.drawing.xref bind <主圖.dxf> <案件資料夾> <輸出.dxf> [原始上傳檔 [不用的上傳檔名 JSON 清單]] → 綁定結果"""
     import json
     if argv[1] == "list":
         from ezdxf import recover
@@ -120,9 +141,10 @@ def main(argv: list[str]) -> int:
         return 0
     if argv[1] == "bind":
         original = Path(argv[5]) if len(argv) > 5 else None
-        print(json.dumps(bind(Path(argv[2]), Path(argv[3]), Path(argv[4]), original=original), ensure_ascii=False))
+        skip = json.loads(argv[6]) if len(argv) > 6 else []
+        print(json.dumps(bind(Path(argv[2]), Path(argv[3]), Path(argv[4]), original=original, skip=skip), ensure_ascii=False))
         return 0
-    raise SystemExit("用法：list <dxf> | bind <dxf> <case_dir> <out> [original]")
+    raise SystemExit("用法：list <dxf> | bind <dxf> <case_dir> <out> [original [skip_json]]")
 
 
 if __name__ == "__main__":

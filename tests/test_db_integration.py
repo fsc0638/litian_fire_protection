@@ -172,6 +172,27 @@ def test_cad_queue_backfill_claim_gen_and_recover(conn):
         "status": "queued", "review_only": True}
 
 
+def test_requeue_main_when_same_name_base_reuploaded(conn):
+    """同名底圖重新上傳、處理完：綁舊版的主圖排回完整重跑（排隊只重跑檢核的也改成完整重跑）；內容相同的不排。"""
+    import json
+    from litian.drawing import store as ST
+    from litian.drawing import worker as W
+    cid = ST.create_case(conn, "底圖", None)
+    m1, m2, b1, b2 = (ST.add_file(conn, cid, n, 1, h * 64, f"/x/{cid}/{s}")
+                      for n, h, s in (("M1.dwg", "1", "001_M1.dwg"), ("M2.dwg", "2", "002_M2.dwg"),
+                                      ("B.dwg", "a", "003_B.dwg"), ("B.dwg", "b", "004_B.dwg")))
+    bound = json.dumps({"xref": {"bound": ["B"], "bound_files": ["003_B.dwg"], "missing": []}})
+    conn.execute("UPDATE case_file SET status = 'done', stats = %s::jsonb WHERE id IN (%s, %s)", (bound, m1, m2))
+    conn.execute("UPDATE case_file SET status = 'queued', review_only = true WHERE id = %s", (m2,))
+    conn.execute("UPDATE case_file SET status = 'done' WHERE id IN (%s, %s)", (b1, b2))
+    assert W.requeue_xref_dependents(conn, {"id": b2, "case_id": cid, "path": f"/x/{cid}/004_B.dwg"}) == 2
+    rows = {r["id"]: (r["status"], r["review_only"]) for r in
+            conn.execute("SELECT id, status, review_only FROM case_file WHERE id IN (%s, %s)", (m1, m2)).fetchall()}
+    assert rows == {m1: ("queued", False), m2: ("queued", False)}
+    conn.execute("UPDATE case_file SET status = 'done', sha256 = %s WHERE id IN (%s, %s, %s)", ("a" * 64, m1, m2, b2))
+    assert W.requeue_xref_dependents(conn, {"id": b2, "case_id": cid, "path": f"/x/{cid}/004_B.dwg"}) == 0   # 內容一樣
+
+
 def test_file_reviews_counts_floors_and_findings_from_result(conn):
     """工作台檔案說明用的檢核摘要：樓層數、缺失數（各層＋全棟）直接從檢核結果算；沒檢核過、檢核失敗、全棟為 null 都不出錯。"""
     from litian.drawing import store as ST

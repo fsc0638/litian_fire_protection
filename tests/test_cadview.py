@@ -690,31 +690,48 @@ class _RowsConn:
 
 def test_requeue_mains_when_newer_same_name_base_processed():
     from litian.drawing import worker as W
-    x = lambda **k: {"stats": {"xref": {"bound": [], "missing": [], **k}}}
-    rows = [{"id": 1, **x(bound=["Area_1F"], bound_files=["002_Area_1F.dwg"])},        # 綁的是較早的 → 重排
-            {"id": 2, **x(bound=["Area_1F"], bound_files=["005_Area_1F.dwg"])},        # 已經是這份 → 不動
-            {"id": 3, **x(bound=["AREA_1F"])},                                         # 舊資料只有圖塊名 → 重排
-            {"id": 4, **x(missing=["Area_1F.dwg"])},                                   # 缺這個參考 → 重排
-            {"id": 5, **x(missing=["002_Area_1F.dwg（DXFStructureError）"])},          # 上次讀不了 → 重排
-            {"id": 6, **x(bound=["Area_2F"], bound_files=["003_Area_2F.dwg"])},        # 別的參考 → 不動
-            {"id": 7, **x(bound=["Area_1F"], bound_files=["009_Area_1F.dwg"])}]        # 綁的比這份新 → 不動
+
+    def row(i, stored, status="done", sha="s", review_only=False, **x):
+        return {"id": i, "path": f"/cases/1/{stored}", "sha256": sha, "status": status, "review_only": review_only,
+                "stats": {"xref": {"bound": [], "missing": [], **x}} if x else {"sheets": 1}}
+    rows = [row(9, "005_Area_1F.dwg", sha="new"),                                                    # 剛處理完的新底圖
+            row(10, "002_Area_1F.dwg", sha="old"),
+            row(11, "003_Area_1F.dwg", sha="new"),                                                   # 內容和新的一樣
+            row(1, "011_M1.dwg", bound=["Area_1F"], bound_files=["002_Area_1F.dwg"]),               # 綁較早、內容不同 → 重排
+            row(2, "012_M2.dwg", bound=["Area_1F"], bound_files=["005_Area_1F.dwg"]),               # 已經是這份 → 不動
+            row(3, "013_M3.dwg", bound=["AREA_1F"]),                                                 # 舊資料（綁最早的 002）→ 重排
+            row(4, "014_M4.dwg", missing=["Area_1F.dwg"]),                                           # 缺這個參考 → 重排
+            row(5, "015_M5.dwg", missing=["002_Area_1F.dwg（DXFStructureError）"]),                  # 舊版記的失敗 → 重排
+            row(6, "016_M6.dwg", bound=["Area_2F"], bound_files=["003_Area_2F.dwg"]),               # 別的參考 → 不動
+            row(7, "017_M7.dwg", bound=["Area_1F"], bound_files=["009_Area_1F.dwg"]),               # 綁的比這份新 → 不動
+            row(8, "018_M8.dwg", bound=["Area_1F"], bound_files=["003_Area_1F.dwg"]),               # 較早但內容相同 → 不動
+            row(12, "019_M9.dwg", status="queued", review_only=True, bound=["Area_1F"], bound_files=["002_Area_1F.dwg"]),  # 只重跑檢核 → 完整重跑
+            row(13, "020_M10.dwg", status="processing", bound=["Area_1F"], bound_files=["002_Area_1F.dwg"])]  # 處理中：自然會綁最新
     conn = _RowsConn(rows)
-    assert W.requeue_xref_dependents(conn, {"id": 9, "case_id": 1, "path": "/cases/1/005_Area_1F.dwg"}) == 4
-    assert conn.requeued == [1, 3, 4, 5]
+    assert W.requeue_xref_dependents(conn, {"id": 9, "case_id": 1, "path": "/cases/1/005_Area_1F.dwg"}) == 5
+    assert conn.requeued == [1, 3, 4, 5, 12]
+    # 數字開頭的參考檔名（民國日期）：不能把日期當成上傳序號
+    conn = _RowsConn([row(9, "005_1130315_A-1F.dwg"), row(1, "001_M.dwg", missing=["1130315_A-1F.dwg"])])
+    assert W.requeue_xref_dependents(conn, {"id": 9, "case_id": 1, "path": "/cases/1/005_1130315_A-1F.dwg"}) == 1
+    # 這份自己也引用同名參考（同名主圖的新版）：不是底圖，不排別人
+    conn = _RowsConn([row(9, "005_1F.dwg", bound=["1F"], bound_files=["001_1F.dwg"]), row(1, "001_1F.dwg"),
+                      row(2, "002_1F.dwg", bound=["1F"], bound_files=["001_1F.dwg"])])
+    assert W.requeue_xref_dependents(conn, {"id": 9, "case_id": 1, "path": "/cases/1/005_1F.dwg"}) == 0
 
 
 def test_bind_xrefs_converts_newest_and_falls_back(tmp_path, monkeypatch):
-    # 同名的最新上傳先送轉檔；轉不了改轉較早上傳的，主圖照樣處理
+    # 同名的最新上傳先送轉檔；轉不了改轉較早上傳的，主圖照樣處理；處理失敗的上傳檔不送
     from litian.drawing import convert_client as CC
     from litian.drawing import worker as W
-    for n in ("003_Area_1F.dwg", "002_Area_1F.dwg", "001_main.dwg"):
+    for n in ("004_Area_1F.dwg", "003_Area_1F.dwg", "002_Area_1F.dwg", "001_main.dwg"):
         (tmp_path / n).write_bytes(b"AC1027")
-    calls = []
+    calls, binds = [], []
 
     def run(args, timeout, what):
         if args[1] == "list":
             return json.dumps([["Area_1F", "Area_1F.dwg", "area_1f"]])
-        return json.dumps({"path": args[2], "bound": [], "bound_files": [], "missing": []})
+        binds.append(json.loads(args[-1]))
+        return json.dumps({"path": args[2], "bound": [], "bound_files": [], "missing": [], "failed": []})
 
     def convert(spool, jid, src, dst):
         calls.append((jid, src.name))
@@ -724,8 +741,10 @@ def test_bind_xrefs_converts_newest_and_falls_back(tmp_path, monkeypatch):
         return dst
     monkeypatch.setattr(W, "_run", run)
     monkeypatch.setattr(W, "_convert", convert)
-    W.bind_xrefs({"id": 7, "path": str(tmp_path / "001_main.dwg")}, tmp_path / "001_main.converted.dxf", tmp_path)
-    assert calls == [("f7x0", "003_Area_1F.dwg"), ("f7x0v1", "002_Area_1F.dwg")]
+    job = {"id": 7, "path": str(tmp_path / "001_main.dwg")}
+    W.bind_xrefs(job, tmp_path / "001_main.converted.dxf", tmp_path, skip=["004_Area_1F.dwg"])
+    assert calls == [("f7x0u3", "003_Area_1F.dwg"), ("f7x0u2", "002_Area_1F.dwg")]    # 工作代號帶上傳序號
+    assert binds == [["004_Area_1F.dwg"]]                                             # 綁定子行程也不用它
     calls.clear()
-    W.bind_xrefs({"id": 7, "path": str(tmp_path / "001_main.dwg")}, tmp_path / "001_main.converted.dxf", tmp_path)
-    assert calls == [("f7x0", "003_Area_1F.dwg")]                    # 較早的已轉好：最新的再試一次，失敗就用轉好的
+    W.bind_xrefs(job, tmp_path / "001_main.converted.dxf", tmp_path, skip=["004_Area_1F.dwg"])
+    assert calls == [("f7x0u3", "003_Area_1F.dwg")]                    # 較早的已轉好：最新的再試一次，失敗就用轉好的

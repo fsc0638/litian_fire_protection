@@ -601,7 +601,7 @@ ol.findings > li.flash { animation: liflash 2s ease-out; }
     $("#case-title").textContent = "案件 " + d.case.id + "｜" + d.case.name;
     // 說明由後端算好（已檢核幾層幾條、檢核失敗原因、外部參考併入哪個檔、為什麼沒檢核）
     $("#files").innerHTML = d.files.map((f) => "<tr><td>" + esc(f.name) + '</td><td><span class="badge b-' + f.status + '">' + STATUS[f.status] +
-      '</span></td><td class="small' + (f.xref_of && !f.review ? " muted" : "") + '">' + esc(f.note || "") + "</td></tr>").join("") ||
+      '</span></td><td class="small' + ((f.xref_of || f.superseded) && !f.review ? " muted" : "") + '">' + esc(f.note || "") + "</td></tr>").join("") ||
       '<tr><td colspan="3" class="muted">尚未上傳檔案。</td></tr>';
     caseFiles = d.files; renderUnreviewed();
     $("#sheets").innerHTML = d.sheets.map((s) => '<tr class="click" data-id="' + s.id + '"><td>' + esc(s.number || "—") + "</td><td>" + esc(s.title || "") +
@@ -670,13 +670,15 @@ ol.findings > li.flash { animation: liflash 2s ease-out; }
   // 處理完成卻沒有檢核的檔：寫出原因與怎麼做；當外部參考併進主圖一起檢核的只列一行（不算問題）
   function unreviewedHtml(files) {
     const idle = files.filter((f) => f.status === "done" && !f.review);
-    const miss = idle.filter((f) => !f.xref_of && !f.superseded), refs = idle.filter((f) => f.xref_of || f.superseded);
+    const warn = idle.filter((f) => f.xref_warn);
+    const miss = idle.filter((f) => !f.xref_of && !f.superseded && !f.xref_warn), refs = idle.filter((f) => f.xref_of || f.superseded);
     const busy = files.some((f) => ["queued", "processing", "reviewing"].includes(f.status));
     return (miss.length ? '<div class="unrev"><span class="badge b-skipped">未檢核</span> <b>沒有認出樓層平面圖</b><ul>' +
       miss.map((f) => "<li>" + esc(f.name) + "</li>").join("") + "</ul>" +
       "<p>圖框的圖名要寫出樓層（例如「一層消防平面圖」）系統才會檢核。</p>" +
       "<p>若這是被消防設備圖引用的建築底圖（外部參考），請上傳引用它的消防設備圖，系統會自動併入。</p>" +
       (busy ? '<p class="muted small">還有檔案在處理中；若上面的檔是它們引用的外部參考，處理完會自動併入。</p>' : "") + "</div>" : "") +
+      warn.map((f) => '<p class="note err small">' + esc(f.name) + "：" + esc(f.note || "") + "</p>").join("") +
       refs.map((f) => '<p class="unrev-ref muted small">' + esc(f.name) + "：" + esc(f.note || "建築底圖（外部參考），已併入「" + f.xref_of + "」一起檢核") + "</p>").join("");
   }
   function renderUnreviewed() {

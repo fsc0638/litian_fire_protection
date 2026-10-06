@@ -320,7 +320,7 @@ def file_reviews(conn, case_id: int) -> list[dict]:
     floors＝檢核的樓層數（同一層分好幾張系統圖時算一層）、findings＝缺失數（各層＋全棟）。直接從檢核結果算：stats.review 只在整個重新處理時寫，
     改檢核條件重跑後會過時。"""
     return conn.execute(
-        "SELECT f.id, f.path, r.status AS review, r.error AS review_error, "
+        "SELECT f.id, f.path, f.sha256, r.status AS review, r.error AS review_error, "
         "(SELECT count(DISTINCT l) FROM jsonb_path_query(r.result, '$.floors[*].label') l) AS floors, "
         "COALESCE(jsonb_array_length(jsonb_path_query_array(r.result, '$.floors[*].findings[*]')), 0) "
         "+ COALESCE(jsonb_array_length(jsonb_path_query_array(r.result, '$.building.findings[*]')), 0) AS findings "

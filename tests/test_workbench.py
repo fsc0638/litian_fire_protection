@@ -245,7 +245,7 @@ def test_case_files_get_plain_notes_and_xref_host(client, monkeypatch):
     assert got[8] == ("不支援的檔案類型，已略過（PDF 尚未支援）", None, None)
     assert got[9] == ("ConvertError: 轉檔逾時", None, None)
     assert got[10] == (None, None, None) and got[13] == (None, None, None)              # 處理中不寫說明
-    assert got[11] == ("較新上傳的建築底圖：「H.dwg」下次重新處理時改用這份", "H.dwg", None)
+    assert got[11] == ("較新上傳的建築底圖：「H.dwg」重新處理後改用這份", "H.dwg", None)
     assert got[12] == ("已檢核 1 層，缺失 0 條", None, "done")
     f1 = next(f for f in d["files"] if f["id"] == 1)
     assert f1["stats"]["sheets"] == 3 and f1["size"] == 1 and "path" not in f1           # 原有欄位保留，存檔路徑不外露
@@ -253,26 +253,35 @@ def test_case_files_get_plain_notes_and_xref_host(client, monkeypatch):
 
 def test_reuploaded_base_drawing_notes():
     # 同名底圖重新上傳：主圖重新處理前／中／後的說明；舊的那份最後標成不再使用（不列成未檢核的問題）
-    def notes(main_status, bound):
-        files = [_file(1, "M.dwg", status=main_status, stats={"xref": {"bound": ["B"], "bound_files": [bound]}}),
-                 _file(2, "B.dwg"), _file(3, "B.DWG")]
+    def notes(main_status, bound, failed=(), sha=("a", "b")):
+        files = [_file(1, "M.dwg", status=main_status, stats={"xref": {"bound": ["B"], "bound_files": [bound],
+                                                                          "failed": list(failed)}}),
+                 _file(2, "B.dwg"), _file(3, "B.DWG"),
+                 _file(4, "1F.dwg", stats={"xref": {"bound": ["1F"], "bound_files": ["006_1F.dwg"]}}),   # 與底圖同名的主圖
+                 _file(6, "1F.dwg")]
         info = {1: _summary(1, "001_M.dwg", "done" if main_status == "done" else None, 1, 3),
-                2: _summary(2, "002_B.dwg"), 3: _summary(3, "005_B.DWG")}
-        return {f["id"]: (f["note"], f["xref_of"], f["superseded"]) for f in api._file_notes(files, info)}
+                2: {**_summary(2, "002_B.dwg"), "sha256": sha[0]}, 3: {**_summary(3, "005_B.DWG"), "sha256": sha[1]},
+                4: _summary(4, "007_1F.dwg", "done", 1, 0), 6: _summary(6, "006_1F.dwg")}
+        out = {f["id"]: f for f in api._file_notes(files, info)}
+        return {i: (f["note"], f["xref_of"], f["superseded"], f["xref_warn"]) for i, f in out.items()}
     busy = notes("queued", "002_B.dwg")
-    assert busy[2] == ("建築底圖（外部參考），已併入「M.dwg」，但主圖沒有完成檢核（原因見主圖的說明）", "M.dwg", False)
-    assert busy[3] == ("較新上傳的建築底圖：「M.dwg」重新處理中，完成後改用這份", "M.dwg", False)
-    stuck = notes("done", "002_B.dwg")                                              # 重新處理後仍綁舊的：新的讀不了
-    assert "這份可能讀不了" in stuck[3][0] and stuck[3][1] == "M.dwg"
+    assert busy[2] == ("建築底圖（外部參考），已併入「M.dwg」，但主圖沒有完成檢核（原因見主圖的說明）", "M.dwg", False, False)
+    assert busy[3] == ("較新上傳的建築底圖：「M.dwg」重新處理中，完成後改用這份", "M.dwg", False, False)
+    assert notes("done", "002_B.dwg")[3] == ("較新上傳的建築底圖：「M.dwg」重新處理後改用這份", "M.dwg", False, False)
+    same = notes("done", "002_B.dwg", sha=("a", "a"))                                # 內容一樣：不必重跑
+    assert same[3] == ("內容與「M.dwg」已併入的同名檔相同，照用原本那份", "M.dwg", False, False)
+    bad = notes("done", "002_B.dwg", failed=["005_B.DWG（DXFStructureError）"])         # 綁定時試過、讀不了：要處理
+    assert bad[3][1:] == (None, False, True) and "讀不了（DXFStructureError）" in bad[3][0]
     after = notes("done", "005_B.DWG")
-    assert after[3] == ("建築底圖（外部參考），已併入「M.dwg」一起檢核", "M.dwg", False)
-    assert after[2] == ("已有較新上傳的同名檔，這份不再使用（改用第 5 個上傳的版本）", None, True)
+    assert after[3] == ("建築底圖（外部參考），已併入「M.dwg」一起檢核", "M.dwg", False, False)
+    assert after[2] == ("已有較新上傳的同名檔，這份不再使用", None, True, False)
+    assert after[6][0] == "建築底圖（外部參考），已併入「1F.dwg」一起檢核"                # 同名主圖不算較新的底圖
 
 
 def test_unreviewed_list_keeps_superseded_files_muted():
     html = _html()
     js = html[html.index("function unreviewedHtml("):html.index("function renderUnreviewed(")]
-    assert "!f.xref_of && !f.superseded" in js and "f.xref_of || f.superseded" in js
+    assert "!f.xref_of && !f.superseded && !f.xref_warn" in js and "f.xref_of || f.superseded" in js and "f.xref_warn" in js
 
 
 def test_xref_host_lists_every_main_file():
