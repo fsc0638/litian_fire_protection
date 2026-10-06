@@ -49,13 +49,14 @@ def case_candidates(case_dir: Path, exclude: Path | None = None) -> dict[str, Pa
 
 def bind(src: Path, case_dir: Path, out: Path, convert: Callable[[Path], Path] | None = None,
          original: Path | None = None) -> dict:
-    """把 src（主圖 DXF）的外部參考併進來，寫到 out。回傳 {"bound": [圖塊名], "missing": [參考檔名], "path": 使用的 DXF}。
+    """把 src（主圖 DXF）的外部參考併進來，寫到 out。回傳 {"bound": [圖塊名], "bound_files": [綁進來的上傳檔名],
+    "missing": [參考檔名], "path": 使用的 DXF}。上傳檔名是案件資料夾裡的存檔名（001_Area_1F.dwg），工作台用來標出哪個檔被併入。
     沒有外部參考、或一個都綁不到時不寫檔，path 為 src。"""
     from ezdxf import recover, xref
 
     doc, _ = recover.readfile(str(src))
     refs = xref_blocks(doc)
-    info = {"bound": [], "missing": [], "path": str(src)}
+    info = {"bound": [], "bound_files": [], "missing": [], "path": str(src)}
     if not refs:
         return info
     cands = case_candidates(case_dir, exclude=original)
@@ -79,6 +80,7 @@ def bind(src: Path, case_dir: Path, out: Path, convert: Callable[[Path], Path] |
         try:
             xref.embed(blk, load_fn=lambda p: recover.readfile(p)[0])
             info["bound"].append(name)
+            info["bound_files"].append(cand.name)
         except Exception as e:                                   # 版本較新、檔案損壞等：不中斷主圖處理
             info["missing"].append(f"{cand.name}（{type(e).__name__}）")
     if info["bound"]:

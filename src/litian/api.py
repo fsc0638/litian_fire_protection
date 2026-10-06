@@ -34,7 +34,9 @@ from . import ask as A
 from . import auth as AU
 from . import line_login as LL
 from .drawing import store as DS
+from .drawing import xref as XR
 from .drawing.cli import safe_name
+from .lawdb import boxtable as BT
 from .lawdb import search as S
 from .lawdb import tables as T
 from .lawdb import vectors as V
@@ -95,13 +97,24 @@ def _law_names() -> dict[str, dict]:
     return {r["pcode"]: r for r in _all("SELECT pcode, name, short, modified, effective, source_update FROM law")}
 
 
+@lru_cache(maxsize=1024)
+def _blocks(text: str | None) -> list[dict] | None:
+    """條文有方框字元（表格，或公式的根號線）時切成文字／表格區塊，前端照區塊畫（表格畫成真表格、其餘原文照排，
+    不必在前端猜方框字元從哪裡開始）；沒有方框字元回 None。每次請求都會用到，快取起來。"""
+    return BT.blocks(text) if text and any(c in BT.BOX for c in text) else None
+
+
 def _present(n: dict, laws: dict, with_article: bool = True) -> dict:
     law = laws[n["pcode"]]
     out = {"node_id": n["node_id"], "citation": n["citation"], "law_name": law["name"], "law_modified": law["modified"],
            "level": n["level"], "chapter": n["chapter"], "text": n["text"]}
+    if b := _blocks(n["text"]):
+        out["blocks"] = b
     art = n if n["level"] == "article" else _node(f'{n["pcode"]}/{n["article"]}')
     if with_article and n["level"] != "article":
         out["article_text"] = art["text"]
+        if b := _blocks(art["text"]):
+            out["article_blocks"] = b
     if n["level"] == "legend":
         lg = _one("SELECT category, name, note, symbols, note_images FROM drawing_legend WHERE node_id = %s", n["node_id"])
         if lg:
@@ -858,14 +871,75 @@ async def cases_upload(case_id: int, files: list[UploadFile] = File(...), user: 
     return {"files": out}
 
 
+NO_FLOOR_NOTE = "沒有認出樓層平面圖，未檢核：圖框的圖名要寫出樓層（例如「一層消防平面圖」）"
+
+
+def _xref_hosts(files: list[dict], stored: dict[int, str]) -> dict[int, list[dict]]:
+    """被同案件別的檔當外部參考併入的檔：檔案 id → 主圖（id、檔名）。stored：檔案 id → 案件資料夾裡的存檔名（001_Area_1F.dwg）。
+    主圖 stats.xref.bound_files 記了綁進來的存檔名；舊資料只有圖塊名（通常＝參考檔的檔名主體），照綁定時的規則比對
+    （xref.case_candidates：檔名去掉上傳序號、不分大小寫，同名取存檔名排最前的）。"""
+    cad = sorted((stored[f["id"]], f["id"]) for f in files if f.get("kind") in ("dwg", "dxf") and stored.get(f["id"]))
+    stems: dict[str, list[int]] = {}                   # 檔名主體 → 存檔名排序的檔案 id（綁定時同名取最前的）
+    for name, fid in cad:
+        stems.setdefault(XR.UPLOAD_PREFIX.sub("", Path(name).stem).lower(), []).append(fid)
+    out: dict[int, list[dict]] = {}
+    for m in files:
+        x = (m.get("stats") or {}).get("xref") or {}
+        if isinstance(x.get("bound_files"), list):
+            want = {str(n).lower() for n in x["bound_files"]}
+            hit = [fid for name, fid in cad if name.lower() in want]
+        else:
+            keys = {k for n in x.get("bound") or [] for k in (safe_name(str(n)).lower(), XR.ref_key(str(n)))}
+            hit = [next(i for i in stems[k] if i != m["id"]) for k in keys if any(i != m["id"] for i in stems.get(k, []))]
+        for fid in hit:
+            if fid != m["id"]:
+                out.setdefault(fid, []).append({"id": m["id"], "name": m["name"]})
+    return out
+
+
+def _file_note(f: dict, r: dict, hosts: list[dict], info: dict[int, dict] | None = None) -> str | None:
+    """檔案處理狀態的白話說明；處理中的不寫。"""
+    if f["status"] == "failed":
+        return f.get("error") or "處理失敗"
+    if f["status"] == "skipped":
+        return "不支援的檔案類型，已略過" + ("（PDF 尚未支援）" if f.get("kind") == "pdf" else "")
+    if f["status"] != "done":
+        return None
+    if r.get("review") == "failed":
+        return f"檢核失敗：{r.get('review_error') or '原因不明'}"
+    if r.get("review") == "done":
+        n, m = r.get("floors") or 0, r.get("findings") or 0
+        return f"已檢核 {n} 層，缺失 {m} 條" if n else "已檢核，但沒有認出樓層平面圖" + (f"；全棟缺失 {m} 條" if m else "")
+    if hosts:
+        names = "、".join(f"「{h['name']}」" for h in hosts)
+        if any(((info or {}).get(h["id"]) or {}).get("review") == "done" for h in hosts):
+            return f"建築底圖（外部參考），已併入{names}一起檢核"
+        return f"建築底圖（外部參考），已併入{names}，但主圖沒有完成檢核（原因見主圖的說明）"
+    return NO_FLOOR_NOTE
+
+
+def _file_notes(files: list[dict], info: dict[int, dict]) -> list[dict]:
+    """每個檔加上 note（白話說明）、review（檢核狀態，沒檢核過為 None）、xref_of（被哪個主圖當外部參考併入）。
+    info：store.file_reviews 的結果（檔案 id → 存檔路徑與檢核摘要）。"""
+    stored = {i: Path(r["path"]).name for i, r in info.items() if r.get("path")}
+    hosts = _xref_hosts(files, stored)
+    for f in files:
+        r = info.get(f["id"]) or {}
+        f["review"] = r.get("review")
+        f["xref_of"] = ((hosts.get(f["id"]) or [{}])[0]).get("name")
+        f["note"] = _file_note(f, r, hosts.get(f["id"]) or [], info)
+    return files
+
+
 @app.get("/api/cases/{case_id}")
 def cases_detail(case_id: int, user: dict = Depends(current_user)):
     case = _case_or_404(case_id)
     with pool.connection() as c:
         files = DS.case_status(c, case_id)
+        info = {r["id"]: r for r in DS.file_reviews(c, case_id)}
     sheets = _all("SELECT s.id, s.file_id, s.idx, s.number, s.title, s.scale, s.unit FROM case_sheet s "
                   "JOIN case_file f ON f.id = s.file_id WHERE f.case_id = %s ORDER BY s.number NULLS LAST, s.id", case_id)
-    return {"case": case, "files": files, "sheets": sheets}
+    return {"case": case, "files": _file_notes(files, info), "sheets": sheets}
 
 
 @app.get("/api/cases/{case_id}/sheets/{sheet_id}/texts")
@@ -927,6 +1001,33 @@ def _cad_state(cad: tuple[Path, dict] | None, name: str, queued: str | None = No
     return "done" if has_meta else None
 
 
+def _cited_laws(ids) -> dict:
+    """引用條文（工作台的依據浮窗）：條號、全文、表格區塊。引用的是「下列…：」這類引導句的項或款時，
+    本身文字不含底下各款，把子孫節點依條文順序接上；整條（article）的文字本來就是全文。
+    所屬條文的表格只在官方 PDF 時附上警語與連結（與法規問答頁相同）。"""
+    rows = _all("SELECT n.node_id, n.citation, n.text, n.level, a.pdf_table_url FROM law_node n "
+                "LEFT JOIN law_node a ON a.node_id = n.pcode || '/' || n.article "
+                "WHERE n.node_id = ANY(%s)", sorted(ids))
+    parts = [r["node_id"] for r in rows if r.get("level") != "article"]
+    kids: dict[str, list[str]] = {}
+    if parts:
+        for d in _all("SELECT node_id, text FROM law_node WHERE node_id LIKE ANY(%s) ORDER BY seq",
+                      [p.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "/%" for p in parts]):
+            for p in parts:
+                if d["node_id"].startswith(p + "/") and d["text"]:
+                    kids.setdefault(p, []).append(d["text"])
+    out = {}
+    for r in rows:
+        text = "\n".join([r["text"] or ""] + kids.get(r["node_id"], []))
+        out[r["node_id"]] = {"citation": r["citation"], "text": text}
+        if b := _blocks(text):
+            out[r["node_id"]]["blocks"] = b
+        if r.get("pdf_table_url"):
+            out[r["node_id"]]["warning"] = "本條的表格只在官方「完整條文」PDF 中，網頁與 API 文字不完整，請以 PDF 為準"
+            out[r["node_id"]]["pdf_table_url"] = r["pdf_table_url"]
+    return out
+
+
 def _review_bundle(case_id: int) -> dict:
     """檢核結果＋引用條文＋審核結果＋檢核條件（工作台與報告共用）。"""
     rows = _all("SELECT r.file_id, f.name, r.status, r.error, r.result, r.svg_dir, r.created_at, f.cad_state FROM file_review r "
@@ -943,10 +1044,7 @@ def _review_bundle(case_id: int) -> dict:
             fl["cad"] = _cad_state(cad, _svg_name(fl), r.get("cad_state"))
             for item in fl["findings"] + fl["notes"]:
                 ids.update(item["law"])
-    laws = {}
-    if ids:
-        for x in _all("SELECT node_id, citation, text FROM law_node WHERE node_id = ANY(%s)", sorted(ids)):
-            laws[x["node_id"]] = {"citation": x["citation"], "text": (x["text"] or "")[:600]}
+    laws = _cited_laws(ids) if ids else {}
     with pool.connection() as c:
         ctx = DS.get_context(c, case_id)
         dec = DS.decisions(c, case_id)

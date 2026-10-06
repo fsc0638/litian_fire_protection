@@ -12,6 +12,7 @@
   --border: #e2ded5; --accent: #c2410c; --accent-soft: #fdecdf; --accent-text: #9a3412;
   --ok: #15803d; --ok-soft: #e7f6ec; --warn: #a16207; --warn-soft: #fff7e0; --err: #b91c1c; --err-soft: #fdeceb;
   --focus: #2563eb; --shadow: 0 1px 2px rgba(0,0,0,.05), 0 2px 8px rgba(0,0,0,.04);
+  --accent-solid: #c2410c; --accent-solid-hover: #9a3412; --pop-shadow: 0 10px 30px rgba(0,0,0,.16), 0 2px 6px rgba(0,0,0,.08);
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -19,6 +20,7 @@
     --border: #36332d; --accent: #f97316; --accent-soft: #3a2416; --accent-text: #fdba74;
     --ok: #4ade80; --ok-soft: #12301d; --warn: #facc15; --warn-soft: #2f2710; --err: #fca5a5; --err-soft: #3a1716;
     --focus: #60a5fa; --shadow: none;
+    --accent-solid: #c2410c; --accent-solid-hover: #d24a0f; --pop-shadow: 0 10px 30px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.04);
   }
 }
 :root[data-theme="dark"] {
@@ -26,6 +28,7 @@
   --border: #36332d; --accent: #f97316; --accent-soft: #3a2416; --accent-text: #fdba74;
   --ok: #4ade80; --ok-soft: #12301d; --warn: #facc15; --warn-soft: #2f2710; --err: #fca5a5; --err-soft: #3a1716;
   --focus: #60a5fa; --shadow: none;
+  --accent-solid: #c2410c; --accent-solid-hover: #d24a0f; --pop-shadow: 0 10px 30px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.04);
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text);
@@ -88,14 +91,84 @@ tr.click:hover td, tr.sel td { background: var(--surface-2); }
 .floor:first-child { border-top: 0; margin-top: 0; padding-top: 0; }
 .floor h3 { font-size: .95rem; margin: 0 0 6px; }
 .plan { width: 100%; height: auto; border: 1px solid var(--border); border-radius: 8px; background: #fff; display: block; }
-ol.findings { padding-left: 0; list-style: none; margin: 10px 0 0; }
-ol.findings li { border-left: 4px solid var(--border); padding: 6px 10px; margin: 0 0 8px; background: var(--surface-2); border-radius: 0 8px 8px 0; }
-ol.findings li.s-RED { border-left-color: #d93025; } ol.findings li.s-ORANGE { border-left-color: #e8710a; }
-ol.findings li.s-YELLOW { border-left-color: #c9a100; } ol.findings li.s-BLUE { border-left-color: #1a73e8; }
+/* 缺失卡：標頭（嚴重度、標題、在圖上看）＋標示清單（說明／建議／要補的資料／依據）＋審核列。
+   缺失清單在寬螢幕只有約 400px 寬（右邊欄）：用容器查詢，窄時標題換到第二行、標示改在內容上方 */
+ol.findings { padding-left: 0; list-style: none; margin: 12px 0 0; container-type: inline-size; }
+ol.findings > li { border-left: 4px solid var(--border); padding: 10px 14px 12px; margin: 0 0 10px; background: var(--surface-2); border-radius: 0 10px 10px 0; }
+ol.findings > li.s-RED { border-left-color: #d93025; } ol.findings > li.s-ORANGE { border-left-color: #e8710a; }
+ol.findings > li.s-YELLOW { border-left-color: #c9a100; } ol.findings > li.s-BLUE { border-left-color: #1a73e8; }
 .sev { color: #fff; } .sev.s-RED { background: #d93025; } .sev.s-ORANGE { background: #e8710a; }
 .sev.s-YELLOW { background: #a68400; } .sev.s-BLUE { background: #1a73e8; }
-.law { color: var(--muted); } .law span { border-bottom: 1px dotted var(--muted); cursor: help; }
-details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
+.f-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 6px 10px; align-items: start; }
+.f-head .sev { margin-top: 2px; }
+.f-title { font-size: 1.02rem; line-height: 1.45; overflow-wrap: anywhere; }
+.f-body { display: grid; grid-template-columns: 5.2em minmax(0, 1fr); gap: 6px 12px; align-items: start; margin: 10px 0 0; font-size: .9rem; line-height: 1.7; }
+.f-body dt { color: var(--muted); font-size: .8rem; line-height: 1.53rem; font-weight: 600; white-space: nowrap; }   /* 行高同內容第一行，標示對齊 */
+.f-body dd { margin: 0; overflow-wrap: anywhere; }
+.f-body ul { margin: 0; padding-left: 1.2em; }
+.f-body ul li + li { margin-top: 2px; }
+@container (max-width: 460px) {
+  .f-head { grid-template-columns: auto minmax(0, 1fr); }
+  .f-head .f-title { grid-column: 1 / -1; grid-row: 2; }
+  .f-head .locate { justify-self: end; }
+}
+@container (max-width: 300px) {
+  .f-body { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .f-body dd + dt { margin-top: 8px; }
+}
+/* 在圖上看：實心強調色膠囊按鈕＋定位圖示（缺失卡標頭右側） */
+button.locate { display: inline-flex; align-items: center; gap: 5px; padding: 4px 12px 4px 9px; border: 0; border-radius: 999px;
+  background: var(--accent-solid); color: #fff; font-size: .82rem; font-weight: 600; line-height: 1.45; white-space: nowrap;
+  box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+button.locate:hover { background: var(--accent-solid-hover); box-shadow: 0 2px 6px rgba(0,0,0,.25); }
+button.locate:active { transform: translateY(1px); box-shadow: none; }
+button.locate svg { flex: none; display: block; }
+.law { color: var(--muted); }
+/* 依據的條文：虛線底線的按鈕，滑過、聚焦或點按時在浮窗顯示全文 */
+.lawref { font: inherit; line-height: inherit; color: inherit; background: none; border: 0; border-radius: 3px; padding: 0; margin: 0;
+  cursor: help; text-align: left; text-decoration: underline dotted; text-decoration-color: var(--muted); text-underline-offset: 3px; }
+.lawref:hover, .lawref[aria-expanded="true"] { color: var(--accent-text); text-decoration-style: solid; text-decoration-color: currentColor; }
+.lawpop { position: fixed; z-index: 50; left: 8px; top: 8px; width: max-content; max-width: min(560px, calc(100vw - 16px)); max-height: 70vh;
+  overflow: hidden auto; overscroll-behavior: contain; background: var(--surface); color: var(--text); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: var(--pop-shadow); font-size: .88rem; line-height: 1.7; }
+.lawpop:focus { outline: none; }
+.lawpop-h { position: sticky; top: 0; z-index: 1; display: flex; gap: 10px; align-items: flex-start; justify-content: space-between;
+  padding: 8px 8px 8px 14px; background: var(--surface); border-bottom: 1px solid var(--border); }
+.lawpop-h b { font-size: .92rem; line-height: 1.5; padding-top: 3px; overflow-wrap: anywhere; }
+.lawpop-x { flex: none; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--muted); font-size: 1.15rem; line-height: 1; }
+.lawpop-x:hover { background: var(--surface-2); color: var(--text); }
+.lawpop-b { padding: 10px 14px 14px; }
+.lawpop-b > * + * { margin-top: 10px; }
+.lawtext { white-space: pre-wrap; overflow-wrap: anywhere; }
+.lawtbl { overflow-x: auto; }
+.lawtbl table { width: auto; min-width: 100%; font-size: .84rem; line-height: 1.55; }
+.lawtbl th, .lawtbl td { border: 1px solid var(--border); padding: 6px 9px; min-width: 4.5em; vertical-align: top; text-align: left;
+  white-space: pre-wrap; color: var(--text); font-size: inherit; }
+.lawtbl th { background: var(--surface-2); font-weight: 600; }
+.lawtbl .long { min-width: 12em; }                      /* 長文字的格子不要被擠成一行兩三個字 */
+.lawwarn { margin: 8px 0 0; font-size: .82rem; color: var(--muted); }
+.lawpre { margin: 0; padding: 8px 10px; overflow-x: auto; white-space: pre; background: var(--surface-2); border-radius: 6px;
+  font: .8rem/1.45 ui-monospace, Consolas, "MingLiU", monospace; }
+/* 說明、判讀提醒、應設設備判定：行距放寬 */
+.notes { margin: 8px 0 0; padding-left: 1.2em; font-size: .88rem; line-height: 1.7; }
+.notes li + li { margin-top: 5px; }
+.bnotes { margin-top: 4px; font-size: .85rem; line-height: 1.7; color: var(--muted); }
+.floor details { margin-top: 12px; }
+table.req td { line-height: 1.65; padding: 9px 10px; }
+table.req td > div + div { margin-top: 4px; }
+/* 手機：應設設備判定改成一筆一塊（設備＋判定一行，理由、依據接在下面），不擠成一行兩三個字的四欄 */
+@media (max-width: 600px) {
+  table.req thead { display: none; }
+  table.req, table.req tbody, table.req tr { display: block; width: 100%; }
+  table.req tr { padding: 10px 0; border-bottom: 1px solid var(--border); }
+  table.req td { display: block; border: 0; padding: 2px 0; }
+  table.req td:first-child { display: inline; font-weight: 600; margin-right: 8px; }
+  table.req td:nth-child(2) { display: inline; }
+  table.req td:nth-child(2) > div { display: inline; margin-left: 6px; }
+  table.req td:nth-child(3) { margin-top: 4px; }
+  table.req td.law::before { content: "依據："; }
+}
+details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; padding: 2px 0; }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
 .grid2 label, .lbl { display: block; font-size: .85rem; color: var(--muted); }
 select, input[type=number] { font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border);
@@ -103,11 +176,23 @@ select, input[type=number] { font: inherit; padding: 6px 8px; border-radius: 8px
 #c-floors input[type=number] { max-width: 130px; }
 a.btn { display: inline-block; font-size: .9rem; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2);
   color: var(--text); padding: 6px 12px; text-decoration: none; }
-.decide { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+.decide { display: flex; gap: 6px 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
 .decide input { flex: 1 1 160px; font: inherit; font-size: .85rem; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border);
   background: var(--surface); color: var(--text); }
 .decide button { padding: 3px 10px; font-size: .85rem; }
-ol.findings li.rejected { opacity: .55; }
+.decide .small { line-height: 1.6; overflow-wrap: anywhere; }
+ol.findings > li.rejected { opacity: .55; }
+/* 完成了卻沒有檢核的檔（檢核結果卡） */
+.unrev { border: 1px solid var(--border); border-left: 4px solid var(--warn); border-radius: 0 10px 10px 0; background: var(--warn-soft);
+  padding: 10px 14px; margin: 0 0 12px; font-size: .9rem; line-height: 1.7; }
+.unrev ul { margin: 4px 0 6px; padding-left: 1.2em; overflow-wrap: anywhere; }
+.unrev p { margin: 4px 0 0; }
+.unrev-ref { margin: 0 0 8px; line-height: 1.6; overflow-wrap: anywhere; }
+#files td:first-child { overflow-wrap: anywhere; min-width: 7em; }
+#files td:last-child { line-height: 1.6; }
+details.raw > summary { color: var(--text); font-size: 1rem; font-weight: 600; }
+details.raw h3 { font-size: .95rem; margin: 0 0 8px; }
+details.raw .cols { margin-top: 12px; }
 .st-REQUIRED { background: var(--accent-soft); color: var(--accent-text); }
 .st-NOT_REQUIRED { background: var(--surface-2); color: var(--muted); }
 .st-UNKNOWN { background: var(--warn-soft); color: var(--warn); }
@@ -127,10 +212,9 @@ ol.findings li.rejected { opacity: .55; }
 .cadmarks .lbl.hit circle { animation: cadlbl .45s ease-in-out 6 alternate; }
 @keyframes cadlbl { to { stroke: #1c1b19; stroke-width: 5px; } }
 .cadmarks .lbl text { font: 700 11px system-ui, sans-serif; fill: #fff; text-anchor: middle; dominant-baseline: central; }
-ol.findings li.loc { cursor: pointer; }
-ol.findings li.flash { animation: liflash 2s ease-out; }
+ol.findings > li.loc { cursor: pointer; }
+ol.findings > li.flash { animation: liflash 2s ease-out; }
 @keyframes liflash { from { box-shadow: 0 0 0 3px var(--focus); } to { box-shadow: 0 0 0 3px transparent; } }
-button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-align: 1px; }
 @media (min-width: 900px) {
   .floorbody.has-cad { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 14px; align-items: start; }
   .floorbody.has-cad .cadbox { position: sticky; top: 8px; }
@@ -235,7 +319,7 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
       <div class="card">
         <h2>檔案處理狀態</h2>
         <table>
-          <thead><tr><th>檔名</th><th>狀態</th><th>抽取結果</th></tr></thead>
+          <thead><tr><th>檔名</th><th>狀態</th><th>說明</th></tr></thead>
           <tbody id="files"></tbody>
         </table>
       </div>
@@ -270,26 +354,32 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
         <div class="row" style="justify-content:space-between;margin-bottom:8px"><h2 style="margin:0">檢核結果</h2>
           <span class="row"><a id="rep-html" class="btn" target="_blank" rel="noopener">匯出報告（可列印成 PDF）</a><a id="rep-csv" class="btn">匯出 CSV</a></span></div>
         <p id="review-hint" class="muted small">上傳含平面圖的 DWG／DXF 後，系統會自動認出房間與消防設備，逐項比對法規並標出缺失。</p>
+        <div id="unreviewed"></div>
         <p id="review-summary" class="small muted"></p>
         <div id="reviews"></div>
       </div>
-      <div class="cols">
-        <div class="card">
-          <h2>圖紙</h2>
-          <div class="scrollbox">
-            <table>
-              <thead><tr><th>圖號</th><th>圖名</th><th class="opt">比例</th><th class="opt">單位</th></tr></thead>
-              <tbody id="sheets"></tbody>
-            </table>
+      <!-- 圖紙與抽出的文字：認不出樓層、房間、設備時核對用，平常收起來 -->
+      <details id="raw" class="card raw">
+        <summary>圖紙與抽出的文字（查看系統從圖上讀到什麼）</summary>
+        <p class="muted small">系統沒有認出樓層、房間或設備時，可以在這裡核對每張圖的圖號、圖名與圖上抽出的文字。</p>
+        <div class="cols">
+          <div>
+            <h3>圖紙</h3>
+            <div class="scrollbox">
+              <table>
+                <thead><tr><th>圖號</th><th>圖名</th><th class="opt">比例</th><th class="opt">單位</th></tr></thead>
+                <tbody id="sheets"></tbody>
+              </table>
+            </div>
+          </div>
+          <div>
+            <h3 id="texts-title">圖面文字</h3>
+            <input id="filter" type="search" placeholder="搜尋文字，例如：面積" class="hidden" style="margin-bottom:8px">
+            <div class="scrollbox"><table><tbody id="texts"></tbody></table></div>
+            <p id="texts-hint" class="muted small">點圖紙清單裡的一張圖，看抽出的文字。</p>
           </div>
         </div>
-        <div class="card">
-          <h2 id="texts-title">圖面文字</h2>
-          <input id="filter" type="search" placeholder="搜尋文字，例如：面積" class="hidden" style="margin-bottom:8px">
-          <div class="scrollbox"><table><tbody id="texts"></tbody></table></div>
-          <p id="texts-hint" class="muted small">點左邊的圖紙，看抽出的文字。</p>
-        </div>
-      </div>
+      </details>
     </div>
   </section>
 </main>
@@ -297,9 +387,9 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
 <script>
 (() => {
   const $ = (s) => document.querySelector(s);
-  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  // esc（HTML 跳脫）在下方「法條區塊」段落（純函式，測試要單獨跑）
   const STATUS = { queued: "排隊中", processing: "處理中", reviewing: "檢核中", done: "完成", failed: "失敗", skipped: "略過" };
-  let currentCase = null, timer = null, cadTimer = null, sheetTexts = [];
+  let currentCase = null, timer = null, cadTimer = null, sheetTexts = [], caseFiles = [], lastUnrev = "";
 
   async function api(path, opts = {}) {
     const res = await fetch(path, { credentials: "same-origin", ...opts });
@@ -339,7 +429,7 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
   };
   let me = null;
   function showLogin(err) {
-    me = null; clearInterval(timer); clearTimeout(cadTimer); cadTimer = null; reviewsGen++;
+    me = null; clearInterval(timer); clearTimeout(cadTimer); cadTimer = null; reviewsGen++; closeLaw(false);
     $("#app").classList.add("hidden"); $("#invite").classList.add("hidden"); $("#login").classList.remove("hidden");
     $("#logout").classList.add("hidden"); $("#admin-link").classList.add("hidden"); $("#who").textContent = "";
     const msg = err && errText(err);
@@ -464,7 +554,7 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
   window.addEventListener("hashchange", route);
   const inviteIn = (hash) => (hash.match(/^#invite=([A-Za-z0-9_-]{20,200})$/) || [])[1];
   function route() {
-    clearInterval(timer); clearTimeout(cadTimer); cadTimer = null; reviewsGen++;
+    clearInterval(timer); clearTimeout(cadTimer); cadTimer = null; reviewsGen++; closeLaw(false);
     const inv = inviteIn(location.hash);                     // 已開著工作台時在同一分頁點邀請連結（只改了 # 片段）
     if (inv) { history.replaceState(null, "", location.pathname); showInvite(inv); return; }
     if (!me) return;
@@ -500,6 +590,8 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
     currentCase = id;
     $("#list-view").classList.add("hidden"); $("#case-view").classList.remove("hidden");
     destroyCads(); lastReviews = ""; ctxDirty = false; $("#reviews").innerHTML = ""; $("#ctx-msg").textContent = "";
+    bundle = { reviews: [], laws: {}, decisions: {}, context: {} }; caseFiles = []; lastUnrev = ""; $("#unreviewed").innerHTML = "";
+    $("#raw").open = false;
     $("#texts").innerHTML = ""; $("#filter").classList.add("hidden"); $("#texts-hint").classList.remove("hidden"); $("#texts-title").textContent = "圖面文字";
     await refreshCase();
   }
@@ -507,12 +599,11 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
   async function refreshCase() {
     const d = await api("/api/cases/" + currentCase);
     $("#case-title").textContent = "案件 " + d.case.id + "｜" + d.case.name;
-    $("#files").innerHTML = d.files.map((f) => {
-      const s = f.stats || {};
-      const info = f.status === "done" ? "圖 " + s.sheets + "｜文字 " + s.texts + "｜圖塊 " + s.inserts + "｜圖號 " + esc((s.sheet_numbers || []).map((x) => x || "—").join("、"))
-        : esc(f.error || "");
-      return "<tr><td>" + esc(f.name) + '</td><td><span class="badge b-' + f.status + '">' + STATUS[f.status] + "</span></td><td class=\"small\">" + info + "</td></tr>";
-    }).join("") || '<tr><td colspan="3" class="muted">尚未上傳檔案。</td></tr>';
+    // 說明由後端算好（已檢核幾層幾條、檢核失敗原因、外部參考併入哪個檔、為什麼沒檢核）
+    $("#files").innerHTML = d.files.map((f) => "<tr><td>" + esc(f.name) + '</td><td><span class="badge b-' + f.status + '">' + STATUS[f.status] +
+      '</span></td><td class="small' + (f.xref_of && !f.review ? " muted" : "") + '">' + esc(f.note || "") + "</td></tr>").join("") ||
+      '<tr><td colspan="3" class="muted">尚未上傳檔案。</td></tr>';
+    caseFiles = d.files; renderUnreviewed();
     $("#sheets").innerHTML = d.sheets.map((s) => '<tr class="click" data-id="' + s.id + '"><td>' + esc(s.number || "—") + "</td><td>" + esc(s.title || "") +
       '</td><td class="opt">' + esc(s.scale || "") + '</td><td class="opt">' + esc(s.unit || "") + "</td></tr>").join("");
     clearInterval(timer);
@@ -530,9 +621,6 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
     manual_alarm: "手動警報機", end_test_valve: "末端查驗閥", alarm_valve: "自動警報逆止閥", emergency_outlet: "緊急電源插座" };
   let lastReviews = "", bundle = { reviews: [], laws: {}, decisions: {}, context: {} }, occList = null, ctxDirty = false;
   let reviewsGen = 0, decEpoch = 0;          // 換案件／頁面時作廢查詢中的結果；送出審核決定期間的查詢結果不採用
-  function lawHtml(ids, laws) {
-    return ids.map((id) => { const l = laws[id]; return l ? '<span title="' + esc(l.text) + '">' + esc(l.citation) + "</span>" : esc(id); }).join("、");
-  }
   function decisionOf(fileId, key) { return (bundle.decisions[String(fileId)] || {})[key] || {}; }
   function decisionHtml(fileId, key) {
     const d = decisionOf(fileId, key);
@@ -542,30 +630,32 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
     return '<div class="decide"><input type="text" maxlength="500" placeholder="審核備註（選填）" aria-label="審核備註">' +
       '<button type="button" data-act="accept">接受</button><button type="button" data-act="reject">退回</button></div>';
   }
+  // 缺失卡：標頭（嚴重度、標題；有原圖時 mountCad 在右側加「在圖上看」）＋標示清單＋審核列
   function findingHtml(fileId, f) {
     const rej = decisionOf(fileId, f.key).decision === "reject";
+    const law = lawHtml(f.law, bundle.laws), miss = f.missing || [];
     return '<li class="s-' + f.severity + (rej ? " rejected" : "") + '" data-file="' + fileId + '" data-key="' + esc(f.key) + '" data-no="' + esc(f.no) + '">' +
-      '<span class="badge sev s-' + f.severity + '">' + f.no + "．" + SEV[f.severity] + "</span> <b>" + esc(f.title) + "</b>" +
-      '<div class="small">' + esc(f.why) + "</div>" +
-      '<div class="small"><b>建議：</b>' + esc(f.fix) + "</div>" +
-      (f.missing.length ? '<div class="small"><b>要補的資料：</b>' + f.missing.map(esc).join("；") + "</div>" : "") +
-      '<div class="small law">依據：' + lawHtml(f.law, bundle.laws) + "</div>" + decisionHtml(fileId, f.key) + "</li>";
+      '<div class="f-head"><span class="badge sev s-' + f.severity + '">' + esc(f.no) + "．" + SEV[f.severity] + '</span><b class="f-title">' + esc(f.title) + "</b></div>" +
+      '<dl class="f-body">' + (f.why ? "<dt>說明</dt><dd>" + esc(f.why) + "</dd>" : "") +
+      (f.fix ? "<dt>建議</dt><dd>" + esc(f.fix) + "</dd>" : "") +
+      (miss.length ? "<dt>要補的資料</dt><dd><ul>" + miss.map((m) => "<li>" + esc(m) + "</li>").join("") + "</ul></dd>" : "") +
+      (law ? "<dt>依據</dt><dd>" + law + "</dd>" : "") + "</dl>" + decisionHtml(fileId, f.key) + "</li>";
   }
   function noteHtml(notes) {
-    return notes.map((n) => '<div class="small">' + esc(n.text) + (n.law && n.law.length ? '<span class="law">（' + lawHtml(n.law, bundle.laws) + "）</span>" : "") + "</div>").join("");
+    return '<ul class="notes">' + notes.map((n) => "<li>" + esc(n.text) + (n.law && n.law.length ? '<span class="law">（' + lawHtml(n.law, bundle.laws) + "）</span>" : "") + "</li>").join("") + "</ul>";
   }
   function buildingHtml(r) {
     const b = r.result.building; if (!b) return "";
     const p = b.profile;
     const req = (b.requirements || []).map((q) => "<tr><td>" + esc(q.equipment) + '</td><td><span class="badge st-' + q.status + '">' + RSTAT[q.status] + "</span>" +
-      (q.floors ? '<div class="small">' + esc(q.floors.join("、")) + "</div>" : "") + '</td><td class="small">' + esc(q.why) +
+      (q.floors ? '<div class="small">' + esc(q.floors.join("、")) + "</div>" : "") + '</td><td class="small"><div>' + esc(q.why) + "</div>" +
       (q.missing.length ? "<div><b>需補：</b>" + q.missing.map(esc).join("；") + "</div>" : "") +
       q.notes.map((n) => '<div class="muted">※ ' + esc(n) + "</div>").join("") + '</td><td class="small law">' + lawHtml(q.law, bundle.laws) + "</td></tr>").join("");
     const items = (b.findings || []).map((f) => findingHtml(r.file_id, f)).join("");
-    const head = p ? '<div class="small muted">地上 ' + (p.stories ?? "?") + " 層｜總樓地板面積約 " + Math.round(p.total_area).toLocaleString() + " ㎡｜" +
-      (p.occupancy ? "場所類別 " + esc(p.occupancy) : "場所類別未填寫（在上方「檢核條件」填寫）") + "</div>" + p.notes.map((n) => '<div class="small muted">※ ' + esc(n) + "</div>").join("") : "";
+    const head = p ? '<div class="bnotes">地上 ' + (p.stories ?? "?") + " 層｜總樓地板面積約 " + Math.round(p.total_area).toLocaleString() + " ㎡｜" +
+      (p.occupancy ? "場所類別 " + esc(p.occupancy) : "場所類別未填寫（在上方「檢核條件」填寫）") + p.notes.map((n) => "<div>※ " + esc(n) + "</div>").join("") + "</div>" : "";
     return '<section class="floor"><h3>全棟｜' + esc(r.name) + "</h3>" + head +
-      (req ? '<details open><summary>應設設備判定（設置標準第 14～30-1 條）</summary><div style="overflow-x:auto"><table><thead><tr><th>設備</th><th>判定</th><th>理由</th><th>依據</th></tr></thead><tbody>' + req + "</tbody></table></div></details>" : "") +
+      (req ? '<details open><summary>應設設備判定（設置標準第 14～30-1 條）</summary><div style="overflow-x:auto"><table class="req"><thead><tr><th>設備</th><th>判定</th><th>理由</th><th>依據</th></tr></thead><tbody>' + req + "</tbody></table></div></details>" : "") +
       (items ? '<ol class="findings">' + items + "</ol>" : "") +
       ((b.notes || []).length ? "<details><summary>說明</summary>" + noteHtml(b.notes) + "</details>" : "") + "</section>";
   }
@@ -577,6 +667,25 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
     });
     $("#review-summary").textContent = total ? "共 " + total + " 條缺失：已接受 " + acc + "、已退回 " + rej + "、未審核 " + (total - acc - rej) + "。退回的缺失不會列入匯出報告。" : "";
   }
+  // 處理完成卻沒有檢核的檔：寫出原因與怎麼做；當外部參考併進主圖一起檢核的只列一行（不算問題）
+  function unreviewedHtml(files) {
+    const idle = files.filter((f) => f.status === "done" && !f.review);
+    const miss = idle.filter((f) => !f.xref_of), refs = idle.filter((f) => f.xref_of);
+    const busy = files.some((f) => ["queued", "processing", "reviewing"].includes(f.status));
+    return (miss.length ? '<div class="unrev"><span class="badge b-skipped">未檢核</span> <b>沒有認出樓層平面圖</b><ul>' +
+      miss.map((f) => "<li>" + esc(f.name) + "</li>").join("") + "</ul>" +
+      "<p>圖框的圖名要寫出樓層（例如「一層消防平面圖」）系統才會檢核。</p>" +
+      "<p>若這是被消防設備圖引用的建築底圖（外部參考），請上傳引用它的消防設備圖，系統會自動併入。</p>" +
+      (busy ? '<p class="muted small">還有檔案在處理中；若上面的檔是它們引用的外部參考，處理完會自動併入。</p>' : "") + "</div>" : "") +
+      refs.map((f) => '<p class="unrev-ref muted small">' + esc(f.name) + "：" + esc(f.note || "建築底圖（外部參考），已併入「" + f.xref_of + "」一起檢核") + "</p>").join("");
+  }
+  function renderUnreviewed() {
+    const html = unreviewedHtml(caseFiles);
+    if (html !== lastUnrev) { lastUnrev = html; $("#unreviewed").innerHTML = html; }
+    updateHint();
+  }
+  // 沒有任何檢核結果、也沒有要說明的檔時，才顯示一般提示
+  function updateHint() { $("#review-hint").classList.toggle("hidden", bundle.reviews.length > 0 || !!lastUnrev); }
   async function loadOccupancy() {
     if (occList) return;
     occList = await api("/api/law/occupancy");
@@ -667,21 +776,23 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
     if (key === lastReviews) { patchReviews(d); return; }
     lastReviews = key;
     bundle = d;
-    destroyCads();
+    destroyCads(); closeLaw(false);
     $("#rep-html").href = "/api/cases/" + currentCase + "/report";
     $("#rep-csv").href = "/api/cases/" + currentCase + "/report.csv";
     fillContext();
     updateSummary();
-    $("#review-hint").classList.toggle("hidden", d.reviews.length > 0);
+    updateHint();
     $("#reviews").innerHTML = d.reviews.map((r, ri) => {
       if (r.status !== "done") return '<p class="note err">' + esc(r.name) + "：檢核失敗（" + esc(r.error || "") + "）</p>";
       const floors = r.result.floors;
-      if (!floors.length) return '<p class="muted small">' + esc(r.name) + "：沒有可檢核的平面圖。</p>";
+      // 沒有樓層圖（例如只有昇位圖）：全棟的缺失照樣列出
+      if (!floors.length) return buildingHtml(r) + '<p class="muted small">' + esc(r.name) +
+        "：沒有認出樓層平面圖（圖框的圖名要寫出樓層，例如「一層消防平面圖」），各層未檢核。</p>";
       return buildingHtml(r) + floors.map((fl, fi) => {
         const cnt = {}; fl.findings.forEach((f) => { cnt[f.severity] = (cnt[f.severity] || 0) + 1; });
         const chips = ["RED", "ORANGE", "YELLOW", "BLUE"].filter((k) => cnt[k]).map((k) => '<span class="badge sev s-' + k + '">' + SEV[k] + " " + cnt[k] + "</span>").join(" ");
         const eq = Object.entries(fl.equipment).map(([k, n]) => (KIND[k] || k) + " " + n).join("、") || "未認出消防設備";
-        const warns = fl.warnings.concat(r.result.warnings || []).map((w) => '<div class="small">' + esc(w) + "</div>").join("");
+        const warns = fl.warnings.concat(r.result.warnings || []).map((w) => "<li>" + esc(w) + "</li>").join("");
         return '<section class="floor"><h3>' + esc(fl.label) + "｜" + esc(fl.number || "") + " " + esc(fl.title) + "</h3>" +
           '<div class="small muted">' + esc(r.name) + "｜樓地板約 " + Math.round(fl.area).toLocaleString() + " ㎡｜" + esc(eq) +
           (fl.fireproof ? "｜圖註防火構造" : "") + "</div>" +
@@ -691,7 +802,7 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
           '<div class="floorbody' + (fl.cad === "done" && fl.findings.length ? " has-cad" : "") + '" data-fl="' + ri + "-" + fi + '">' + planHtml(r, fl) +
           '<div class="floorlist"><ol class="findings">' + fl.findings.map((f) => findingHtml(r.file_id, f)).join("") + "</ol>" +
           (fl.notes.length ? "<details><summary>免設處所與說明</summary>" + noteHtml(fl.notes) + "</details>" : "") +
-          (warns ? "<details><summary>判讀提醒</summary>" + warns + "</details>" : "") + "</div></div></section>";
+          (warns ? '<details><summary>判讀提醒</summary><ul class="notes">' + warns + "</ul></details>" : "") + "</div></div></section>";
       }).join("");
     }).join("");
     mountCads();
@@ -754,6 +865,44 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
     return out;
   }
   // ---------- 重查比對結束 ----------
+
+  // ---------- 法條區塊 ----------
+  // 純函式（tests/test_workbench.py 用 node 跑）：HTML 跳脫、依據的條文按鈕、條文全文轉 HTML。
+  // 全文照後端 lawdb.boxtable 切好的區塊：text＝原文（保留換行與縮排）、table＝框線表格轉成的儲存格（只列從該列開始的格）、
+  // pre＝解析不成表格的框線區塊（等寬原樣）。舊資料沒有 blocks 時用 text。
+  function esc(s) {
+    return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+  function lawHtml(ids, laws) {
+    return (ids || []).map((id) => {
+      const l = (laws || {})[id];
+      return l ? '<button type="button" class="lawref" data-law="' + esc(id) + '" aria-haspopup="dialog" aria-expanded="false">' + esc(l.citation) + "</button>" : esc(id);
+    }).join("、");
+  }
+  function lawBodyHtml(l) {
+    const text = String((l && l.text) || "");
+    const blocks = l && Array.isArray(l.blocks) && l.blocks.length ? l.blocks
+      : [{ type: /[\u2500-\u257f]/.test(text) ? "pre" : "text", text }];      // 沒有 blocks 卻有框線字元（舊資料）：等寬原樣
+    const span = (v, max) => { const n = Math.floor(Number(v)); return n > 1 ? Math.min(n, max) : 1; };
+    const out = blocks.map((b) => {
+      if (b && b.type === "table" && Array.isArray(b.rows)) {
+        const head = Math.max(0, Math.floor(Number(b.header_rows)) || 0);
+        return '<div class="lawtbl"><table><tbody>' + b.rows.map((row, i) => "<tr>" + (Array.isArray(row) ? row : []).map((c) => {
+          const tag = i < head ? "th" : "td", rs = span(c && c.rowspan, 65534), cs = span(c && c.colspan, 1000);
+          const long = String((c && c.text) || "").length > 40 ? ' class="long"' : "";
+          return "<" + tag + long + (rs > 1 ? ' rowspan="' + rs + '"' : "") + (cs > 1 ? ' colspan="' + cs + '"' : "") + ">" + esc(c && c.text) + "</" + tag + ">";
+        }).join("") + "</tr>").join("") + "</tbody></table></div>";
+      }
+      if (b && b.type === "pre") return '<pre class="lawpre">' + esc(b.text) + "</pre>";
+      const t = String((b && b.text) || "").replace(/^[\r\n]+/, "").replace(/\s+$/, "");   // 區塊頭尾的空行不要（行首縮排保留）
+      if (/[─-╿]/.test(t)) return '<pre class="lawpre">' + esc(t) + "</pre>";   // 公式的根號線：等寬才對得齊
+      return t ? '<div class="lawtext">' + esc(t) + "</div>" : "";
+    }).join("");
+    const warn = l && l.warning ? '<p class="lawwarn">' + esc(l.warning) +
+      (/^https?:\/\//.test(l.pdf_table_url || "") ? '　<a href="' + esc(l.pdf_table_url) + '" target="_blank" rel="noopener">開啟官方 PDF</a>' : "") + "</p>" : "";
+    return (out || '<p class="muted">（沒有條文內容）</p>') + warn;
+  }
+  // ---------- 法條區塊結束 ----------
 
   // ---------- CAD 原樣檢視（OpenSeadragon 圖磚＋缺失疊圖）----------
   // 圖磚與 meta.json 由後端照 CAD 原圖畫好（Deep Zoom 層級）；疊圖的座標是公尺，用 meta.transform 換成原尺寸像素。
@@ -868,12 +1017,18 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
     cad.marks = cadMarks(viewer, meta, ov, (no) => pickFinding(box, no));
     chk.addEventListener("change", () => cad.marks.show(chk.checked));
     cad.chk = chk;
-    // 有圖面位置的缺失：清單上加「在圖上看」
+    // 有圖面位置的缺失：缺失卡標頭右側加「在圖上看」（定位圖示＋文字）
     box.closest(".floorbody").querySelectorAll("ol.findings li[data-no]").forEach((li) => {
-      if (!cad.marks.has(Number(li.dataset.no))) return;
+      const head = li.querySelector(".f-head");
+      if (!head || !cad.marks.has(Number(li.dataset.no))) return;
       li.classList.add("loc");
-      const b = h("button", { type: "button", class: "locate", title: "在原圖上放大到這條缺失" }, "在圖上看");
-      li.querySelector("b").after(b);
+      const b = h("button", { type: "button", class: "locate", title: "在原圖上放大到這條缺失", "aria-label": "在圖上看第 " + li.dataset.no + " 條缺失" });
+      const ico = sv("svg", { viewBox: "0 0 24 24", width: "14", height: "14", fill: "none", stroke: "currentColor", "stroke-width": "2.2",
+        "stroke-linecap": "round", "aria-hidden": "true", focusable: "false" });
+      ico.append(sv("circle", { cx: "12", cy: "12", r: "7" }), sv("circle", { cx: "12", cy: "12", r: "2.2", fill: "currentColor", stroke: "none" }),
+        sv("path", { d: "M12 1.5v4M12 18.5v4M1.5 12h4M18.5 12h4" }));
+      b.append(ico, document.createTextNode("在圖上看"));
+      head.append(b);
     });
   }
   // 疊圖：SVG 放在檢視器畫布上層，範圍用「原尺寸像素」畫，縮放平移時只換外層 transform；標號圓圈維持固定大小
@@ -984,6 +1139,101 @@ button.locate { padding: 0 8px; font-size: .78rem; margin-left: 4px; vertical-al
     if (r.top < 0 || r.bottom > innerHeight) box.scrollIntoView({ block: "nearest", behavior: "smooth" });
   });
   // ---------- CAD 原樣檢視結束 ----------
+
+  // ---------- 法條浮窗 ----------
+  // 依據的條文（.lawref）：滑鼠停一下、鍵盤聚焦時顯示；點按（手機輕觸）固定住並把焦點移進浮窗，再點一次、Esc、點旁邊或關閉鈕收起。
+  // 全頁只有一個浮窗，貼著按鈕放、不超出畫面；捲動時跟著按鈕，按鈕捲出畫面或被重畫掉就收起
+  const popEl = document.createElement("div");
+  popEl.id = "lawpop"; popEl.className = "lawpop hidden"; popEl.tabIndex = -1;
+  popEl.setAttribute("role", "dialog"); popEl.setAttribute("aria-labelledby", "lawpop-t");
+  document.body.append(popEl);
+  let pop = null, popTimer = null, popRefocus = null;                     // pop＝{ btn, pinned }
+  function openLaw(btn, pinned) {
+    clearTimeout(popTimer);
+    const l = (bundle.laws || {})[btn.dataset.law]; if (!l) return;
+    if (pop && pop.btn !== btn) closeLaw(false);
+    if (!pop) {
+      popEl.innerHTML = '<div class="lawpop-h"><b id="lawpop-t">' + esc(l.citation) + '</b><button type="button" class="lawpop-x" aria-label="關閉條文">×</button></div>' +
+        '<div class="lawpop-b">' + lawBodyHtml(l) + "</div>";
+      popEl.classList.remove("hidden"); popEl.scrollTop = 0;
+      btn.setAttribute("aria-expanded", "true");
+      pop = { btn, pinned: false };
+    }
+    placeLaw();
+    popEl.querySelectorAll(".lawtbl, .lawpre").forEach((el) => {             // 放不下、要左右捲的：可用 Tab 停留後用方向鍵捲
+      if (el.scrollWidth > el.clientWidth) { el.tabIndex = 0; el.setAttribute("aria-label", "條文表格，可左右捲動"); }
+    });
+    if (pinned && pop && !pop.pinned) { pop.pinned = true; popEl.focus({ preventScroll: true }); }
+  }
+  function closeLaw(refocus) {
+    clearTimeout(popTimer);
+    if (!pop) return;
+    const b = pop.btn; pop = null;
+    popEl.classList.add("hidden"); popEl.innerHTML = "";
+    b.setAttribute("aria-expanded", "false");
+    if (refocus && b.isConnected && document.activeElement !== b) { popRefocus = b; b.focus({ preventScroll: true }); }
+  }
+  function placeLaw() {
+    if (!pop) return;
+    const r = pop.btn.getBoundingClientRect(), vw = document.documentElement.clientWidth, vh = innerHeight, m = 8, gap = 6;
+    if (!pop.btn.isConnected || r.bottom < 0 || r.top > vh) { closeLaw(false); return; }
+    popEl.style.maxHeight = "";
+    const below = vh - r.bottom - gap - m, above = r.top - gap - m;
+    const down = below >= Math.min(popEl.offsetHeight, 260) || below >= above;       // 下面放得下（或比上面寬）就放下面
+    popEl.style.maxHeight = Math.max(120, Math.min(vh * 0.7, down ? below : above)) + "px";
+    const w = popEl.offsetWidth, ht = popEl.offsetHeight;
+    popEl.style.left = Math.max(m, Math.min(r.left, vw - w - m)) + "px";
+    popEl.style.top = Math.max(m, Math.min(down ? r.bottom + gap : r.top - gap - ht, vh - ht - m)) + "px";
+  }
+  const lawOf = (t) => (t && t.closest ? t.closest(".lawref") : null);
+  document.addEventListener("pointerover", (e) => {
+    if (e.pointerType !== "mouse") return;
+    const b = lawOf(e.target);
+    if (b) {
+      clearTimeout(popTimer);
+      if (!pop || (pop.btn !== b && !pop.pinned)) popTimer = setTimeout(() => openLaw(b, false), 300);   // 固定住的不被滑過的蓋掉
+    } else if (pop && popEl.contains(e.target)) clearTimeout(popTimer);
+  });
+  document.addEventListener("pointerout", (e) => {
+    if (e.pointerType !== "mouse" || !(lawOf(e.target) || popEl.contains(e.target))) return;
+    const to = e.relatedTarget;
+    if (to && (popEl.contains(to) || (pop && pop.btn.contains(to)))) return;          // 在按鈕與浮窗之間移動
+    clearTimeout(popTimer);
+    if (pop && !pop.pinned && document.activeElement !== pop.btn) popTimer = setTimeout(() => { if (pop && !pop.pinned) closeLaw(false); }, 250);
+  });
+  document.addEventListener("focusin", (e) => {
+    const b = lawOf(e.target); if (!b) return;
+    if (b === popRefocus) { popRefocus = null; return; }                       // 收起後焦點回到按鈕：不再打開
+    let kb = true; try { kb = b.matches(":focus-visible"); } catch {}
+    if (kb) openLaw(b, false);                                                 // 滑鼠、觸控的聚焦交給 click
+  });
+  document.addEventListener("focusout", (e) => {
+    if (!pop || (e.target !== pop.btn && !popEl.contains(e.target))) return;
+    const to = e.relatedTarget;
+    if (to && (to === pop.btn || popEl.contains(to))) return;
+    if (!pop.pinned || to) closeLaw(false);                                    // 固定住的：Tab 到別處才收（切視窗不收）
+  });
+  document.addEventListener("click", (e) => {
+    const b = lawOf(e.target);
+    if (b) { e.preventDefault(); if (pop && pop.btn === b && pop.pinned) closeLaw(true); else openLaw(b, true); return; }
+    if (e.target.closest && e.target.closest(".lawpop-x")) closeLaw(true);
+  });
+  document.addEventListener("pointerdown", (e) => { if (pop && !popEl.contains(e.target) && !lawOf(e.target)) closeLaw(false); }, true);
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !pop) return;
+    closeLaw(popEl.contains(document.activeElement) || document.activeElement === pop.btn);
+  });
+  // 浮窗放在頁尾：用 Tab／Shift+Tab 離開時先把焦點交回條文按鈕，瀏覽器再從按鈕接著往後或往前（不會跳到頁首、頁尾）
+  // 寬表格（左右捲動）也排進 Tab 順序，鍵盤才捲得到右半邊。Shift+Tab 收起時焦點停在條文按鈕本身
+  popEl.addEventListener("keydown", (e) => {
+    if (e.key !== "Tab" || !pop) return;
+    const f = [...popEl.querySelectorAll("a[href], button, [tabindex='0']")], a = document.activeElement;
+    if (e.shiftKey && (a === popEl || a === f[0])) { e.preventDefault(); closeLaw(true); }
+    else if (!e.shiftKey && (a === f[f.length - 1] || (a === popEl && !f.length))) closeLaw(true);
+  });
+  addEventListener("scroll", (e) => { if (pop && !popEl.contains(e.target)) placeLaw(); }, true);
+  addEventListener("resize", () => { if (pop) placeLaw(); });
+  // ---------- 法條浮窗結束 ----------
 
   $("#sheets").addEventListener("click", async (e) => {
     const tr = e.target.closest("tr[data-id]"); if (!tr) return;

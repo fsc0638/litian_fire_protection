@@ -118,6 +118,7 @@ def test_xref_bind_from_case_files_and_expand(tmp_path):
     info = XR.bind(tmp_path / "002_main.converted.dxf", tmp_path, tmp_path / "002_main.bound.dxf",
                    original=tmp_path / "002_main.dwg")
     assert info["bound"] == ["Area_1F"] and info["missing"] == ["TITLE-A1.dwg"]
+    assert info["bound_files"] == ["001_Area_1F.dwg"]                         # 工作台據此標出「已併入主圖」的檔
     ir = IR.extract(info["path"], expand=info["bound"])
     names = {t["t"] for t in ir["texts"] if t["src"] == "xref:Area_1F"}
     assert {"辦公室", "會議室", "男廁"} <= names                                 # 房名在參考檔裡

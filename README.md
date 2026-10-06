@@ -6,7 +6,7 @@
 
 | 路徑 | 內容 |
 |---|---|
-| `src/litian/lawdb/` | 法規庫：消防署行政規則與附件（nfa）、下載（fetch）、解析（parse）、場所代碼（occupancy）、交叉引用（xref）、建置（build）、載入（store）、檢索（search）、評測（evaluate） |
+| `src/litian/lawdb/` | 法規庫：消防署行政規則與附件（nfa）、下載（fetch）、解析（parse）、場所代碼（occupancy）、交叉引用（xref）、建置（build）、載入（store）、檢索（search）、評測（evaluate）、條文方框表格轉區塊（boxtable） |
 | `src/litian/api.py` | FastAPI 服務 |
 | `src/litian/drawing/` | 圖面管線：DWG 轉檔佇列、圖面中介資料抽取（文字、圖塊、圖紙）、背景處理程序 |
 | `src/litian/plan/` | 平面理解：展開圖塊幾何、由牆柱門窗圍出房間、判斷房間種類（廁所、樓梯、機電室、挑空…）、樓地板範圍、可走區域 |
@@ -105,6 +105,8 @@ bash /opt/litian/repo/deploy/oracle/11_install_autodeploy.sh
 | GET | `/api/law/ask/status` | AI 回答是否啟用、每日上限 |
 | POST | `/api/law/ask` | 法規問答（SSE 串流）：先回檢索到的條文，再串流 AI 回答與引用；需 `X-Access-Code` |
 
+條文節點（檢索結果、`/api/law/nodes`、問答來源）的 `text` 有方框字元表格時另附 `blocks`（`article_text` 有表格時附 `article_blocks`）：依原文順序的文字／表格（儲存格含跨列、跨欄與表頭列數）／原樣區塊，前端照此畫成真正的表格；格式見 `src/litian/lawdb/boxtable.py`。
+
 ## 法規問答網頁
 
 - AI 使用 OpenAI `gpt-5.6-sol`（Responses API，`reasoning.effort` medium，`store=false` 不在 OpenAI 端保存對話；2026-10-01 使用者決定）。
@@ -125,7 +127,7 @@ bash /opt/litian/repo/deploy/oracle/11_install_autodeploy.sh
 
 ## 審核工作台（第 1 期 M1b）
 
-- 網址 `/workbench`：登入、建立案件、上傳 DWG／DXF（拖放、單檔上限 200 MB）、看處理狀態、各張圖的圖號圖名與抽出的文字。
+- 網址 `/workbench`：登入、建立案件、上傳 DWG／DXF（拖放、單檔上限 200 MB）、看處理狀態（每個檔一句白話說明：已檢核幾層幾條、檢核失敗原因、被哪個消防設備圖當外部參考併入、為什麼沒檢核）；各張圖的圖號圖名與抽出的文字收在頁面最下方（認不出樓層、房間時核對用）。缺失的「依據」滑過或點按就顯示條文全文（表格照原表格顯示）。
 - **登入用 LINE**（LINE Login v2.1，`src/litian/line_login.py`），不使用密碼。開通靠管理者發的**一次性邀請連結**：工作台右上角「帳號管理」輸入帳號名稱與角色 → 產生連結（預設 24 小時內有效、只能用一次）→ 本人點連結用 LINE 登入，該 LINE 帳號即綁定此帳號。同仁換手機、換 LINE 帳號時，在帳號列表按「重新綁定 LINE」另發換綁連結（角色不變，原有登入全部登出）。開新帳號遇到同名會拒絕，不會悄悄變成換綁。沒有綁定的 LINE 帳號一律進不來。
 - 安全做法：state（綁定發起登入的瀏覽器 Cookie，只能用一次、10 分鐘內有效）、nonce、PKCE（S256）；ID token 交給 LINE 驗證端點驗簽，再核對 iss、aud、nonce、到期時間；LINE 的 access token 用完即丟。邀請連結的權杖放在網址 `#` 片段（不送到伺服器、不進存取紀錄），開通一律關閉 LINE 自動登入。邀請權杖與登入權杖在資料庫只存 SHA-256。Cookie 用 `__Host-` 前綴（同網域其他子網域塞不進來）、HttpOnly、Secure、SameSite=Lax，登入 12 小時過期。不以來源 IP 封鎖登入（權杖都是 256 位元亂數，無從猜測；IP 封鎖反而會讓整間辦公室被一個網頁鎖住），進行中的登入暫存另有全站上限。至少保留一位啟用中的管理者（同時互相停用也擋得住）；管理者不能停用自己、不能在網頁上替自己換綁；管理者被停用或降級時，他發出、還沒用掉的邀請一併作廢。
 - 設定（由專案主本人做，**要在部署這一版之前**）：在 LINE Developers 建立 **LINE Login 頻道**（App type 選 Web app；和問答機器人的 Messaging API 頻道不同），LINE Login 分頁的 Callback URL 填 `https://<對外網址>/api/auth/line/callback`；把 `LINE_LOGIN_CHANNEL_ID`、`LINE_LOGIN_CHANNEL_SECRET`、`LINE_LOGIN_CALLBACK_URL` 填進主機 `/opt/litian/.env`。部署腳本 `06_update_from_git.sh` 會檢查這三項沒填就停止，並在部署前備份資料庫到 `/opt/litian/backup/`（這一版會移除舊的密碼欄位，回退需先還原備份）。頻道剛建好是「Developing」，只有頻道的 Admin／Tester 能登入（Tester 的開發者帳號要先連結 LINE 帳號）；開放給同仁要改成「Published」（改了不能改回）。
@@ -163,7 +165,8 @@ bash /opt/litian/repo/deploy/oracle/11_install_autodeploy.sh
 
 | 方法 | 路徑 | 用途 |
 |---|---|---|
-| GET | `/api/cases/{id}/reviews` | 檢核結果、引用條文、審核結果、檢核條件；各樓層 `cad`＝原圖狀態（done／pending／rendering／failed） |
+| GET | `/api/cases/{id}` | 案件、檔案（`note` 白話說明、`review` 檢核狀態、`xref_of` 被哪個主圖當外部參考併入）、圖紙 |
+| GET | `/api/cases/{id}/reviews` | 檢核結果、引用條文（全文；有方框表格時附 `blocks`）、審核結果、檢核條件；各樓層 `cad`＝原圖狀態（done／pending／rendering／failed） |
 | PUT | `/api/cases/{id}/context` | 存檢核條件並排入重跑檢核 |
 | POST | `/api/cases/{id}/files/{fid}/decisions` | 缺失接受／退回／撤回 |
 | GET | `/api/cases/{id}/files/{fid}/review/{樓層}.svg` | 各層檢核標示圖（簡化） |

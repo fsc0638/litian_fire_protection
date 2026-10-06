@@ -172,6 +172,27 @@ def test_cad_queue_backfill_claim_gen_and_recover(conn):
         "status": "queued", "review_only": True}
 
 
+def test_file_reviews_counts_floors_and_findings_from_result(conn):
+    """工作台檔案說明用的檢核摘要：樓層數、缺失數（各層＋全棟）直接從檢核結果算；沒檢核過、檢核失敗、全棟為 null 都不出錯。"""
+    from litian.drawing import store as ST
+    cid = ST.create_case(conn, "摘要", None)
+    other = ST.create_case(conn, "別案", None)
+    a, b, c, d, e = (ST.add_file(conn, cid, f"{n}.dwg", 1, "0" * 64, f"/x/{cid}/00{i}_{n}.dwg") for i, n in enumerate("abcde", 1))
+    ST.add_file(conn, other, "z.dwg", 1, "0" * 64, "/x/z.dwg")
+    ST.save_review(conn, a, "done", {"floors": [{"label": "1F", "findings": [{"no": 1}, {"no": 2}]}, {"label": "2F", "findings": []}],
+                                     "building": {"findings": [{"no": 1}], "requirements": []}}, None, "/x/a.review")
+    ST.save_review(conn, b, "done", {"floors": [], "building": None}, None, "/x/b.review")
+    ST.save_review(conn, c, "failed", None, "RuntimeError: 壞了", None)
+    ST.save_review(conn, d, "done", {"floors": [{"label": "B1", "findings": [{"no": 1}]}, {"label": "B1", "findings": []}]},
+                   None, "/x/d.review")   # 舊結果沒有 building；同一層分兩張系統圖：算一層
+    rows = {r["id"]: r for r in ST.file_reviews(conn, cid)}
+    assert set(rows) == {a, b, c, d, e}
+    got = {k: (r["review"], r["review_error"], r["floors"], r["findings"]) for k, r in rows.items()}
+    assert got == {a: ("done", None, 2, 3), b: ("done", None, 0, 0), c: ("failed", "RuntimeError: 壞了", 0, 0),
+                   d: ("done", None, 1, 1), e: (None, None, 0, 0)}
+    assert rows[a]["path"] == f"/x/{cid}/001_a.dwg"
+
+
 SUB_A, SUB_B = "U" + "a" * 32, "U" + "b" * 32
 
 
