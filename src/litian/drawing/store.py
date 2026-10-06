@@ -85,6 +85,8 @@ CREATE INDEX IF NOT EXISTS case_file_cad ON case_file (id) WHERE cad_state IN ('
 KINDS = {".dwg": "dwg", ".dxf": "dxf", ".pdf": "pdf"}
 SUPPORTED = {"dwg", "dxf"}           # PDF 擷取在後續里程碑
 MAX_ATTEMPTS = 3
+# worker 正在處理：認領後的轉檔、綁定外部參考、抽取都記 processing，檢核記 reviewing（沒有其他中間狀態）
+ACTIVE = {"processing": "處理中", "reviewing": "檢核中"}
 
 CLAIM_SQL = """
 UPDATE case_file SET status = 'processing', attempts = attempts + 1, updated_at = now()
@@ -164,6 +166,22 @@ def requeue_review(conn, file_id: int) -> bool:
     """只重跑檢核（例：舊版檢核沒有產生疊圖資料）。"""
     return conn.execute("UPDATE case_file SET status = 'queued', review_only = true, attempts = 0, updated_at = now() "
                         "WHERE id = %s AND status = 'done'", (file_id,)).rowcount == 1
+
+
+def lock_for_reprocess(conn, case_ids: list[int]) -> list[dict]:
+    """（在交易裡呼叫）鎖住這些案件裡可以整個重新處理的檔：DWG／DXF、不在處理中。鎖到交易結束：worker 認領與背景畫圖
+    （SKIP LOCKED）都會跳過；剛被認領還沒提交的，等它提交後重新判斷（變成處理中就不回傳、不鎖）。
+    FOR NO KEY UPDATE：不擋工作台寫審核決定（外鍵只要 KEY SHARE）。"""
+    return conn.execute("SELECT id, case_id, name, kind, path, status FROM case_file "
+                        "WHERE case_id = ANY(%s) AND status IN ('queued', 'done', 'failed') AND kind IN ('dwg', 'dxf') "
+                        "ORDER BY id FOR NO KEY UPDATE", (case_ids,)).fetchall()
+
+
+def requeue_full(conn, file_id: int) -> bool:
+    """整個重新處理（例：轉檔器升級）：完整重跑（不是只重跑檢核）、次數歸零；處理中的不動。
+    舊的中介資料、檢核結果留著照常顯示，重跑時才覆蓋；原圖排隊由 worker 重跑時重設（process → reset_cad）。"""
+    return conn.execute("UPDATE case_file SET status = 'queued', review_only = false, attempts = 0, updated_at = now() "
+                        "WHERE id = %s AND status IN ('queued', 'done', 'failed')", (file_id,)).rowcount == 1
 
 
 def reset_cad(conn, file_id: int) -> None:
