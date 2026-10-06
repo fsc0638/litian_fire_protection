@@ -95,9 +95,12 @@ def _convert(spool: Path, jid: str, dwg: Path, dst: Path) -> Path:
     return dst
 
 
-def bind_xrefs(job: dict, src: Path, spool: Path) -> tuple[Path, dict]:
+def bind_xrefs(job: dict, src: Path, spool: Path, skip=()) -> tuple[Path, dict]:
     """主圖的外部參考（建築底圖等）在同一案件裡有上傳的話，綁定後另存 <檔名>.bound.dxf 供抽取與檢核。
-    參考檔還沒轉檔的先送轉檔服務。讀 DXF 一律在子行程（限時、限記憶體）。"""
+    參考檔還沒轉檔的先送轉檔服務（同名的最新上傳先轉，轉不了改轉較早的）。skip：處理失敗的上傳檔名，不用。
+    讀 DXF 一律在子行程（限時、限記憶體）。"""
+    skip = [str(s) for s in skip]
+    skipped = {s.lower() for s in skip}
     path = Path(job["path"])
     try:
         refs = json.loads(_run(["litian.drawing.xref", "list", str(src)], BIND_TIMEOUT, "外部參考讀取") or "[]")
@@ -107,27 +110,90 @@ def bind_xrefs(job: dict, src: Path, spool: Path) -> tuple[Path, dict]:
         return src, {}
     cands = XR.case_candidates(path.parent, exclude=path)
     for k, (_name, _ref, key) in enumerate(refs):
-        cand = cands.get(key)
-        if cand is not None and cand.suffix.lower() == ".dwg":
+        for cand in cands.get(key, []):                          # 同名的最新上傳先轉；轉不了改用較早上傳的
+            if cand.name.lower() in skipped:
+                continue
             conv = cand.with_name(cand.stem + ".converted.dxf")
-            if not conv.exists():
-                _convert(spool, f"f{job['id']}x{k}", cand, conv)
+            if cand.suffix.lower() != ".dwg" or conv.exists():
+                break
+            try:                                                 # 工作代號帶上傳序號：逾時殘留的結果不會被別的檔拿去用
+                _convert(spool, f"f{job['id']}x{k}u{XR.upload_no(cand.name)}", cand, conv)
+                break
+            except CC.ConvertError as e:
+                log.warning("xref convert failed file=%s ref=%s: %s", job["id"], cand.name, e)
     out = path.with_name(path.stem + ".bound.dxf")
-    info = json.loads(_run(["litian.drawing.xref", "bind", str(src), str(path.parent), str(out), str(path)],
-                           BIND_TIMEOUT, "外部參考綁定"))
-    return Path(info["path"]), {"bound": info["bound"], "bound_files": info.get("bound_files", []), "missing": info["missing"]}
+    info = json.loads(_run(["litian.drawing.xref", "bind", str(src), str(path.parent), str(out), str(path),
+                            json.dumps(skip, ensure_ascii=False)], BIND_TIMEOUT, "外部參考綁定"))
+    return Path(info["path"]), {"bound": info["bound"], "bound_files": info.get("bound_files", []),
+                                "missing": info["missing"], "failed": info.get("failed", [])}
 
 
 def requeue_xref_dependents(conn, job: dict) -> int:
-    """剛處理完的檔若是別的檔缺的外部參考，把那些檔重新排入處理（完整重跑，才能綁定）。"""
-    key = XR.UPLOAD_PREFIX.sub("", Path(job["path"]).stem).lower()
-    rows = conn.execute("SELECT id, stats FROM case_file WHERE case_id = %s AND id <> %s AND status IN ('done', 'failed') "
-                        "AND stats ? 'xref'", (job["case_id"], job["id"])).fetchall()
-    ids = [r["id"] for r in rows if any(XR.ref_key(m) == key for m in (r["stats"]["xref"].get("missing") or []))]
+    """剛處理完的檔若是別的檔的外部參考，把那些檔重新排入處理（完整重跑，才能綁定）：
+    缺這個參考的；綁的是同名但較早上傳、內容不同的（重新上傳底圖：改用最新的；內容一樣就不必重跑）；
+    改成「同名取最新」之前綁的舊資料（只記圖塊名、當時綁最早那份）在這份比最早那份新時。
+    排隊「只重跑檢核」的也改成完整重跑（只重跑檢核沿用舊的綁定結果）。
+    這份是同名主圖的另一版（綁進過別的同名上傳檔）時不排；主圖上次已經試過這份、讀不了的也不排（不會一直互相重跑）。"""
+    stored = Path(job["path"]).name
+    key, no = XR.name_key(stored), XR.upload_no(stored)
+    rows = conn.execute("SELECT id, path, kind, sha256, status, review_only, stats FROM case_file WHERE case_id = %s",
+                        (job["case_id"],)).fetchall()
+    me = next((r for r in rows if r["id"] == job["id"]), None) or {}
+    xstats = lambda r: (r.get("stats") or {}).get("xref") or {}
+    if XR.main_version(stored, xstats(me)):
+        return 0
+    # 這份自己也引用同名參考（例：底圖又疊了同名的結構圖）：同名的其他檔不排（多半是自己的舊版，排了會互相一直重跑）
+    mx = xstats(me)
+    self_ref = any(XR.ref_key(b) == key for b in mx.get("bound") or []) or \
+        any(XR.ref_key(XR.strip_note(m)) == key for m in mx.get("missing") or [])
+    sha = {Path(r["path"]).name.lower(): r["sha256"] for r in rows}
+    same = sorted((XR.upload_no(Path(r["path"]).name), Path(r["path"]).name.lower()) for r in rows
+                  if r.get("kind") in ("dwg", "dxf") and XR.name_key(Path(r["path"]).name) == key
+                  and not XR.main_version(Path(r["path"]).name, xstats(r)))
+    mine = me.get("sha256")
+
+    def stale(r: dict) -> bool:
+        if r["id"] == job["id"] or not (r["status"] in ("done", "failed") or (r["status"] == "queued" and r["review_only"])):
+            return False
+        if self_ref and XR.name_key(Path(r["path"]).name) == key:
+            return False
+        x = xstats(r)
+        tried = {XR.strip_note(f).lower() for f in x.get("failed") or [] if not str(f).endswith("（尚未轉檔）")}
+        if stored.lower() in tried:                       # 上次就是這份讀不了：重跑也一樣
+            return False
+        # 缺的參考：原始參考名（可能數字開頭，用 ref_key）；舊版綁定失敗時記的是存檔名（錯誤），用 name_key
+        if any(XR.ref_key(XR.strip_note(m)) == key or ("（" in m and XR.name_key(m) == key) for m in x.get("missing") or []):
+            return True
+        if isinstance(x.get("bound_files"), list):
+            return any(XR.name_key(b) == key and XR.upload_no(b) < no and sha.get(b.lower()) != mine for b in x["bound_files"])
+        if any(XR.ref_key(b) == key for b in x.get("bound") or []) and same and no > same[0][0]:
+            return sha.get(same[0][1]) != mine
+        return False
+
+    ids = [r["id"] for r in rows if stale(r)]
     for i in ids:
         conn.execute("UPDATE case_file SET status = 'queued', review_only = false, attempts = 0, updated_at = now() "
                      "WHERE id = %s", (i,))
     return len(ids)
+
+
+def xref_skip(conn, job: dict) -> list[str]:
+    """綁定外部參考時不用的上傳檔（存檔名）：同名主圖的其他版本（綁進過別的同名上傳檔）；處理失敗、而且還有其他
+    同名檔可以用的（只有這一份時照試，讀不了會記在 failed）。"""
+    rows = conn.execute("SELECT path, status, stats FROM case_file WHERE case_id = %s AND id <> %s AND kind IN ('dwg', 'dxf')",
+                        (job.get("case_id"), job["id"])).fetchall()
+    keys: dict[str, list[dict]] = {}
+    for r in rows:
+        keys.setdefault(XR.name_key(Path(r["path"]).name), []).append(r)
+    out = []
+    for r in rows:
+        name = Path(r["path"]).name
+        others = [o for o in keys[XR.name_key(name)] if o is not r
+                  and not XR.main_version(Path(o["path"]).name, (o.get("stats") or {}).get("xref"))]
+        if XR.main_version(name, ((r.get("stats") or {}).get("xref"))) or \
+                (r["status"] == "failed" and any(o["status"] != "failed" for o in others)):
+            out.append(name)
+    return out
 
 
 def has_floor_plans(ir: dict) -> bool:
@@ -425,7 +491,7 @@ def process(conn, job: dict, spool: Path, cad: CadRunner | None = None) -> dict:
         src = _convert(spool, f"f{job['id']}", path, converted)   # 保留轉好的 DXF，之後重新抽取、重跑檢核不必再轉
     else:
         src = path
-    src, xinfo = bind_xrefs(job, src, spool)
+    src, xinfo = bind_xrefs(job, src, spool, skip=xref_skip(conn, job))
     with tempfile.TemporaryDirectory() as d:
         work = Path(d)
         ir, stats = extract_in_subprocess(src, work, expand=xinfo.get("bound", []))
