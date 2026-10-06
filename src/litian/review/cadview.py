@@ -434,6 +434,7 @@ def print_image(sheet_dir: str | Path, limit: int = PRINT_MAX) -> Path:
     with _PRINT_LOCK:
         if fresh():                                                          # 等鎖的期間別人做好了
             return out
+        before = meta_path.stat()
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         W, H, L, T = int(meta["width"]), int(meta["height"]), int(meta["max_level"]), int(meta.get("tile_size") or TILE)
         k = _print_shrink(W, H, L, limit)
@@ -443,6 +444,9 @@ def print_image(sheet_dir: str | Path, limit: int = PRINT_MAX) -> Path:
             for row in range(math.ceil(h / T)):
                 with Image.open(d / str(L - k) / f"{col}_{row}.png") as tile:   # 少一塊就整張失敗（呼叫端退回簡化圖）
                     img.paste(tile.convert("RGB"), (col * T, row * T))
+        after = meta_path.stat()
+        if (before.st_ino, before.st_mtime_ns) != (after.st_ino, after.st_mtime_ns):   # 拼到一半剛好重畫換了資料夾
+            raise OSError("原圖剛重畫，稍後再試")
         _save_print(img, out)
     return out
 

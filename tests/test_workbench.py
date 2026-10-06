@@ -240,8 +240,30 @@ def test_report_uses_cad_original_with_vector_marks(client, monkeypatch, tmp_pat
     assert "class='plan fallback'" in html and "<title>plan</title>" in html and "id='print'" in html and " disabled>" in html
     r = client.get("/api/cases/3/files/7/cad/1F/print.png")
     assert r.status_code == 200 and r.headers["content-type"] == "image/png" and r.content[:4] == b"\x89PNG"
+    assert "原圖載入中，請稍候再列印" in html and "max-height: 150mm; display: block; }" in html     # 簡化圖也放得進一頁
+    import os
+    next((rev / "cad" / "1F" / str(meta["max_level"])).glob("*.png")).unlink()      # 圖重畫過、缺圖磚：拿不到就 404（報告退回簡化圖）
+    (rev / "cad" / "1F" / "print.png").unlink()
+    os.utime(rev / "cad" / "1F" / "meta.json")
+    assert client.get("/api/cases/3/files/7/cad/1F/print.png").status_code == 404
     client.cookies.clear()
     assert client.get("/api/cases/3/files/7/cad/1F/print.png").status_code == 401
+
+
+def test_cad_overlay_svg_lines_multipolygons_and_collections():
+    from litian.review import report as RP
+    meta = {"width": 1000, "height": 500, "transform": [10, 0, 0, 0, -10, 500]}
+    ov = {"findings": [
+        {"no": 4, "key": "d", "severity": "ORANGE", "geom": {"type": "LineString", "coordinates": [[1, 1], [5, 1]]}},
+        {"no": 5, "key": "e", "severity": "YELLOW", "geom": {"type": "MultiPolygon", "coordinates": [[[[0, 0], [1, 0], [1, 1], [0, 0]]]]}},
+        {"no": 6, "key": "f", "severity": "RED", "geom": {"type": "GeometryCollection", "geometries": [
+            {"type": "Point", "coordinates": [20, 20]}, {"type": "LineString", "coordinates": [[30, 30], [31, 31]]}]}},
+        {"no": 7, "key": "g", "severity": "RED", "geom": None, "anchor": None},                 # 沒有位置：不畫編號
+        {"no": "8", "key": "h", "severity": "RED", "geom": None, "anchor": [1, 1]}]}            # 編號不是整數：略過
+    s = RP.cad_overlay_svg(meta, ov, set())
+    assert 'd="M10.0,490.0L50.0,490.0" fill="none" stroke="#e8710a"' in s                      # 線
+    assert ">4</text>" in s and ">5</text>" in s and ">6</text>" in s and ">7</text>" not in s and ">8</text>" not in s
+    assert s.count("<path") == 4                                                            # 線、多邊形、點＋線（同一筆分兩條）
 
 
 # ---------- 檔案處理狀態的白話說明（note）與外部參考（xref_of） ----------

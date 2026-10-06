@@ -34,21 +34,23 @@ th, td { border: 1px solid #c9c4b8; padding: 4px 6px; vertical-align: top; text-
 th { background: #f1efea; font-weight: 600; }
 .sev { font-weight: 700; white-space: nowrap; }
 .plan { width: 100%; border: 1px solid #c9c4b8; margin: 6px 0; }
-.plan svg { width: 100%; height: auto; display: block; }
+.plan svg { width: 100%; height: auto; max-height: 150mm; display: block; }   /* 簡化圖也整張放進一頁（橫向頁） */
 /* 原圖：整張放得進一頁（橫向 A4 扣掉標題約 165 mm 高），標示層跟著圖的實際大小（容器縮到圖寬） */
 .plan.cadplan { position: relative; width: fit-content; max-width: 100%; margin: 6px auto; line-height: 0; background: #fff; break-inside: avoid; }
 .cadplan img { display: block; width: auto; height: auto; max-width: 100%; max-height: 150mm; }
 .floor .plan ~ table { break-before: page; }           /* 樓層第一頁只放標題與圖，缺失表從下一頁開始 */
 .floor h2 { break-after: avoid; }
 thead { display: table-header-group; }                  /* 表頭每頁重複 */
-.cadplan svg.marks { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+.cadplan svg.marks { position: absolute; left: 0; top: 0; width: 100%; height: 100%; max-height: none; }
+.cadplan .loading { position: absolute; left: 0; top: 0; right: 0; bottom: 0; display: flex; align-items: center;
+  justify-content: center; font-size: 14pt; line-height: 1.4; color: #5f5b53; }
 .plan.fallback { display: none; }
 @page plan { size: A4 landscape; margin: 10mm; }
 .box { border: 1px solid #c9c4b8; border-radius: 6px; padding: 8px 10px; margin: 8px 0; background: #faf9f6; }
 .floor { break-before: page; page: plan; }
 .nobreak { break-inside: avoid; }
 .toolbar { position: sticky; top: 0; background: #fff; padding: 8px 0; border-bottom: 1px solid #e2ded5; margin-bottom: 10px; }
-@media print { .toolbar { display: none; } .wrap { padding: 0; } }
+@media print { .toolbar { display: none; } .wrap { padding: 0; max-width: none; } }
 """
 
 
@@ -237,6 +239,7 @@ def build_html(case: dict, context: dict, occupancy: dict, reviews: list[dict], 
                 drop = {k for k, v in decisions.get(str(r["file_id"]), {}).items() if (v or {}).get("decision") == "reject"}
                 o.append(f"<div class='plan cadplan'><img src='{escape(cad['src'])}' alt='{escape(fl['label'])} 原圖' "
                          f"width='{int(cad['meta']['width'])}' height='{int(cad['meta']['height'])}' loading='eager' decoding='sync'>"
+                         f"<div class='loading'>原圖載入中，請稍候再列印…</div>"           # 圖還沒到就按 Ctrl+P 印：至少看得出不是空圖
                          f"{cad_overlay_svg(cad['meta'], cad['overlay'], drop)}</div>")
                 if svg:                                               # 原圖載不到時改顯示簡化標示圖
                     o.append(f"<div class='plan fallback'>{svg}</div>")
@@ -253,11 +256,13 @@ def build_html(case: dict, context: dict, occupancy: dict, reviews: list[dict], 
     o.append("</div><script>(() => {"
              "const b = document.getElementById('print'), imgs = [...document.querySelectorAll('.cadplan img')];"
              "let n = imgs.length; const done = () => { if (--n <= 0) { b.disabled = false; b.textContent = '列印／另存 PDF'; } };"
+             "const ready = (im) => { const t = im.parentElement.querySelector('.loading'); if (t) t.remove(); };"
              "imgs.forEach((im) => {"
              "const bad = () => { const box = im.closest('.cadplan'), fb = box.nextElementSibling;"
              "if (fb && fb.classList.contains('fallback')) { fb.style.display = 'block'; box.remove(); } else box.style.display = 'none'; };"
-             "if (im.complete) { if (!im.naturalWidth) bad(); done(); }"
-             "else { im.addEventListener('load', done, { once: true }); im.addEventListener('error', () => { bad(); done(); }, { once: true }); }"
+             "if (im.complete) { if (!im.naturalWidth) bad(); else ready(im); done(); }"
+             "else { im.addEventListener('load', () => { ready(im); done(); }, { once: true });"
+             " im.addEventListener('error', () => { bad(); done(); }, { once: true }); }"
              "}); n++; done();"
              "})();</script></body></html>")
     return "".join(o)

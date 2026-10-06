@@ -823,3 +823,44 @@ def test_print_image_stitches_level_within_limit_and_caches(tmp_path):
     with pytest.raises(OSError):
         CV.print_image(d, limit=8000)
     assert not list(d.glob(".print.*"))
+
+
+
+def test_print_image_refuses_mixed_tiles_when_rerendered_midway(tmp_path, monkeypatch):
+    # 從圖磚拼到一半剛好重畫（meta.json 換了）：丟錯不存，報告退回簡化圖，下次再做
+    import os
+
+    from PIL import Image as PImage
+    d = tmp_path / "1F"
+    _tiled_sheet(d, w=1500, h=1000)
+    opened = []
+    real = PImage.open
+
+    def spy(p, *a, **k):
+        opened.append(p)
+        if len(opened) == 2:
+            os.utime(d / "meta.json", (1_800_000_000, 1_800_000_000))
+        return real(p, *a, **k)
+    monkeypatch.setattr(PImage, "open", spy)
+    with pytest.raises(OSError, match="重畫"):
+        CV.print_image(d)
+    assert not (d / "print.png").exists() and not list(d.glob(".print.*"))
+
+
+def test_backfill_print_one_at_a_time_then_stops(tmp_path):
+    from litian.drawing import worker as W
+    ok = tmp_path / "3" / "001_a.dxf.review" / "cad" / "1F"
+    done = tmp_path / "3" / "001_a.dxf.review" / "cad" / "2F"
+    bad = tmp_path / "4" / "002_b.dxf.review" / "cad" / "1F"
+    for d in (ok, done, bad):
+        _tiled_sheet(d, w=1200, h=800)
+    (done / "print.png").write_bytes(b"x")
+    next((bad / str(CV.max_level(1200, 800))).glob("*.png")).unlink()             # 缺一塊：做不出來
+    cad = W.CadRunner(tmp_path)
+    assert cad.backfill_print() is True and cad.backfill_print() is True           # 一次一張
+    assert (ok / "print.png").is_file() and not (bad / "print.png").exists() and str(bad) in cad.print_failed
+    assert cad.backfill_print() is False and cad.print_scanned                       # 掃完一輪：之後不再掃
+    busy = W.CadRunner(tmp_path)
+    busy.cur = {"job": {}}
+    assert busy.backfill_print() is False                                          # 正在畫原圖：不補（記憶體留給畫圖）
+    assert W.CadRunner(None).backfill_print() is False                              # 沒設案件資料夾：不做
