@@ -104,6 +104,12 @@ def test_layout_sheet_renders_viewport_and_transform(tmp_path):
     a, b, _c, dd, e, _f = meta["transform"]
     assert b == pytest.approx(0, abs=1e-6) and dd == pytest.approx(0, abs=1e-6) and a == pytest.approx(-e)   # y 向下
     assert not list((tmp_path / "fire.dxf.review" / "cad").glob(".tmp-*"))
+    # 報告用整張圖畫圖時就存好（不必再從圖磚拼）；與原圖同尺寸（沒超過列印上限）、比 meta.json 新
+    pr = d / "print.png"
+    assert Image.open(pr).size == (meta["width"], meta["height"]) and pr.stat().st_mtime >= (d / "meta.json").stat().st_mtime
+    before = pr.stat().st_mtime_ns
+    assert CV.print_image(d) == pr and pr.stat().st_mtime_ns == before
+    assert Image.open(pr).convert("RGB").getpixel(tuple(int(v) for v in _px(meta, *RED))) == (255, 0, 0)
 
 
 def _count(sheet_dir, meta, rgb) -> int:
