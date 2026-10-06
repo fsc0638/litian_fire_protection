@@ -317,11 +317,11 @@ def case_status(conn, case_id: int) -> list[dict]:
 
 def file_reviews(conn, case_id: int) -> list[dict]:
     """各檔的存檔路徑與檢核摘要（工作台「檔案處理狀態」的說明用）：review＝檢核狀態（沒檢核過為 NULL）、
-    floors＝檢核的樓層數、findings＝缺失數（各層＋全棟）。直接從檢核結果算：stats.review 只在整個重新處理時寫，
+    floors＝檢核的樓層數（同一層分好幾張系統圖時算一層）、findings＝缺失數（各層＋全棟）。直接從檢核結果算：stats.review 只在整個重新處理時寫，
     改檢核條件重跑後會過時。"""
     return conn.execute(
         "SELECT f.id, f.path, r.status AS review, r.error AS review_error, "
-        "COALESCE(jsonb_array_length(jsonb_path_query_array(r.result, '$.floors[*]')), 0) AS floors, "
+        "(SELECT count(DISTINCT l) FROM jsonb_path_query(r.result, '$.floors[*].label') l) AS floors, "
         "COALESCE(jsonb_array_length(jsonb_path_query_array(r.result, '$.floors[*].findings[*]')), 0) "
         "+ COALESCE(jsonb_array_length(jsonb_path_query_array(r.result, '$.building.findings[*]')), 0) AS findings "
         "FROM case_file f LEFT JOIN file_review r ON r.file_id = f.id WHERE f.case_id = %s", (case_id,)).fetchall()

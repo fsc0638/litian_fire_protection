@@ -183,7 +183,8 @@ def test_file_reviews_counts_floors_and_findings_from_result(conn):
                                      "building": {"findings": [{"no": 1}], "requirements": []}}, None, "/x/a.review")
     ST.save_review(conn, b, "done", {"floors": [], "building": None}, None, "/x/b.review")
     ST.save_review(conn, c, "failed", None, "RuntimeError: 壞了", None)
-    ST.save_review(conn, d, "done", {"floors": [{"label": "B1", "findings": [{"no": 1}]}]}, None, "/x/d.review")   # 舊結果沒有 building
+    ST.save_review(conn, d, "done", {"floors": [{"label": "B1", "findings": [{"no": 1}]}, {"label": "B1", "findings": []}]},
+                   None, "/x/d.review")   # 舊結果沒有 building；同一層分兩張系統圖：算一層
     rows = {r["id"]: r for r in ST.file_reviews(conn, cid)}
     assert set(rows) == {a, b, c, d, e}
     got = {k: (r["review"], r["review_error"], r["floors"], r["findings"]) for k, r in rows.items()}

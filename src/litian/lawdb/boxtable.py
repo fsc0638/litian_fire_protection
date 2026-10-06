@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import re
 import unicodedata
 
 BOX = "┌┐└┘├┤┬┴┼─│"
@@ -65,15 +66,23 @@ def has_table(text: str) -> bool:
     return any(t for t, _ in _segments(text))
 
 
+LIST_ITEM = re.compile(r"(?:[一二三四五六七八九十]+、|（[一二三四五六七八九十]+）|註[：:])")
+
+
 def _join(parts: list[str]) -> str:
-    """格內各行接起來不加分隔（中文在格內斷行）；兩側都是半形英數時補一個空白。"""
-    out = ""
+    """格內各行接起來不加分隔（中文在格內斷行）；兩側都是半形英數時補一個空白。
+    原文另起一行的條列（一、（一）、註：）與隔著空行的兩段（例：斜線表頭的兩個標籤）用換行接，項次界線才看得出來。"""
+    out, gap = "", False
     for p in parts:
         if not p:
+            gap = bool(out)
             continue
-        if out and _alnum(out[-1]) and _alnum(p[0]):
+        if out and (gap or LIST_ITEM.match(p)):
+            out += "\n"
+        elif out and _alnum(out[-1]) and _alnum(p[0]):
             out += " "
         out += p
+        gap = False
     return out
 
 
@@ -206,7 +215,8 @@ def _parse(lines: list[str]) -> dict:
         bs = [band[l] for l in range(l0, l1 + 1) if band[l] >= 0]
         if not bs or starts[min(bs)] != l0 or ends[max(bs)] != l1:
             raise ValueError("儲存格與分隔線對不齊")
-        text = _tidy(_join(["".join(content[l][i] for i in range(s0, s1 + 1)).strip() for l in range(l0, l1 + 1)]))
+        text = "\n".join(_tidy(x) for x in _join(["".join(content[l][i] for i in range(s0, s1 + 1)).strip()
+                                                   for l in range(l0, l1 + 1)]).split("\n"))
         cells.append({"r": (min(bs), max(bs) + 1), "c": (s0, s1 + 1), "text": text})
     if not cells:
         raise ValueError("沒有儲存格")

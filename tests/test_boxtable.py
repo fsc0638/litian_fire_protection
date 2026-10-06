@@ -136,11 +136,11 @@ def test_detector_table_120():
         ("裝置面高度", 1, 3), ("未滿四公尺", 1, 2), ("四公尺以上未滿八公尺", 1, 2)]
     assert _texts(t["rows"][1]) == ["建築物構造", "防火構造建築物", "其他建築物", "防火構造建築物", "其他建築物"]
     assert t["rows"][2][0] == {"text": "探測器種類及有效探測範圍（平方公尺）", "rowspan": 7, "colspan": 1}
-    assert t["rows"][2][1] == {"text": "差動式局限型", "rowspan": 2, "colspan": 1}
+    assert t["rows"][2][1] == {"text": "差動式\n局限型", "rowspan": 2, "colspan": 1}   # 原文兩段之間隔著空行：分兩行
     assert _texts(t["rows"][2])[2:] == ["一種", "90", "50", "45", "30"]
     assert _texts(t["rows"][3]) == ["二種", "70", "40", "35", "25"]
-    assert t["rows"][4][0] == {"text": "補償式局限型", "rowspan": 2, "colspan": 1}
-    assert t["rows"][6][0] == {"text": "定溫式局限型", "rowspan": 3, "colspan": 1}   # 「定溫式」「局限型」跨過兩條部分分隔線
+    assert t["rows"][4][0] == {"text": "補償式\n局限型", "rowspan": 2, "colspan": 1}
+    assert t["rows"][6][0] == {"text": "定溫式\n局限型", "rowspan": 3, "colspan": 1}   # 「定溫式」「局限型」跨過兩條部分分隔線
     assert _texts(t["rows"][8]) == ["二種", "20", "15", "–", "–"]
     for row in t["rows"][2:]:                                        # 每列最後 4 格是數值欄
         assert all(c["colspan"] == 1 for c in row[-4:])
@@ -201,6 +201,15 @@ def test_alignment_spaces_inside_cells_removed():
     assert "滅火藥劑種類" in cells and "Ｘ值" in cells and not any("  " in c for c in cells)
     assert BT._tidy("Ⅰ      型") == "Ⅰ型" and BT._tidy("10  以下") == "10 以下" and BT._tidy("A 級") == "A 級"
     assert BT._tidy("丁醇 、乙醇") == "丁醇、乙醇" and BT._tidy("（Double deck） 或") == "（Double deck）或"
+
+
+def test_list_items_inside_cells_start_new_lines():
+    # 格內的款、目（一、（一））與註各自起一行，項次界線才看得出來；其餘照樣接起來
+    cells = [c["text"] for b in BT.blocks(_text("D0120029/160/1")) if b["type"] == "table" for r in b["rows"] for c in r]
+    calc = next(c for c in cells if c.startswith("其收容人員人數"))
+    assert calc.split("\n")[:3] == ["其收容人員人數，為下列各款合計之數額：", "一、從業員工數。", "二、各觀眾席部分以下列數額合計之。"]
+    assert "\n（一）設固定席位部分" in calc and "\n（三）其他部分" in calc
+    assert BT._join(["其他", "建築物"]) == "其他建築物" and BT._join(["註：甲", "一、乙", "續", "", "丙"]) == "註：甲\n一、乙續\n丙"
 
 
 def test_wrapped_ascii_words_keep_a_space():
@@ -352,8 +361,11 @@ def test_review_bundle_sends_full_text_and_blocks(monkeypatch):
         if "FROM file_review" in sql:
             return [{"file_id": 7, "name": "F-101.dxf", "status": "done", "error": None, "result": result,
                      "svg_dir": None, "created_at": "t", "cad_state": None}]
+        if "LIKE ANY" in sql:                                       # 子孫節點：這兩個節點底下沒有
+            return []
         assert "law_node" in sql and a[0] == sorted([long_id, plain_id])
-        return [{"node_id": i, "citation": _nodes()[i]["citation"], "text": _text(i)} for i in a[0]]
+        return [{"node_id": i, "citation": _nodes()[i]["citation"], "text": _text(i), "level": _nodes()[i]["level"],
+                 "pdf_table_url": None} for i in a[0]]
     monkeypatch.setattr(api, "_all", fake_all)
     monkeypatch.setattr(api.DS, "get_context", lambda c, cid: {})
     monkeypatch.setattr(api.DS, "decisions", lambda c, cid: {})
@@ -363,3 +375,34 @@ def test_review_bundle_sends_full_text_and_blocks(monkeypatch):
     assert len(_text(long_id)) > 600 and laws[long_id]["text"] == _text(long_id)    # 不再截斷成 600 字
     assert laws[long_id]["blocks"] == BT.blocks(_text(long_id))
     assert laws[plain_id] == {"citation": _nodes()[plain_id]["citation"], "text": _text(plain_id)}
+
+
+def test_cited_intro_node_gets_its_items_and_pdf_warning(monkeypatch):
+    """引用「下列處所得免設探測器：」這類引導句的項時，浮窗要看得到底下各款；表格只在官方 PDF 的條文附警語與連結。"""
+    nodes = _nodes()
+    art_of = lambda i: "/".join(i.split("/")[:2])
+
+    def fake_all(sql, *a):
+        if "LIKE ANY" in sql:
+            pats = [p[:-2] for p in a[0]]
+            return [{"node_id": n["node_id"], "text": n["text"]} for n in sorted(nodes.values(), key=lambda n: n["seq"])
+                    if any(n["node_id"].startswith(p + "/") for p in pats)]
+        return [{"node_id": i, "citation": nodes[i]["citation"], "text": nodes[i]["text"], "level": nodes[i]["level"],
+                 "pdf_table_url": nodes[art_of(i)].get("pdf_table_url")} for i in a[0]]
+    monkeypatch.setattr(api, "_all", fake_all)
+    laws = api._cited_laws({"D0120029/116/1", "D0120029/116", "D0120029/18/1"})
+    intro = laws["D0120029/116/1"]["text"].split("\n")
+    assert intro[0] == "下列處所得免設探測器：" and intro[1].startswith("一、") and intro[-1].startswith("八、") and len(intro) == 9
+    assert laws["D0120029/116"]["text"] == nodes["D0120029/116"]["text"]          # 整條本來就是全文，不重複接
+    assert "PDF" in laws["D0120029/18/1"]["warning"] and laws["D0120029/18/1"]["pdf_table_url"].startswith("http")
+    assert "warning" not in laws["D0120029/116/1"]
+
+
+def test_formula_with_box_bar_is_sent_whole():
+    # 公式的根號線是一行方框字元（不是表格）：仍送區塊（整段文字），前端不必猜方框字元從哪開始而把公式切掉
+    text = _text("D0120029/133/1/3/2")
+    assert not BT.has_table(text)
+    api._blocks.cache_clear()
+    b = api._blocks(text)
+    assert [x["type"] for x in b] == ["text"] and "".join(b[0]["text"].split()) == "".join(text.split())
+    assert api._blocks("一、十層以下建築物之樓層。") is None

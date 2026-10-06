@@ -127,6 +127,7 @@ table.law td:not(:first-child) { min-width: 6em; }
 table.law.flow { min-width: 0; font-size: .88rem; line-height: 1.55; }
 table.law.flow th, table.law.flow td { min-width: 4.5em; padding: 6px 10px; white-space: pre-line; }
 table.law.flow th { background: var(--surface-2); font-weight: 600; }
+table.law.flow .long { min-width: 12em; }          /* 長文字的格子不要被擠成一行兩三個字 */
 table.law.flow td { background: var(--surface); }
 .part-title { font-weight: 600; margin: 12px 0 6px; }
 .formula { font-family: ui-monospace, Consolas, monospace; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; margin: 6px 0; overflow-x: auto; white-space: pre; }
@@ -198,7 +199,8 @@ footer p { margin: 0 0 .4em; }
   function blocksHtml(list) {
     const cell = (tag, c) => {
       const rs = Math.max(1, (c && c.rowspan) | 0), cs = Math.max(1, (c && c.colspan) | 0);
-      return "<" + tag + (rs > 1 ? ' rowspan="' + rs + '"' : "") + (cs > 1 ? ' colspan="' + cs + '"' : "") + ">" + esc(c && c.text) + "</" + tag + ">";
+      const long = String((c && c.text) || "").length > 40 ? ' class="long"' : "";
+      return "<" + tag + long + (rs > 1 ? ' rowspan="' + rs + '"' : "") + (cs > 1 ? ' colspan="' + cs + '"' : "") + ">" + esc(c && c.text) + "</" + tag + ">";
     };
     let h = "";
     for (const b of list || []) {
@@ -236,7 +238,8 @@ footer p { margin: 0 0 .4em; }
     return out;
   }
   // 分隔列（|---|:--:|）：一定要有 |，才不會跟分隔線 --- 搞混
-  const isMdSep = (line) => line.includes("|") && /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/.test(line);
+  // 串流中最後一格可能只到「:」（|:---|---:|:），也當分隔列，表格才不會閃一下變回段落
+  const isMdSep = (line) => line.includes("|") && /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*(?:\|\s*:)?\s*\|?\s*$/.test(line);
 
   // 極簡 Markdown：段落、條列、粗體、標題、分隔線、表格；chip(n) 產生 [n] 的引用標記
   function mdHtml(s, chip) {
@@ -259,7 +262,9 @@ footer p { margin: 0 0 .4em; }
         i--;
         // 欄數參差時補空格，多出來的欄也照樣顯示，不丟內容
         const n = Math.max(head.length, ...rows.map((r) => r.length));
-        const td = (tag, t, j) => "<" + tag + (align[j] ? ' style="text-align:' + align[j] + '"' : "") + ">" + inline(t ?? "") + "</" + tag + ">";
+        // 格內換行：AI 常在表格裡寫 <br>，跳脫後換回真正的換行（固定字串，不影響跳脫）
+        const td = (tag, t, j) => "<" + tag + (align[j] ? ' style="text-align:' + align[j] + '"' : "") + ">" +
+          inline(t ?? "").replace(/&lt;br\s*\/?&gt;/gi, "<br>") + "</" + tag + ">";
         const tr = (r, tag) => "<tr>" + Array.from({ length: n }, (_, j) => td(tag, r[j], j)).join("") + "</tr>";
         html += '<div class="tbl"><table class="law flow"><thead>' + tr(head, "th") + "</thead>" +
           (rows.length ? "<tbody>" + rows.map((r) => tr(r, "td")).join("") + "</tbody>" : "") + "</table></div>";

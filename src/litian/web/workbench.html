@@ -145,6 +145,8 @@ button.locate svg { flex: none; display: block; }
 .lawtbl th, .lawtbl td { border: 1px solid var(--border); padding: 6px 9px; min-width: 4.5em; vertical-align: top; text-align: left;
   white-space: pre-wrap; color: var(--text); font-size: inherit; }
 .lawtbl th { background: var(--surface-2); font-weight: 600; }
+.lawtbl .long { min-width: 12em; }                      /* 長文字的格子不要被擠成一行兩三個字 */
+.lawwarn { margin: 8px 0 0; font-size: .82rem; color: var(--muted); }
 .lawpre { margin: 0; padding: 8px 10px; overflow-x: auto; white-space: pre; background: var(--surface-2); border-radius: 6px;
   font: .8rem/1.45 ui-monospace, Consolas, "MingLiU", monospace; }
 /* 說明、判讀提醒、應設設備判定：行距放寬 */
@@ -174,7 +176,7 @@ ol.findings > li.rejected { opacity: .55; }
 .unrev ul { margin: 4px 0 6px; padding-left: 1.2em; overflow-wrap: anywhere; }
 .unrev p { margin: 4px 0 0; }
 .unrev-ref { margin: 0 0 8px; line-height: 1.6; overflow-wrap: anywhere; }
-#files td:first-child { overflow-wrap: anywhere; }
+#files td:first-child { overflow-wrap: anywhere; min-width: 7em; }
 #files td:last-child { line-height: 1.6; }
 details.raw > summary { color: var(--text); font-size: 1rem; font-weight: 600; }
 details.raw h3 { font-size: .95rem; margin: 0 0 8px; }
@@ -875,14 +877,17 @@ ol.findings > li.flash { animation: liflash 2s ease-out; }
         const head = Math.max(0, Math.floor(Number(b.header_rows)) || 0);
         return '<div class="lawtbl"><table><tbody>' + b.rows.map((row, i) => "<tr>" + (Array.isArray(row) ? row : []).map((c) => {
           const tag = i < head ? "th" : "td", rs = span(c && c.rowspan, 65534), cs = span(c && c.colspan, 1000);
-          return "<" + tag + (rs > 1 ? ' rowspan="' + rs + '"' : "") + (cs > 1 ? ' colspan="' + cs + '"' : "") + ">" + esc(c && c.text) + "</" + tag + ">";
+          const long = String((c && c.text) || "").length > 40 ? ' class="long"' : "";
+          return "<" + tag + long + (rs > 1 ? ' rowspan="' + rs + '"' : "") + (cs > 1 ? ' colspan="' + cs + '"' : "") + ">" + esc(c && c.text) + "</" + tag + ">";
         }).join("") + "</tr>").join("") + "</tbody></table></div>";
       }
       if (b && b.type === "pre") return '<pre class="lawpre">' + esc(b.text) + "</pre>";
       const t = String((b && b.text) || "").replace(/^[\r\n]+/, "").replace(/\s+$/, "");   // 區塊頭尾的空行不要（行首縮排保留）
       return t ? '<div class="lawtext">' + esc(t) + "</div>" : "";
     }).join("");
-    return out || '<p class="muted">（沒有條文內容）</p>';
+    const warn = l && l.warning ? '<p class="lawwarn">' + esc(l.warning) +
+      (/^https?:\/\//.test(l.pdf_table_url || "") ? '　<a href="' + esc(l.pdf_table_url) + '" target="_blank" rel="noopener">開啟官方 PDF</a>' : "") + "</p>" : "";
+    return (out || '<p class="muted">（沒有條文內容）</p>') + warn;
   }
   // ---------- 法條區塊結束 ----------
 
@@ -1150,7 +1155,7 @@ ol.findings > li.flash { animation: liflash 2s ease-out; }
     const b = pop.btn; pop = null;
     popEl.classList.add("hidden"); popEl.innerHTML = "";
     b.setAttribute("aria-expanded", "false");
-    if (refocus && b.isConnected) { popRefocus = b; b.focus({ preventScroll: true }); }
+    if (refocus && b.isConnected && document.activeElement !== b) { popRefocus = b; b.focus({ preventScroll: true }); }
   }
   function placeLaw() {
     if (!pop) return;
@@ -1201,6 +1206,12 @@ ol.findings > li.flash { animation: liflash 2s ease-out; }
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape" || !pop) return;
     closeLaw(popEl.contains(document.activeElement) || document.activeElement === pop.btn);
+  });
+  // 浮窗放在頁尾：用 Tab／Shift+Tab 離開時先把焦點交回條文按鈕，瀏覽器再從按鈕接著往後或往前（不會跳到頁首、頁尾）
+  popEl.addEventListener("keydown", (e) => {
+    if (e.key !== "Tab" || !pop) return;
+    const f = [...popEl.querySelectorAll("a[href], button")], a = document.activeElement;
+    if (e.shiftKey ? (a === popEl || a === f[0]) : (a === f[f.length - 1] || (a === popEl && !f.length))) closeLaw(true);
   });
   addEventListener("scroll", (e) => { if (pop && !popEl.contains(e.target)) placeLaw(); }, true);
   addEventListener("resize", () => { if (pop) placeLaw(); });

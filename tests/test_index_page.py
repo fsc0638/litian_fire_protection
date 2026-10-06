@@ -116,6 +116,14 @@ def test_md_partial_table_while_streaming(tmp_path):
     assert got[-1].endswith("</table></div><p>說明。</p>") and "<c>1</c>" in got[-1]
 
 
+def test_md_separator_ending_with_colon_keeps_table(tmp_path):
+    # 串流剛好停在對齊冒號（|:---|---:|:）：表格不能閃一下變回段落；<br> 在格內換成真正的換行、其餘照樣跳脫
+    got = _run_js(tmp_path, ["| 場所 | 面積 | 依據 |\n|:---|---:|:", "| a | b |\n|---|---|\n| 1. 撒水<br>2. 火警<BR/> | <script>x</script> |"],
+                  "return D.map((s) => mdHtml(s, chip));")
+    assert "<table" in got[0] and "<p>" not in got[0]
+    assert "1. 撒水<br>2. 火警<br>" in got[1] and "&lt;script&gt;" in got[1] and "<script>" not in got[1]
+
+
 def test_md_headings_and_rules(tmp_path):
     h = _md(tmp_path, "# 結論\n應設置。\n## 依據 ##\n###### 小標\n#不是標題\n---\n* * *\n- 清單")
     assert h == ("<h3>結論</h3><p>應設置。</p><h4>依據</h4><h6>小標</h6><p>#不是標題</p><hr><hr>"

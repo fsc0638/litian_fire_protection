@@ -91,6 +91,8 @@ def test_reviews_require_login_and_attach_svg_urls_and_laws(client, monkeypatch)
     def fake_all(sql, *a):
         if "FROM file_review" in sql:
             return [{"file_id": 7, "name": "F-101.dxf", "status": "done", "error": None, "result": result, "svg_dir": None, "created_at": "t"}]
+        if "LIKE ANY" in sql:                                       # 引導句節點的子孫：這裡沒有
+            return []
         assert "law_node" in sql and a[0] == ["D0120029/34/1/1/1", "D0120029/49/1/1"]
         return [{"node_id": "D0120029/34/1/1/1", "citation": "設置標準第34條第1項第1款第1目", "text": "各層任一點…"}]
     monkeypatch.setattr(api, "_all", fake_all)
@@ -257,6 +259,14 @@ def test_xref_host_lists_every_main_file():
     out = {f["id"]: f for f in api._file_notes(files, info)}
     assert out[3]["xref_of"] == "A.dwg" and out[3]["note"] == "建築底圖（外部參考），已併入「A.dwg」、「B.dwg」一起檢核"
     assert out[1]["xref_of"] is None and out[2]["xref_of"] is None
+
+
+def test_xref_base_of_unreviewed_main_is_not_called_reviewed():
+    # 主圖檢核失敗或沒認出樓層：底圖不能寫「一起檢核」，指回主圖的說明
+    files = [_file(1, "M.dwg", stats={"xref": {"bound": ["B"], "bound_files": ["002_B.dwg"]}}), _file(2, "B.dwg")]
+    for main in (_summary(1, "001_M.dwg", "failed"), _summary(1, "001_M.dwg")):
+        out = {f["id"]: f for f in api._file_notes([dict(f) for f in files], {1: main, 2: _summary(2, "002_B.dwg")})}
+        assert out[2]["xref_of"] == "M.dwg" and "一起檢核" not in out[2]["note"] and "主圖沒有完成檢核" in out[2]["note"]
 
 
 # ---------- 工作台頁面：簡化後的版面（靜態檢查） ----------
