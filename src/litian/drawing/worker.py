@@ -115,7 +115,7 @@ def bind_xrefs(job: dict, src: Path, spool: Path) -> tuple[Path, dict]:
     out = path.with_name(path.stem + ".bound.dxf")
     info = json.loads(_run(["litian.drawing.xref", "bind", str(src), str(path.parent), str(out), str(path)],
                            BIND_TIMEOUT, "外部參考綁定"))
-    return Path(info["path"]), {"bound": info["bound"], "missing": info["missing"]}
+    return Path(info["path"]), {"bound": info["bound"], "bound_files": info.get("bound_files", []), "missing": info["missing"]}
 
 
 def requeue_xref_dependents(conn, job: dict) -> int:

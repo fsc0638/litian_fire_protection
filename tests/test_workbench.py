@@ -193,3 +193,174 @@ def test_report_html_and_csv(client, monkeypatch, tmp_path):
     assert csv.headers["content-disposition"].startswith("attachment") and csv.content.startswith("\ufeff".encode())
     text = csv.content.decode("utf-8-sig")
     assert text.count("\n") == 4 and "退回" in text and "接受" in text and "未審核" in text
+
+
+# ---------- 檔案處理狀態的白話說明（note）與外部參考（xref_of） ----------
+
+def _file(fid, name, status="done", kind="dwg", stats=None, error=None):
+    return {"id": fid, "name": name, "kind": kind, "size": 1, "status": status, "error": error, "stats": stats, "attempts": 0}
+
+
+def _summary(fid, stored, review=None, floors=0, findings=0, error=None):
+    return {"id": fid, "path": f"/cases/3/{stored}", "review": review, "review_error": error, "floors": floors, "findings": findings}
+
+
+def test_case_files_get_plain_notes_and_xref_host(client, monkeypatch):
+    client.cookies.set("__Host-fr_session", "good-token")
+    files = [
+        _file(1, "F-101.dwg", stats={"sheets": 3, "xref": {"bound": ["Area_1F"], "bound_files": ["002_Area_1F.dwg"], "missing": []}}),
+        _file(2, "Area_1F.dwg", stats={"sheets": 1}),
+        _file(3, "Area_2F.dwg", stats={"sheets": 1}),
+        _file(4, "Area_9F.dwg", stats={"sheets": 1}),
+        _file(5, "G.dxf", kind="dxf", stats={"sheets": 1}),
+        _file(6, "H.dwg", stats={"xref": {"bound": ["AREA_2F"], "missing": []}}),     # 舊資料：只有圖塊名
+        _file(7, "x.dwl", status="skipped", kind="other", error="不支援的檔案類型（AutoCAD 暫存檔等）"),
+        _file(8, "a.pdf", status="skipped", kind="pdf", error="PDF 擷取尚未支援（後續里程碑）"),
+        _file(9, "bad.dwg", status="failed", error="ConvertError: 轉檔逾時"),
+        _file(10, "q.dwg", status="queued"),
+        _file(11, "Area_2F.dwg", stats={"sheets": 1}),                                # 同名再上傳：綁定時用的是存檔名排前面的
+        _file(12, "K.dwg", stats={"xref": {"bound": ["Area_9F"], "bound_files": [], "missing": []}}),   # 新資料以 bound_files 為準
+        _file(13, "R.dwg", status="reviewing", stats={"sheets": 1}),
+    ]
+    summary = [_summary(1, "001_F-101.dwg", "done", floors=2, findings=5), _summary(2, "002_Area_1F.dwg"),
+               _summary(3, "003_Area_2F.dwg"), _summary(4, "004_Area_9F.dwg"),
+               _summary(5, "005_G.dxf", "failed", error="ValueError: 圖框讀不到"),
+               _summary(6, "006_H.dwg", "done", floors=0, findings=2), _summary(7, "007_x.dwl"), _summary(8, "008_a.pdf"),
+               _summary(9, "009_bad.dwg"), _summary(10, "010_q.dwg"), _summary(11, "011_Area_2F.dwg"),
+               _summary(12, "012_K.dwg", "done", floors=1, findings=0), _summary(13, "013_R.dwg")]
+    monkeypatch.setattr(api.DS, "case_status", lambda c, cid: [dict(f) for f in files])
+    monkeypatch.setattr(api.DS, "file_reviews", lambda c, cid: summary)
+    monkeypatch.setattr(api, "_all", lambda sql, *a: [])
+    d = client.get("/api/cases/3").json()
+    got = {f["id"]: (f["note"], f["xref_of"], f["review"]) for f in d["files"]}
+    assert got[1] == ("已檢核 2 層，缺失 5 條", None, "done")
+    assert got[2] == ("建築底圖（外部參考），已併入「F-101.dwg」一起檢核", "F-101.dwg", None)
+    assert got[3] == ("建築底圖（外部參考），已併入「H.dwg」一起檢核", "H.dwg", None)        # 圖塊名比對不分大小寫
+    assert got[4] == (api.NO_FLOOR_NOTE, None, None) and "樓層" in api.NO_FLOOR_NOTE
+    assert got[5] == ("檢核失敗：ValueError: 圖框讀不到", None, "failed")
+    assert got[6] == ("已檢核，但沒有認出樓層平面圖；全棟缺失 2 條", None, "done")
+    assert got[7] == ("不支援的檔案類型，已略過", None, None)
+    assert got[8] == ("不支援的檔案類型，已略過（PDF 尚未支援）", None, None)
+    assert got[9] == ("ConvertError: 轉檔逾時", None, None)
+    assert got[10] == (None, None, None) and got[13] == (None, None, None)              # 處理中不寫說明
+    assert got[11] == (api.NO_FLOOR_NOTE, None, None)
+    assert got[12] == ("已檢核 1 層，缺失 0 條", None, "done")
+    f1 = next(f for f in d["files"] if f["id"] == 1)
+    assert f1["stats"]["sheets"] == 3 and f1["size"] == 1 and "path" not in f1           # 原有欄位保留，存檔路徑不外露
+
+
+def test_xref_host_lists_every_main_file():
+    files = [_file(1, "A.dwg", stats={"xref": {"bound": ["Area_1F"], "bound_files": ["003_Area_1F.dwg"]}}),
+             _file(2, "B.dwg", stats={"xref": {"bound": ["Area_1F"], "bound_files": ["003_area_1f.DWG"]}}),
+             _file(3, "Area_1F.dwg")]
+    info = {1: _summary(1, "001_A.dwg", "done", 1, 0), 2: _summary(2, "002_B.dwg", "done", 1, 0), 3: _summary(3, "003_Area_1F.dwg")}
+    out = {f["id"]: f for f in api._file_notes(files, info)}
+    assert out[3]["xref_of"] == "A.dwg" and out[3]["note"] == "建築底圖（外部參考），已併入「A.dwg」、「B.dwg」一起檢核"
+    assert out[1]["xref_of"] is None and out[2]["xref_of"] is None
+
+
+# ---------- 工作台頁面：簡化後的版面（靜態檢查） ----------
+
+def _html() -> str:
+    return api.WEB_WORKBENCH.read_text(encoding="utf-8")
+
+
+def test_workbench_files_table_shows_plain_notes_not_diagnostics():
+    html = _html()
+    assert "<th>說明</th>" in html and "抽取結果" not in html and "sheet_numbers" not in html
+    assert "f.note" in html and "f.xref_of" in html
+    # 圖紙與抽出的文字收在頁面最下方、預設收起的區塊裡（點圖紙看文字、搜尋框照舊）
+    raw = html[html.index('<details id="raw"'):]
+    raw = raw[:raw.index("</details>")]
+    assert "圖紙與抽出的文字（查看系統從圖上讀到什麼）" in raw and " open" not in raw.split(">")[0]
+    for s in ['id="sheets"', 'id="texts"', 'id="filter"', 'id="texts-title"', 'id="texts-hint"']:
+        assert s in raw, s
+    assert html.index('id="reviews"') < html.index('<details id="raw"')
+
+
+def test_workbench_lists_unreviewed_files_with_hint():
+    html = _html()
+    assert 'id="unreviewed"' in html and "function unreviewedHtml(" in html
+    for s in ["圖框的圖名要寫出樓層（例如「一層消防平面圖」）系統才會檢核", "請上傳引用它的消防設備圖，系統會自動併入"]:
+        assert s in html, s
+    # 沒有任何檢核結果時由這份清單取代一般提示；輪詢、局部更新照舊
+    hint = html[html.index("function updateHint("):]
+    assert "bundle.reviews.length > 0 || !!lastUnrev" in hint[:200]
+    assert "renderUnreviewed()" in html[html.index("async function refreshCase("):html.index("// ---------- 檢核結果")]
+
+
+def test_workbench_law_citations_use_popover_not_title():
+    html = _html()
+    assert "title=\"' + esc(l.text)" not in html and ".law span" not in html
+    for s in ['class="lawref"', '"role", "dialog"', "aria-expanded", '"Escape"', "pointerdown", "lawBodyHtml(l)", "--pop-shadow"]:
+        assert s in html, s
+
+
+def test_workbench_finding_card_layout_and_locate_button():
+    html = _html()
+    find = html[html.index("function findingHtml("):html.index("function noteHtml(")]
+    for s in ['class="f-head"', 'class="f-title"', 'class="f-body"', "<dt>說明</dt>", "<dt>建議</dt>", "<dt>要補的資料</dt><dd><ul>",
+              "<dt>依據</dt>", "decisionHtml(fileId, f.key)"]:
+        assert s in find, s
+    cad = html[html.index("async function mountCad("):html.index("function cadMarks(")]
+    assert 'li.querySelector(".f-head")' in cad and "head.append(b)" in cad and '"aria-label"' in cad and 'sv("svg"' in cad
+    assert 'li.querySelector("b").after' not in cad
+    assert "button.locate {" in html and "background: var(--accent-solid)" in html and "@container" in html
+    # 巢狀清單（要補的資料）不能套到缺失卡的樣式
+    assert "ol.findings li {" not in html and "ol.findings > li {" in html
+
+
+# ---------- 法條區塊（工作台的純函式段落，用 node 跑；沒有 node 就略過） ----------
+
+def _run_law_js(tmp_path, data, body: str):
+    import json
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("沒有 node，略過前端純函式測試")
+    html = _html()
+    funcs = html[html.index("// ---------- 法條區塊 ----------"):html.index("// ---------- 法條區塊結束")]
+    js = tmp_path / "law.js"
+    js.write_text(funcs + "\nconst D = " + json.dumps(data, ensure_ascii=False) + ";\n"
+                  "process.stdout.write(JSON.stringify((() => {" + body + "})()));\n", encoding="utf-8")
+    r = subprocess.run([node, str(js)], capture_output=True, timeout=60)
+    assert r.returncode == 0, r.stderr.decode("utf-8", "replace")
+    return json.loads(r.stdout.decode("utf-8"))
+
+
+def test_law_buttons_escape_everything(tmp_path):
+    laws = {'D/1"x': {"citation": "第 1 條<script>alert(1)</script>", "text": "t"}}
+    got = _run_law_js(tmp_path, {"laws": laws}, "return [lawHtml(['D/1\"x', '<b>不存在</b>'], D.laws), lawHtml(null, D.laws)];")
+    assert got[0] == ('<button type="button" class="lawref" data-law="D/1&quot;x" aria-haspopup="dialog" aria-expanded="false">'
+                      "第 1 條&lt;script&gt;alert(1)&lt;/script&gt;</button>、&lt;b&gt;不存在&lt;/b&gt;")
+    assert got[1] == ""
+
+
+def test_law_body_table_rowspan_colspan_and_escape(tmp_path):
+    law = {"citation": "第 2 條", "text": "（原文）", "blocks": [
+        {"type": "text", "text": "\n第二條　下列<場所>：\n  一、甲類 & 乙類\n\n"},
+        {"type": "table", "header_rows": 1, "rows": [
+            [{"text": "類別", "rowspan": 1, "colspan": 2}, {"text": "面積\n（㎡）", "rowspan": 1, "colspan": 1}],
+            [{"text": "甲", "rowspan": 2, "colspan": 1}, {"text": "一", "rowspan": 1, "colspan": 1}, {"text": "<300", "rowspan": 1, "colspan": 1}],
+            [{"text": "二", "rowspan": "abc", "colspan": 0}, {"text": "'500'", "rowspan": -3, "colspan": 5000}],
+        ]},
+        {"type": "pre", "text": "┌─┐\n│<x>│\n└─┘"},
+    ]}
+    html = _run_law_js(tmp_path, {"law": law}, "return lawBodyHtml(D.law);")
+    assert html.startswith('<div class="lawtext">第二條　下列&lt;場所&gt;：\n  一、甲類 &amp; 乙類</div>')   # 頭尾空行去掉、縮排保留
+    assert ('<div class="lawtbl"><table><tbody><tr><th colspan="2">類別</th><th>面積\n（㎡）</th></tr>'
+            '<tr><td rowspan="2">甲</td><td>一</td><td>&lt;300</td></tr>'
+            '<tr><td>二</td><td colspan="1000">&#39;500&#39;</td></tr></tbody></table></div>') in html
+    assert html.endswith('<pre class="lawpre">┌─┐\n│&lt;x&gt;│\n└─┘</pre>')
+    assert 'rowspan="1"' not in html and 'colspan="1"' not in html and "（原文）" not in html     # 有 blocks 就不用 text
+
+
+def test_law_body_falls_back_to_text(tmp_path):
+    got = _run_law_js(tmp_path, {"plain": {"citation": "c", "text": "第三條\n  <內文>"},
+                                 "box": {"citation": "c", "text": "表：\n┌──┬──┐\n│a │b │"},
+                                 "empty": {"citation": "c", "text": "", "blocks": []}},
+                      "return [lawBodyHtml(D.plain), lawBodyHtml(D.box), lawBodyHtml(D.empty), lawBodyHtml(undefined)];")
+    assert got[0] == '<div class="lawtext">第三條\n  &lt;內文&gt;</div>'
+    assert got[1] == '<pre class="lawpre">表：\n┌──┬──┐\n│a │b │</pre>'                         # 舊資料：框線原樣等寬
+    assert got[2] == got[3] == '<p class="muted">（沒有條文內容）</p>'

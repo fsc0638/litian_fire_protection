@@ -34,6 +34,7 @@ from . import ask as A
 from . import auth as AU
 from . import line_login as LL
 from .drawing import store as DS
+from .drawing import xref as XR
 from .drawing.cli import safe_name
 from .lawdb import boxtable as BT
 from .lawdb import search as S
@@ -869,14 +870,73 @@ async def cases_upload(case_id: int, files: list[UploadFile] = File(...), user: 
     return {"files": out}
 
 
+NO_FLOOR_NOTE = "沒有認出樓層平面圖，未檢核：圖框的圖名要寫出樓層（例如「一層消防平面圖」）"
+
+
+def _xref_hosts(files: list[dict], stored: dict[int, str]) -> dict[int, list[str]]:
+    """被同案件別的檔當外部參考併入的檔：檔案 id → 主圖檔名。stored：檔案 id → 案件資料夾裡的存檔名（001_Area_1F.dwg）。
+    主圖 stats.xref.bound_files 記了綁進來的存檔名；舊資料只有圖塊名（通常＝參考檔的檔名主體），照綁定時的規則比對
+    （xref.case_candidates：檔名去掉上傳序號、不分大小寫，同名取存檔名排最前的）。"""
+    cad = sorted((stored[f["id"]], f["id"]) for f in files if f.get("kind") in ("dwg", "dxf") and stored.get(f["id"]))
+    out: dict[int, list[str]] = {}
+    for m in files:
+        x = (m.get("stats") or {}).get("xref") or {}
+        if isinstance(x.get("bound_files"), list):
+            want = {str(n).lower() for n in x["bound_files"]}
+            hit = [fid for name, fid in cad if name.lower() in want]
+        else:
+            keys = {k for n in x.get("bound") or [] for k in (safe_name(str(n)).lower(), XR.ref_key(str(n)))}
+            first: dict[str, int] = {}
+            for name, fid in cad:
+                if fid != m["id"]:
+                    first.setdefault(XR.UPLOAD_PREFIX.sub("", Path(name).stem).lower(), fid)
+            hit = [fid for k, fid in first.items() if k in keys]
+        for fid in hit:
+            if fid != m["id"]:
+                out.setdefault(fid, []).append(m["name"])
+    return out
+
+
+def _file_note(f: dict, r: dict, hosts: list[str]) -> str | None:
+    """檔案處理狀態的白話說明；處理中的不寫。"""
+    if f["status"] == "failed":
+        return f.get("error") or "處理失敗"
+    if f["status"] == "skipped":
+        return "不支援的檔案類型，已略過" + ("（PDF 尚未支援）" if f.get("kind") == "pdf" else "")
+    if f["status"] != "done":
+        return None
+    if r.get("review") == "failed":
+        return f"檢核失敗：{r.get('review_error') or '原因不明'}"
+    if r.get("review") == "done":
+        n, m = r.get("floors") or 0, r.get("findings") or 0
+        return f"已檢核 {n} 層，缺失 {m} 條" if n else "已檢核，但沒有認出樓層平面圖" + (f"；全棟缺失 {m} 條" if m else "")
+    if hosts:
+        return "建築底圖（外部參考），已併入" + "、".join(f"「{h}」" for h in hosts) + "一起檢核"
+    return NO_FLOOR_NOTE
+
+
+def _file_notes(files: list[dict], info: dict[int, dict]) -> list[dict]:
+    """每個檔加上 note（白話說明）、review（檢核狀態，沒檢核過為 None）、xref_of（被哪個主圖當外部參考併入）。
+    info：store.file_reviews 的結果（檔案 id → 存檔路徑與檢核摘要）。"""
+    stored = {i: Path(r["path"]).name for i, r in info.items() if r.get("path")}
+    hosts = _xref_hosts(files, stored)
+    for f in files:
+        r = info.get(f["id"]) or {}
+        f["review"] = r.get("review")
+        f["xref_of"] = (hosts.get(f["id"]) or [None])[0]
+        f["note"] = _file_note(f, r, hosts.get(f["id"]) or [])
+    return files
+
+
 @app.get("/api/cases/{case_id}")
 def cases_detail(case_id: int, user: dict = Depends(current_user)):
     case = _case_or_404(case_id)
     with pool.connection() as c:
         files = DS.case_status(c, case_id)
+        info = {r["id"]: r for r in DS.file_reviews(c, case_id)}
     sheets = _all("SELECT s.id, s.file_id, s.idx, s.number, s.title, s.scale, s.unit FROM case_sheet s "
                   "JOIN case_file f ON f.id = s.file_id WHERE f.case_id = %s ORDER BY s.number NULLS LAST, s.id", case_id)
-    return {"case": case, "files": files, "sheets": sheets}
+    return {"case": case, "files": _file_notes(files, info), "sheets": sheets}
 
 
 @app.get("/api/cases/{case_id}/sheets/{sheet_id}/texts")
