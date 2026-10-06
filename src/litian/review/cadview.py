@@ -38,7 +38,6 @@ A3_PX = round(420 / 25.4 * DPI)        # A3 長邊 300 dpi ≈ 4961 px：最低�
 MAX_PX = 8000                         # 長邊上限（8000×5700 RGB 約 140 MB，再大子行程記憶體會不夠）
 FONTS = ("NotoSansCJK-Regular.ttc", "NotoSansTC-Regular.ttf", "msjh.ttc")   # 依序找第一個有的中文字型
 NAME = re.compile(r"^[0-9A-Z]{1,6}(-\d{1,4})?$")                            # 與 API 的 REVIEW_LABEL 相同
-INLINE_FONT = re.compile(r"\\[fF][^;\\]*;")                                  # 多行文字內嵌的字型切換（\f新細明體|b0|i0;）
 RATIO = re.compile(r"1\s*[:：/]\s*(\d+(?:\.\d+)?)")
 
 
@@ -115,7 +114,7 @@ def prepare(doc, font: str | None) -> dict:
     """只改記憶體中的 doc：
     1) .shx、沒有副檔名或本機沒有的字型改用中文字型（否則中文變方框），找不到的字型一律退回中文字型；
        中文字寬依原字型校正（SHX 大字體、正黑體等，見 cadtext.style_font）；
-    2) 多行文字內嵌的字型切換拿掉（改用上面的中文字型）；
+    2) 多行文字內嵌的字型切換也改用中文字型，中文字寬依內嵌的原字型校正（與樣式相同就拿掉，見 cadtext.inline_fonts）；
     3) 視埠狀態不可靠（轉檔後常是「關閉」0；也有內容視埠是 1）：ezdxf 只畫狀態 >0 的視埠，
        且把排第一個、狀態 1 的當成整張紙丟掉。所以整張紙以外的視埠一律設成 ≥2、整張紙的一律關閉，
        畫哪些視埠就只看 _paper_vp，不靠 ezdxf 依狀態猜；
@@ -125,6 +124,7 @@ def prepare(doc, font: str | None) -> dict:
 
     from litian.review import cadtext
     out = {"styles": 0, "mtext": 0, "viewports": 0, "layers": 0}
+    style_fonts = {}                           # 樣式名（小寫）→ 替換後的字型名
     if font:
         fm = fonts.font_manager
         fm._fallback_font_name = font          # ezdxf 沒有公開的設定方法
@@ -135,10 +135,15 @@ def prepare(doc, font: str | None) -> dict:
                 st.dxf.font = cadtext.style_font(font, f, big, st.get_extended_font_data()[0])
                 st.dxf.bigfont = ""
                 out["styles"] += 1
+            style_fonts[st.dxf.name.lower()] = st.dxf.font
     used = set()
     for e in doc.entitydb.values():
-        if e.dxftype() == "MTEXT" and INLINE_FONT.search(e.text or ""):
-            e.text = INLINE_FONT.sub("", e.text)
+        if e.dxftype() == "MTEXT" and cadtext.INLINE_FONT.search(e.text or ""):
+            if font:                           # 樣式不存在時 ezdxf 用預設字型（＝替代字型）
+                cur = style_fonts.get(e.dxf.get("style", "Standard").lower(), font)
+                e.text = cadtext.inline_fonts(e.text, font, cur)
+            else:
+                e.text = cadtext.INLINE_FONT.sub("", e.text)
             out["mtext"] += 1
         if e.dxf.is_supported("layer"):
             used.add(e.dxf.get("layer", "0"))
@@ -219,10 +224,13 @@ def _union(boxes):
 
 
 def _paper_box(lay, cache):
-    """配置頁要畫的紙面範圍：紙面上所有實體（視埠取其外框，整張紙的視埠不算）。"""
+    """配置頁要畫的紙面範圍：紙面上所有畫得出來的實體（視埠取其外框，整張紙的視埠不算；其他實體在關閉、凍結、
+    不出圖的圖層上就不算，例：停在圖框外 Defpoints 上的東西）。全都不算時照全部實體。"""
     from ezdxf import bbox
     from ezdxf.math import BoundingBox2d, Vec2
-    parts = []
+    hidden = {ly.dxf.name.lower() for ly in lay.doc.layers
+              if ly.is_off() or ly.is_frozen() or not ly.dxf.get("plot", 1)}
+    parts, rest = [], []
     for e in lay:
         if e.dxftype() == "VIEWPORT":
             if _paper_vp(e) or e.dxf.get("status", 0) <= 0:
@@ -232,8 +240,9 @@ def _paper_box(lay, cache):
         else:
             b = bbox.extents((e,), fast=True, cache=cache)
             if b.has_data:
-                parts.append(BoundingBox2d([Vec2(b.extmin), Vec2(b.extmax)]))
-    return _union(parts)
+                box = BoundingBox2d([Vec2(b.extmin), Vec2(b.extmax)])
+                (rest if e.dxf.get("layer", "0").lower() in hidden else parts).append(box)
+    return _union(parts) if parts else _union(rest)
 
 
 def _plot_area(lay, box):

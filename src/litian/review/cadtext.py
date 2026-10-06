@@ -1,7 +1,8 @@
 """CAD 原樣圖的文字貼近 AutoCAD（review.cadview 呼叫）：
-1) 字寬：沒有原字型、改用中文字型時，依原字型校正中文字（全形字）的寬度（style_font）；
+1) 字寬：沒有原字型、改用中文字型時，依原字型校正中文字（全形字）的寬度（style_font；多行文字內嵌的字型切換
+   依各自的原字型，inline_fonts）；
 2) 換行：有欄寬的多行文字可在中文字之間換行，套用斷行禁則與 AutoCAD 容許的超出量（draw_mtext）；
-3) 段落縮排：數值明顯是圖面單位時不再乘字高（_paragraph）。
+3) 段落縮排：數值明顯是圖面單位時不再乘字高（_paragraph；所有帶縮排碼的多行文字）。
 
 ezdxf 沒有公開的做法：字型別名要登記進字型管理器與字形快取（私有成員），排版程式複製自 ezdxf 1.4.4 的
 AbstractMTextRenderer.layout_engine。兩者都綁定 EZDXF 這個版本（pyproject 鎖定；版本或內部改了，
@@ -33,15 +34,19 @@ REVISION = "text1"                    # 寫進 meta.json 的 renderer：分得�
 # ---------- 字寬 ----------
 # 原字型的中文字前進寬度 ÷ 字高（AutoCAD 實測）：
 # - SHX 大字體：1.0（字高×寬度係數；由 AutoCAD 存檔的 TEXT 對齊點反推，純中文字串中位數 1.000，4～6 字剛好 4.000～6.000）
-# - 微軟正黑體（含 Light）：AutoCAD 以大寫字高當字高，中文字寬 2048/1549（與 AutoCAD 存的多行文字範圍寬度差 1e-14）
-# - 標楷體：約 1.340
-# ezdxf 也以大寫字高縮放 TrueType：替代字型（例：思源黑體 1000/733＝1.364）的中文字照原寬會比原字型寬
+# - TrueType：AutoCAD 的字高＝「A」字頂到基線（y=0）的高度。由 AutoCAD 存的 TEXT 對齊點反推字高（字型單位），
+#   正黑體 1549（8 筆）、標楷體 724（13 筆、3 張圖）、新細明體 688（1 筆）都剛好是該字型「A」的字頂；多行文字存的
+#   範圍寬度（墨跡）也吻合（內嵌正黑體 Light 的 6 字，與 AutoCAD 存的值相同到小數 12 位）。所以中文字寬：
+#   正黑體（含 Light）2048/1549、標楷體 1024/724、細明體與新細明體 1024/688
+# ezdxf 縮放 TrueType 用的大寫字高是「A」字頂到「x」字底（標楷體、細明體的 x 底在基線下，比 AutoCAD 的大）；
+# 替代字型照 ezdxf 量（例：思源黑體 1000/733＝1.364），中文字照原寬會與原字型不同寬
 JHENGHEI = 2048 / 1549
-KAIU = 1.340
+KAIU = 1024 / 724
+MINGLIU = 1024 / 688
 FULL = 0.95                           # 前進寬度 ≥ 0.95 em 的非 ASCII 字當全形字（中文）縮放；英數不動
 SHX_SPACE = 0.95                      # SHX 的空白寬（字高倍數）：AutoCAD 存檔寬度中含空白的 SHX 字串約 0.9～1.0
 SHX_LIFT = 0.12                       # 字型沒有標準中文字身框時，SHX 中文字上移量（em）
-ALIAS_FAMILY = "litian-cjk"           # 別名的字族：不會被依字族找字型時選到
+ALIAS_FAMILY = "litian-cjk"           # 別名（檔名＝字族名）的開頭：依真實字族找字型時不會選到
 
 
 def _target(font: str, bigfont: str, family: str) -> tuple[float | None, bool]:
@@ -54,6 +59,8 @@ def _target(font: str, bigfont: str, family: str) -> tuple[float | None, bool]:
         return JHENGHEI, False
     if "kaiu" in name or "dfkai" in name or "標楷" in name:
         return KAIU, False
+    if "mingliu" in name or "細明" in name:
+        return MINGLIU, False
     return None, False
 
 
@@ -147,26 +154,52 @@ class _ScaledCJK(TTFontRenderer):
         return sum(self.get_glyph_width(c) * self._k(c) for c in s) * self.get_scaling_factor(cap_height) * width_factor
 
 
-def style_font(substitute: str, font: str, bigfont: str, family: str) -> str:
+def style_font(substitute: str, font: str, bigfont: str, family: str, alias: bool = False) -> str:
     """原字型要換成替代字型 substitute 時，樣式該用的字型名：替代字型的別名（中文字依原字型縮放、用繁體字面），
-    替代字型讀不到時就是 substitute 本身。"""
+    不必縮放時（alias＝False）與替代字型讀不到時就是 substitute 本身。alias：一定用別名（內嵌字型要依字族找到它）。"""
     sub = _sub(substitute)
     if sub is None:
         return substitute
     r, shx = _target(font, bigfont, family)
     k = r / sub.ratio if r else 1.0
-    if abs(k - 1.0) < 1e-4 and not shx and sub.face == 0:
+    if abs(k - 1.0) < 1e-4 and not shx and sub.face == 0 and not alias:
         return substitute
     shx_tag = "-shx" if shx else ""
     name = f"{ALIAS_FAMILY}-{Path(substitute).stem}-{sub.face}-{round(k * 10000)}{shx_tag}{sub.path.suffix}"
     key = name.lower()
-    # ezdxf 依樣式字型名找字型（字型管理器）、再依檔名找字形（TrueTypeFont 的字形快取）：兩處都登記別名
+    # ezdxf 依樣式字型名（內嵌字型則依字族名，開頭相同就算）找字型（字型管理器）、再依檔名找字形（TrueTypeFont 的
+    # 字形快取）：兩處都登記別名。字族名＝檔名：各別名都以副檔名結尾，彼此不會是開頭相同
     fm = fonts.font_manager
     if key not in fm._font_cache._cache:
-        fm._font_cache._cache[key] = CacheEntry(sub.path, FontFace(filename=name, family=ALIAS_FAMILY))
+        fm._font_cache._cache[key] = CacheEntry(sub.path, FontFace(filename=name, family=name))
     if key not in fonts.TrueTypeFont._glyph_caches:
         fonts.TrueTypeFont._glyph_caches[key] = _ScaledCJK(sub, k, shx)
     return name
+
+
+INLINE_FONT = re.compile(r"\\([fF])([^|;\\]*)[^;\\]*;")    # 多行文字內嵌的字型切換：\f新細明體|b0|i0;、\Ftxt.shx;
+
+
+def inline_fonts(text: str, substitute: str, current: str) -> str:
+    """多行文字內嵌的字型切換（\\f 是 TrueType 字族、\\F 是 SHX 檔）改用替代字型：每段的中文字寬依各自的原字型
+    （AutoCAD 照內嵌的字型畫，不是樣式的字型）。全部與樣式的字型 current 相同時直接拿掉（照樣式畫）；
+    否則每段改成別名的字族（不能只拿掉相同的那段：沒有大括號時，前一段的字型會延續下去）。"""
+    def target(m) -> tuple[str, str, str]:
+        name = m.group(2).strip()
+        return (name, "", "") if m.group(1) == "F" else ("", "", name)
+
+    codes = [m for m in INLINE_FONT.finditer(text) if m.group(2).strip()]
+    if any(m.group(2).lower().startswith(ALIAS_FAMILY) for m in codes):    # 已改寫過（prepare 跑第二次）
+        return text
+    if all(style_font(substitute, *target(m)) == current for m in codes):
+        return INLINE_FONT.sub("", text)
+
+    def repl(m) -> str:
+        if not m.group(2).strip():                       # 字族空白：ezdxf 不換字型
+            return ""
+        return f"\\f{style_font(substitute, *target(m), alias=True)}|b0|i0;"
+
+    return INLINE_FONT.sub(repl, text)
 
 
 # ---------- 中文換行 ----------
@@ -250,9 +283,10 @@ def _cells(r: ComplexMTextRenderer, items: list, split: bool) -> list:
     return cells
 
 
-def _layout(r: ComplexMTextRenderer, mtext, tol: float) -> tl.Layout:
+def _layout(r: ComplexMTextRenderer, mtext, tol: float, split: bool) -> tl.Layout:
     """複製 ezdxf 1.4.4 的 AbstractMTextRenderer.layout_engine（render/abstract_mtext_renderer.py），改了：
-    段落一行放不下才把字詞在中文可換行處切開（多數段落不切：格數少、畫得快）、段落屬性經 _paragraph。"""
+    split 時段落一行放不下才把字詞在中文可換行處切開（多數段落不切：格數少、畫得快）、段落屬性經 _paragraph。
+    split＝False、tol＝0 時只差縮排合理化。"""
     cap = valid_text_height(mtext.dxf.char_height)
     line_spacing = mtext.dxf.line_spacing_factor
     width = defined_width(mtext)
@@ -276,7 +310,8 @@ def _layout(r: ComplexMTextRenderer, mtext, tol: float) -> tl.Layout:
         cells = _cells(r, items, False)
         left = p.left * cap
         room = col_w - max(left, left + p.indent * cap) - p.right * cap
-        if any(kind == TokenType.TABULATOR for kind, _, _ in items) or sum(x.total_width for x in cells) > room:
+        if split and (any(kind == TokenType.TABULATOR for kind, _, _ in items)
+                      or sum(x.total_width for x in cells) > room):
             cells = _cells(r, items, True)
         layout.append_paragraphs([new_paragraph(cells, c, cap, line_spacing, width, default_stops)])
         items.clear()
@@ -294,15 +329,22 @@ def _layout(r: ComplexMTextRenderer, mtext, tol: float) -> tl.Layout:
     return layout
 
 
+INDENT = re.compile(r"\\p[^;]*?[ilr]-?[\d.]")         # 段落縮排碼（\pi、\pl、\pr 帶數值）
+
+
 def draw_mtext(frontend, mtext, properties) -> bool:
-    """含中文、有欄寬的多行文字用可在中文字間換行的排版畫出，回傳 True；其他（欄寬 0 本來就不換行、沒有中文、
-    立體文字、設定不畫文字、排版失敗）回傳 False，照 ezdxf 原本的畫法。"""
-    if (frontend.config.text_policy == TextPolicy.IGNORE or mtext.dxf.get("width", 0.0) < 1e-6
-            or is_spatial_text(Vec3(mtext.dxf.extrusion)) or not has_cjk(mtext.all_columns_raw_content())):
+    """用這裡的排版畫出、回傳 True 的多行文字：含中文、有欄寬的（可在中文字間換行、容許超出量），以及帶縮排碼的
+    （只做縮排合理化，其他與 ezdxf 相同）。其他（欄寬 0 本來就不換行、立體文字、設定不畫文字、排版失敗）回傳 False，
+    照 ezdxf 原本的畫法。"""
+    if frontend.config.text_policy == TextPolicy.IGNORE or is_spatial_text(Vec3(mtext.dxf.extrusion)):
+        return False
+    raw = mtext.all_columns_raw_content()
+    split = mtext.dxf.get("width", 0.0) >= 1e-6 and has_cjk(raw)
+    if not split and not INDENT.search(raw):
         return False
     r = ComplexMTextRenderer(frontend.ctx, frontend.pipeline, properties)
     try:
-        layout = _layout(r, mtext, TOLERANCE)
+        layout = _layout(r, mtext, TOLERANCE if split else 0.0, split)
         layout.place(align=tl.LayoutAlignment(mtext.dxf.attachment_point))
     except tl.LayoutError:
         return False
