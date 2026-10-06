@@ -156,6 +156,18 @@ button.locate svg { flex: none; display: block; }
 .floor details { margin-top: 12px; }
 table.req td { line-height: 1.65; padding: 9px 10px; }
 table.req td > div + div { margin-top: 4px; }
+/* 手機：應設設備判定改成一筆一塊（設備＋判定一行，理由、依據接在下面），不擠成一行兩三個字的四欄 */
+@media (max-width: 600px) {
+  table.req thead { display: none; }
+  table.req, table.req tbody, table.req tr { display: block; width: 100%; }
+  table.req tr { padding: 10px 0; border-bottom: 1px solid var(--border); }
+  table.req td { display: block; border: 0; padding: 2px 0; }
+  table.req td:first-child { display: inline; font-weight: 600; margin-right: 8px; }
+  table.req td:nth-child(2) { display: inline; }
+  table.req td:nth-child(2) > div { display: inline; margin-left: 6px; }
+  table.req td:nth-child(3) { margin-top: 4px; }
+  table.req td.law::before { content: "依據："; }
+}
 details > summary { cursor: pointer; color: var(--muted); font-size: .85rem; padding: 2px 0; }
 .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
 .grid2 label, .lbl { display: block; font-size: .85rem; color: var(--muted); }
