@@ -25,6 +25,7 @@ def client(monkeypatch, tmp_path):
     monkeypatch.setattr(api, "_one", lambda sql, *a: {"id": a[0], "name": "案", "created_by": "amy", "created_at": "t"}
                         if "FROM review_case" in sql else {"n": 0})
     monkeypatch.setattr(api.DS, "add_file", lambda c, cid, name, size, sha, path: state["files"].append((cid, name, size, sha, path)) or 7)
+    monkeypatch.setattr(api.shutil, "disk_usage", lambda p: NS(free=100 * api.GB))   # 不受本機磁碟影響
     c = TestClient(api.app)
     c.state = state
     return c
@@ -69,6 +70,118 @@ def test_upload_rejects_oversize_and_removes_partial(client, tmp_path, monkeypat
     r = client.post("/api/cases/4/files", files=[("files", ("big.dwg", b"0123456789AB", "application/octet-stream"))])
     assert r.status_code == 413 and "超過單檔上限" in r.json()["detail"]
     assert not list((tmp_path / "4").iterdir())
+
+
+def _raw_upload(headers: dict, path: str = "/api/cases/3/files", chunks: tuple = (b"",)) -> tuple[int, dict, int]:
+    """直接呼叫 ASGI 程式上傳（預設到案件 3）：回（狀態碼, 內容, 讀了幾次請求內容）。讀 0 次＝拒收時完全沒碰上傳內容（沒有存到暫存區）。
+    headers 的值給 None＝不帶這個標頭；chunks＝請求內容分幾段送。"""
+    import asyncio
+    import json
+    reads, sent, todo = [], [], list(chunks)
+
+    async def receive():
+        reads.append(1)
+        body = todo.pop(0) if todo else b""
+        return {"type": "http.request", "body": body, "more_body": bool(todo)}
+
+    async def send(m):
+        sent.append(m)
+
+    hs = {k: v for k, v in {"content-type": "multipart/form-data; boundary=x", "content-length": "1000", **headers}.items()
+          if v is not None}
+    scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST", "scheme": "http",
+             "path": path, "raw_path": path.encode(), "root_path": "", "query_string": b"",
+             "headers": [(k.encode(), v.encode()) for k, v in hs.items()], "client": ("127.0.0.1", 1), "server": ("testserver", 80)}
+    asyncio.run(api.app(scope, receive, send))
+    status = next(m["status"] for m in sent if m["type"] == "http.response.start")
+    body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+    return status, json.loads(body), len(reads)
+
+
+def test_upload_guard_rejects_before_reading_body(client, tmp_path, monkeypatch):
+    good = {"cookie": "__Host-fr_session=good-token"}
+    # 沒登入（沒 Cookie、Cookie 無效）：401，內容一個位元組都不讀
+    assert _raw_upload({}) == (401, {"detail": "請先登入"}, 0)
+    assert _raw_upload({"cookie": "__Host-fr_session=forged"}) == (401, {"detail": "請先登入"}, 0)
+    # 整個請求超過上限：看 Content-Length 就拒收
+    status, body, reads = _raw_upload({**good, "content-length": str(api.UPLOAD_REQUEST_MAX + 1)})
+    assert (status, reads) == (413, 0) and "請分批上傳" in body["detail"]
+    # 磁碟快滿：507 與白話訊息
+    monkeypatch.setattr(api.shutil, "disk_usage", lambda p: NS(free=2 * api.GB))
+    status, body, reads = _raw_upload(good)
+    assert (status, reads) == (507, 0) and body["detail"].startswith("伺服器磁碟空間不足（剩 2.0 GB）") and "通知管理者" in body["detail"]
+    assert not (tmp_path / "3").exists()
+
+
+def test_multipart_only_accepted_by_upload_endpoint(client):
+    # 其他端點（例：不必登入、有表單欄位的 POST /api/auth/line/start）：附檔案的請求在讀內容前就拒收，不會先存進暫存區
+    for path in ["/api/auth/line/start", "/api/auth/invite", "/api/cases"]:
+        assert _raw_upload({}, path) == (415, {"detail": "這個網址不接受上傳檔案"}, 0), path
+
+
+def test_upload_guard_counts_request_size_and_temp_dir(client, monkeypatch):
+    import tempfile
+    from pathlib import Path
+    good = {"cookie": "__Host-fr_session=good-token"}
+    # 剩 3.5 GB：小檔照收（讀了內容，這裡內容是空的 → 400／422）。上傳先整份存進暫存區、再複製到案件資料夾，
+    # 空間照兩倍扣：200 MB（剩 3.1 GB）照收，300 MB（剩 2.9 GB）拒收
+    monkeypatch.setattr(api.shutil, "disk_usage", lambda p: NS(free=3.5 * api.GB))
+    status, _, reads = _raw_upload(good)
+    assert status in (400, 422) and reads > 0
+    status, _, reads = _raw_upload({**good, "content-length": str(200 * 1024 * 1024)})
+    assert status in (400, 422) and reads > 0
+    assert _raw_upload({**good, "content-length": str(300 * 1024 * 1024)})[::2] == (507, 0)
+    # 上傳先存在暫存區（tempfile 的預設資料夾），那邊快滿也要擋
+    tmp = Path(tempfile.gettempdir())
+    monkeypatch.setattr(api.shutil, "disk_usage", lambda p: NS(free=(1 if Path(p) == tmp else 100) * api.GB))
+    assert _raw_upload(good)[0] == 507
+    # 查不到空間（資料夾不存在等）不擋上傳
+    def gone(p):
+        raise FileNotFoundError(p)
+    monkeypatch.setattr(api.shutil, "disk_usage", gone)
+    assert api._disk_free_gb() is None
+    client.cookies.set("__Host-fr_session", "good-token")
+    r = client.post("/api/cases/3/files", files=[("files", ("a.dwg", b"AC1027", "application/octet-stream"))])
+    assert r.status_code == 200 and r.json()["files"][0]["size"] == 6
+
+
+def test_upload_without_content_length_is_capped(client, monkeypatch):
+    good = {"cookie": "__Host-fr_session=good-token", "content-length": None}     # chunked：沒帶大小
+    # 空間照上限（1 GB）的兩倍算：剩 4 GB 就拒收，內容不讀
+    monkeypatch.setattr(api.shutil, "disk_usage", lambda p: NS(free=4 * api.GB))
+    assert _raw_upload(good)[::2] == (507, 0)
+    # 空間夠：邊讀邊數，超過上限就停，後面的內容不再讀進暫存區
+    monkeypatch.setattr(api.shutil, "disk_usage", lambda p: NS(free=100 * api.GB))
+    monkeypatch.setattr(api, "UPLOAD_REQUEST_MAX", 1000)
+    head = b'--x\r\nContent-Disposition: form-data; name="files"; filename="a.dwg"\r\n\r\n'
+    status, body, reads = _raw_upload(good, chunks=(head + b"0" * 600, b"0" * 600, b"0" * 600, b"0" * 600))
+    assert (status, reads) == (413, 2) and "請分批上傳" in body["detail"]
+
+
+def test_upload_without_files_is_rejected_plainly(client):
+    client.cookies.set("__Host-fr_session", "good-token")
+    r = client.post("/api/cases/3/files", data={"x": "1"}, files=[("other", ("a.dwg", b"x", "application/octet-stream"))])
+    assert r.status_code == 422 and r.json()["detail"] == "沒有收到檔案，請重新選擇檔案上傳"
+
+
+def test_me_reports_low_disk_to_admin_only(client, monkeypatch):
+    monkeypatch.setattr(api.AU, "session_user", lambda c, t: {**USER, "role": "admin"} if t == "admin-token" else
+                        USER if t == "good-token" else None)
+    client.cookies.set("__Host-fr_session", "good-token")
+    me = client.get("/api/auth/me").json()
+    assert "disk_free_gb" not in me and "disk_low" not in me                 # 審圖人員看不到主機狀態
+    client.cookies.set("__Host-fr_session", "admin-token")
+    assert client.get("/api/auth/me").json() == {**USER, "role": "admin", "disk_free_gb": 100.0, "disk_low": False}
+    monkeypatch.setattr(api.shutil, "disk_usage", lambda p: NS(free=7.46 * api.GB))
+    me = client.get("/api/auth/me").json()
+    assert me["disk_free_gb"] == 7.5 and me["disk_low"] is True
+    # 工作台：管理者看到頂端提醒；上傳失敗顯示後端訊息，連線中斷改寫成白話
+    html = api.WEB_WORKBENCH.read_text(encoding="utf-8")
+    assert '<p id="disk-warn" class="note err hidden" role="alert"></p>' in html
+    show = html[html.index("function showApp("):html.index("async function showInvite(")]
+    assert "user.disk_low" in show and "user.disk_free_gb" in show and "部署說明的「磁碟空間」" in show
+    up = html[html.index("async function upload("):html.index('$("#pick")')]
+    assert "err instanceof TypeError" in up and ": err.message" in up
 
 
 def test_sheet_texts_sorted_top_to_bottom(client, monkeypatch):
