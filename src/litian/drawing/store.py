@@ -262,11 +262,13 @@ def save_result(conn, file_id: int, ir: dict, stats: dict, status: str = "done")
 
 
 def mark(conn, file_id: int, status: str, stats: dict | None = None) -> None:
+    # 檢核中不清 review_only：只重跑檢核途中被重新部署打斷（requeue_job）時仍只重跑檢核，不變成整個重新處理（原圖作廢重畫）
+    ro = "" if status == "reviewing" else ", review_only = false"
     if stats is None:
-        conn.execute("UPDATE case_file SET status = %s, error = NULL, review_only = false, updated_at = now() "
+        conn.execute(f"UPDATE case_file SET status = %s, error = NULL{ro}, updated_at = now() "
                      "WHERE id = %s", (status, file_id))
         return
-    conn.execute("UPDATE case_file SET status = %s, error = NULL, review_only = false, stats = %s::jsonb, "
+    conn.execute(f"UPDATE case_file SET status = %s, error = NULL{ro}, stats = %s::jsonb, "
                  "updated_at = now() WHERE id = %s", (status, json.dumps(stats, ensure_ascii=False), file_id))
 
 
@@ -331,20 +333,23 @@ def save_seconds(conn, file_id: int, seconds: int) -> None:
 # 排隊位置（工作台顯示「前面還有幾個」，只給數字、不透露別的案件）：主佇列所有案件一起排、一次處理一個、id 小的先
 # （CLAIM_SQL）→ 排在前面的＋正在處理的；原圖一次畫一個、id 大的先（CAD_CLAIM_SQL）→ 排在前面的＋正在畫的。
 # 用在 FROM case_file f 的查詢裡；只有排隊中的才算，走 case_file_queue（status, id）與 case_file_cad 索引。
+# 排隊中的原圖只算認領得到的（同 CAD_CLAIM_SQL：檔案完成、檢核成功；只重跑檢核失敗的留在 pending 卻不會被畫）。
 AHEAD_SQL = ("CASE WHEN f.status = 'queued' THEN (SELECT count(*) FROM case_file q WHERE q.status = 'queued' AND q.id < f.id)"
              " + (SELECT count(*) FROM case_file q WHERE q.status IN ('processing', 'reviewing')) END")
 CAD_AHEAD_SQL = ("CASE WHEN f.cad_state = 'pending' THEN (SELECT count(*) FROM case_file q WHERE q.cad_state IN ('pending', 'rendering')"
-                 " AND (q.id > f.id OR q.cad_state = 'rendering')) END")
+                 " AND (q.cad_state = 'rendering' OR q.id > f.id AND q.status = 'done'"
+                 " AND EXISTS (SELECT 1 FROM file_review r WHERE r.file_id = q.id AND r.status = 'done'))) END")
 RECENT_N = 20
 
 
 def recent_seconds(conn) -> dict:
     """估等候時間用：最近 RECENT_N 個整個處理完的檔（stats.seconds）、最近 RECENT_N 張畫好的原圖（stats.cad.seconds）
-    花的秒數中位數（file、cad；沒有紀錄為 None）。從 id 大的往回找（索引倒著掃，湊滿就停，不掃整張表）。"""
+    花的平均秒數（file、cad；沒有紀錄為 None）。估「前面 N 個加起來要多久」用平均（大小圖混在一起時中位數會估太短）。
+    從 id 大的往回找（索引倒著掃，湊滿就停，不掃整張表）。"""
     return conn.execute(
-        "SELECT (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY s) FROM (SELECT (stats->>'seconds')::float AS s "
+        "SELECT (SELECT avg(s) FROM (SELECT (stats->>'seconds')::float AS s "
         "  FROM case_file WHERE status = 'done' AND stats ? 'seconds' ORDER BY id DESC LIMIT %s) a) AS file, "
-        "(SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY s) FROM (SELECT (stats->'cad'->>'seconds')::float AS s "
+        "(SELECT avg(s) FROM (SELECT (stats->'cad'->>'seconds')::float AS s "
         "  FROM case_file WHERE status = 'done' AND cad_state = 'done' AND stats->'cad' ? 'seconds' "
         "  ORDER BY id DESC LIMIT %s) b) AS cad", (RECENT_N, RECENT_N)).fetchone()
 

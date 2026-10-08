@@ -412,6 +412,29 @@ def test_unreviewed_list_keeps_superseded_files_muted():
     assert "!f.xref_of && !f.superseded && !f.xref_warn" in js and "f.xref_of || f.superseded" in js and "f.xref_warn" in js
 
 
+def test_unreviewed_list_warns_when_xref_list_failed(tmp_path):
+    # 讀不出主圖引用的外部參考：檢核照常完成，但缺失清單上方要有紅字（不只檔案表格裡的小字）
+    import json
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("沒有 node，略過前端純函式測試")
+    html = _html()
+    funcs = html[html.index("function unreviewedHtml("):html.index("function renderUnreviewed(")] + \
+        html[html.index("function esc("):html.index("function lawHtml(")]
+    files = [{"name": "M<1>.dwg", "status": "done", "review": "done", "stats": {"xref": {"list_error": "被系統中斷（-9）"}}},
+             {"name": "Q.dwg", "status": "queued", "review": "done", "stats": {"xref": {"list_error": "逾時"}}},   # 重新處理中：不寫
+             {"name": "N.dwg", "status": "done", "review": "done", "stats": {"xref": {"bound": []}}}]
+    js = tmp_path / "t.js"
+    js.write_text(funcs + "\nprocess.stdout.write(unreviewedHtml(" + json.dumps(files, ensure_ascii=False) + "));\n",
+                  encoding="utf-8")
+    r = subprocess.run([node, str(js)], capture_output=True, timeout=60)
+    assert r.returncode == 0, r.stderr.decode("utf-8", "replace")
+    assert r.stdout.decode("utf-8") == '<p class="note err small">M&lt;1&gt;.dwg：建築底圖（外部參考）讀取失敗，' \
+        "這次檢核沒有併入底圖，結果可能不準；請通知系統管理者</p>"
+
+
 def test_xref_host_lists_every_main_file():
     files = [_file(1, "A.dwg", stats={"xref": {"bound": ["Area_1F"], "bound_files": ["003_Area_1F.dwg"]}}),
              _file(2, "B.dwg", stats={"xref": {"bound": ["Area_1F"], "bound_files": ["003_area_1f.DWG"]}}),

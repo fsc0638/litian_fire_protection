@@ -990,20 +990,21 @@ def _about(seconds: float) -> str:
     return "不到 1 分鐘" if m < 1 else f"約 {m} 分鐘" if m < 60 else f"約 {round(m / 60, 1):g} 小時"
 
 
-# 排隊等多久＝前面的個數 × 最近 DS.RECENT_N 次花的時間中位數（DS.recent_seconds）；沒有紀錄只寫個數。只給數字，不透露別的案件。
-def _queue_note(ahead: int, median: float | None) -> str:
+# 排隊等多久＝前面的個數 × 最近 DS.RECENT_N 次花的平均時間（DS.recent_seconds）；沒有紀錄只寫個數。只給數字，不透露別的案件。
+def _queue_note(ahead: int, avg: float | None) -> str:
     if not ahead:
         return "下一個處理"
     return f"前面還有 {ahead} 個檔（所有案件一起排隊）" + \
-        (f"，{_about(ahead * median)}後開始處理（依最近的處理時間估計）" if median else "")
+        (f"，{_about(ahead * avg)}後開始處理（依最近的處理時間估計）" if avg else "")
 
 
-def _cad_wait(ahead: int, median: float | None) -> str | None:
-    """原圖排隊中的說明（工作台接在「原圖排隊中：」後面）；前面沒有別的原圖時回 None（照一般說明）。"""
+def _cad_wait(ahead: int, avg: float | None) -> str | None:
+    """原圖排隊中的說明（工作台接在「原圖排隊中：」後面）；前面沒有別的原圖時回 None（照一般說明）。
+    原圖是新的先畫（CAD_CLAIM_SQL）：之後完成的檔會排到前面、個數可能變多，要寫明。"""
     if not ahead:
         return None
-    return f"前面還有 {ahead} 個檔的原圖要產生" + \
-        (f"，{_about(ahead * median)}後開始（依最近的產生時間估計；有檔案在處理時會再晚一些）" if median
+    return f"前面還有 {ahead} 個檔的原圖要產生（新上傳的先畫，個數可能變多）" + \
+        (f"，{_about(ahead * avg)}後開始（依最近的產生時間估計；有檔案在處理時會再晚一些）" if avg
          else "；有檔案在處理時會再晚一些")
 
 
@@ -1014,12 +1015,12 @@ def cases_detail(case_id: int, user: dict = Depends(current_user)):
         files = DS.case_status(c, case_id)
         info = {r["id"]: r for r in DS.file_reviews(c, case_id)}
         waiting = [f for f in files if f["status"] == "queued" and f.get("ahead") is not None]
-        median = DS.recent_seconds(c)["file"] if any(f["ahead"] for f in waiting) else None   # 有在等才查（工作台每 3 秒重查）
+        avg = DS.recent_seconds(c)["file"] if any(f["ahead"] for f in waiting) else None   # 有在等才查（工作台每 3 秒重查）
     sheets = _all("SELECT s.id, s.file_id, s.idx, s.number, s.title, s.scale, s.unit FROM case_sheet s "
                   "JOIN case_file f ON f.id = s.file_id WHERE f.case_id = %s ORDER BY s.number NULLS LAST, s.id", case_id)
     files = _file_notes(files, info)
     for f in waiting:
-        f["note"] = _queue_note(f["ahead"], median)
+        f["note"] = _queue_note(f["ahead"], avg)
     return {"case": case, "files": files, "sheets": sheets}
 
 
@@ -1137,14 +1138,14 @@ def _review_bundle(case_id: int) -> dict:
 def cases_reviews(case_id: int, user: dict = Depends(current_user)):
     _case_or_404(case_id)
     b = _review_bundle(case_id)
-    median = None
+    avg = None
     if any(r.get("cad_ahead") for r in b["reviews"]):           # 有原圖在等才查（工作台重查時每次都會叫）
         with pool.connection() as c:
-            median = DS.recent_seconds(c)["cad"]
+            avg = DS.recent_seconds(c)["cad"]
     for r in b["reviews"]:
         r.pop("svg_dir", None)
         r.pop("cad_state", None)
-        if wait := _cad_wait(r.pop("cad_ahead", None), median):
+        if wait := _cad_wait(r.pop("cad_ahead", None), avg):
             for fl in (r["result"] or {}).get("floors", []):
                 if fl.get("cad") == "pending":
                     fl["cad_wait"] = wait

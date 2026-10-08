@@ -794,19 +794,18 @@ def test_bind_xrefs_converts_newest_and_falls_back(tmp_path, monkeypatch):
 # ---------- 讀不出主圖的外部參考：不能悄悄當成沒有底圖 ----------
 
 def test_subprocess_failures_marked_transient(monkeypatch):
-    # 被系統砍掉（記憶體不足，stderr 多半是空的或只有警告）、MemoryError：晚點再試可能就好；其他錯誤重試結果相同
-    import subprocess
+    # 只有被系統砍掉（容器記憶體不足，stderr 多半是空的或只有警告）算暫時性：重試可能就好。
+    # MemoryError（子行程自己的記憶體上限）與其他錯誤：同一個檔重試結果一樣
     from types import SimpleNamespace
     from litian.drawing import worker as W
     for rc, err, msg, transient in [(-9, "警告：字型\n", "外部參考讀取失敗：被系統中斷（-9）", True),
-                                    (1, "Traceback\nMemoryError\n", "外部參考讀取失敗：MemoryError", True),
+                                    (1, "Traceback\nMemoryError\n", "外部參考讀取失敗：MemoryError", False),
                                     (1, "Traceback\nezdxf.DXFStructureError: bad\n", "外部參考讀取失敗：ezdxf.DXFStructureError: bad", False),
                                     (2, "", "外部參考讀取失敗：未知錯誤", False)]:
         monkeypatch.setattr(W.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=rc, stderr=err, stdout=""))
         with pytest.raises(RuntimeError) as e:
             W._run(["litian.drawing.xref", "list", "x.dxf"], 5, "外部參考讀取")
-        assert str(e.value) == msg and W._transient(e.value) is transient
-    assert W._transient(subprocess.TimeoutExpired("python", 5)) and not W._transient(ValueError("x"))
+        assert str(e.value) == msg and e.value.transient is transient
 
 
 def _list_fails(monkeypatch, W, exc):
@@ -817,19 +816,32 @@ def _list_fails(monkeypatch, W, exc):
 
 
 @pytest.mark.parametrize("attempts,retry", [(1, True), (2, True), (3, False)])
-def test_xref_list_transient_failure_retries_then_records(tmp_path, monkeypatch, attempts, retry):
-    import subprocess
+def test_xref_list_killed_retries_then_records(tmp_path, monkeypatch, attempts, retry):
     from litian.drawing import worker as W
     job = {"id": 7, "path": str(tmp_path / "001_main.dwg"), "attempts": attempts}
     src = tmp_path / "001_main.converted.dxf"
-    for exc, why in [(subprocess.TimeoutExpired("python", 600), "逾時"), (RuntimeError("外部參考讀取失敗：MemoryError"), "MemoryError")]:
-        exc.transient = isinstance(exc, RuntimeError)
+    err = RuntimeError("外部參考讀取失敗：被系統中斷（-9）")
+    err.transient = True
+    _list_fails(monkeypatch, W, err)
+    if retry:                                                          # 還有次數：退回排隊重試
+        with pytest.raises(W.RetryJob, match="被系統中斷"):
+            W.bind_xrefs(job, src, tmp_path)
+    else:                                                              # 次數用完：照常處理，但記下沒有併入底圖
+        assert W.bind_xrefs(job, src, tmp_path) == (src, {"list_error": "被系統中斷（-9）"})
+
+
+def test_xref_list_memory_error_or_timeout_does_not_retry(tmp_path, monkeypatch):
+    # 讀檔超過子行程記憶體上限、逾時：同一份圖重試結果一樣（抽取用同樣的上限、時限讀同一份圖），
+    # 第一次就記下、往下處理，不讓唯一的處理佇列空轉好幾輪
+    import subprocess
+    from litian.drawing import worker as W
+    job = {"id": 7, "path": str(tmp_path / "001_main.dwg"), "attempts": 1}
+    src = tmp_path / "001_main.converted.dxf"
+    mem = RuntimeError("外部參考讀取失敗：MemoryError")
+    mem.transient = False                                              # 同 _run：只有被系統砍掉才標 True
+    for exc, why in [(subprocess.TimeoutExpired("python", 600), "逾時"), (mem, "MemoryError")]:
         _list_fails(monkeypatch, W, exc)
-        if retry:                                                      # 還有次數：退回排隊晚點再試
-            with pytest.raises(W.RetryLater, match=why):
-                W.bind_xrefs(job, src, tmp_path)
-        else:                                                          # 次數用完：照常處理，但記下沒有併入底圖
-            assert W.bind_xrefs(job, src, tmp_path) == (src, {"list_error": why})
+        assert W.bind_xrefs(job, src, tmp_path) == (src, {"list_error": why})
 
 
 def test_xref_list_unreadable_records_error_without_retry(tmp_path, monkeypatch):
@@ -860,7 +872,7 @@ def test_xref_list_failure_is_kept_in_stats_or_retried(tmp_path, monkeypatch):
     _list_fails(monkeypatch, W, err)
     saved.clear()
     assert W.run_once(_Conn(), tmp_path) is True
-    assert saved == [] and failures == [("RetryLater: 外部參考讀取失敗（被系統中斷（-9）），稍後重試", True)]
+    assert saved == [] and failures == [("RetryJob: 外部參考讀取失敗（被系統中斷（-9）），退回排隊重試", True)]
 
 
 # ---------- 記憶體不夠時先砍畫圖子行程 ----------

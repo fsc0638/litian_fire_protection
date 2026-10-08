@@ -198,17 +198,19 @@ def test_review_bundle_cad_done_needs_meta(client, monkeypatch):
 
 
 def test_review_bundle_cad_queue_position(client, monkeypatch):
-    # 原圖排隊中：前面還有幾個檔的原圖（只給數字）＋照最近畫圖的時間估多久；前面沒有別的就照一般說明；沒人在等不查
+    # 原圖排隊中：前面還有幾個檔的原圖（只給數字；新的先畫，寫明個數可能變多）＋照最近畫圖的平均時間估多久；
+    # 前面沒有別的就照一般說明；沒人在等不查
     rev = make_review_dir(client.cases, status={"state": "pending", "sheets": {}, "error": None})
     med, calls = {"file": 1.0, "cad": 300.0}, []
     monkeypatch.setattr(api.DS, "recent_seconds", lambda c: calls.append(1) or med)
     rows = lambda: [{**_row(1, str(rev), [NAME, "2F-28"], "pending"), "cad_ahead": 2},
                     {**_row(2, str(rev), [NAME], "pending"), "cad_ahead": 0}, {**_row(3, str(rev), [NAME], "done"), "cad_ahead": None}]
-    wait = "前面還有 2 個檔的原圖要產生，約 10 分鐘後開始（依最近的產生時間估計；有檔案在處理時會再晚一些）"
+    wait = "前面還有 2 個檔的原圖要產生（新上傳的先畫，個數可能變多），約 10 分鐘後開始（依最近的產生時間估計；有檔案在處理時會再晚一些）"
     assert _bundle(client, monkeypatch, rows(), "cad_wait") == {(1, NAME): wait, (1, "2F-28"): wait, (2, NAME): None, (3, NAME): None}
     assert calls == [1]
     med["cad"] = None
-    assert _bundle(client, monkeypatch, rows(), "cad_wait")[(1, NAME)] == "前面還有 2 個檔的原圖要產生；有檔案在處理時會再晚一些"
+    assert _bundle(client, monkeypatch, rows(), "cad_wait")[(1, NAME)] == \
+        "前面還有 2 個檔的原圖要產生（新上傳的先畫，個數可能變多）；有檔案在處理時會再晚一些"
     calls.clear()
     assert set(_bundle(client, monkeypatch, [{**_row(2, str(rev), [NAME], "pending"), "cad_ahead": 0}], "cad_wait").values()) == {None}
     assert calls == []
