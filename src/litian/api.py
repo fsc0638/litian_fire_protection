@@ -961,8 +961,11 @@ def _file_notes(files: list[dict], info: dict[int, dict]) -> list[dict]:
         if bad:                                            # 主圖綁定時試過、讀不了：要使用者處理，不淡化
             f["xref_warn"] = True
             why = bad[0][len(XR.strip_note(bad[0])):].strip("（）") or "原因不明"
-            f["note"] = f"這份讀不了（{why}）" + (f"，{names}改用較早上傳的同名檔" if mains else "，主圖沒有用到") + \
-                "；請確認檔案後重新上傳"
+            used = f"，{names}改用較早上傳的同名檔" if mains else "，主圖沒有用到"
+            if why == "MemoryError":                       # 圖太大、系統記憶體不夠：檔案本身沒壞，重新上傳也一樣
+                f["note"] = f"這份讀取時記憶體不足（圖太大，不是檔案壞掉）{used}；不必重新上傳，請通知系統管理者"
+            else:
+                f["note"] = f"這份讀不了（{why}）{used}；請確認檔案後重新上傳"
             continue
         if not mains:
             continue
@@ -974,7 +977,35 @@ def _file_notes(files: list[dict], info: dict[int, dict]) -> list[dict]:
             f["note"] = f"較新上傳的建築底圖：{names}重新處理中，完成後改用這份"
         else:
             f["note"] = f"較新上傳的建築底圖：{names}重新處理後改用這份"
+    for f in files:                                        # 讀不出主圖引用的外部參考（worker.bind_xrefs）：不能悄悄當成沒有底圖
+        err = ((f.get("stats") or {}).get("xref") or {}).get("list_error")
+        if f["status"] == "done" and err:
+            f["note"] = (f["note"] + "；" if f["note"] else "") + \
+                f"建築底圖（外部參考）讀取失敗（{err}），這次檢核沒有併入底圖，結果可能不準；請通知系統管理者"
     return files
+
+
+def _about(seconds: float) -> str:
+    m = round(seconds / 60)
+    return "不到 1 分鐘" if m < 1 else f"約 {m} 分鐘" if m < 60 else f"約 {round(m / 60, 1):g} 小時"
+
+
+# 排隊等多久＝前面的個數 × 最近 DS.RECENT_N 次花的平均時間（DS.recent_seconds）；沒有紀錄只寫個數。只給數字，不透露別的案件。
+def _queue_note(ahead: int, avg: float | None) -> str:
+    if not ahead:
+        return "下一個處理"
+    return f"前面還有 {ahead} 個檔（所有案件一起排隊）" + \
+        (f"，{_about(ahead * avg)}後開始處理（依最近的處理時間估計）" if avg else "")
+
+
+def _cad_wait(ahead: int, avg: float | None) -> str | None:
+    """原圖排隊中的說明（工作台接在「原圖排隊中：」後面）；前面沒有別的原圖時回 None（照一般說明）。
+    原圖是新的先畫（CAD_CLAIM_SQL）：之後完成的檔會排到前面、個數可能變多，要寫明。"""
+    if not ahead:
+        return None
+    return f"前面還有 {ahead} 個檔的原圖要產生（新上傳的先畫，個數可能變多）" + \
+        (f"，{_about(ahead * avg)}後開始（依最近的產生時間估計；有檔案在處理時會再晚一些）" if avg
+         else "；有檔案在處理時會再晚一些")
 
 
 @app.get("/api/cases/{case_id}")
@@ -983,9 +1014,14 @@ def cases_detail(case_id: int, user: dict = Depends(current_user)):
     with pool.connection() as c:
         files = DS.case_status(c, case_id)
         info = {r["id"]: r for r in DS.file_reviews(c, case_id)}
+        waiting = [f for f in files if f["status"] == "queued" and f.get("ahead") is not None]
+        avg = DS.recent_seconds(c)["file"] if any(f["ahead"] for f in waiting) else None   # 有在等才查（工作台每 3 秒重查）
     sheets = _all("SELECT s.id, s.file_id, s.idx, s.number, s.title, s.scale, s.unit FROM case_sheet s "
                   "JOIN case_file f ON f.id = s.file_id WHERE f.case_id = %s ORDER BY s.number NULLS LAST, s.id", case_id)
-    return {"case": case, "files": _file_notes(files, info), "sheets": sheets}
+    files = _file_notes(files, info)
+    for f in waiting:
+        f["note"] = _queue_note(f["ahead"], avg)
+    return {"case": case, "files": files, "sheets": sheets}
 
 
 @app.get("/api/cases/{case_id}/sheets/{sheet_id}/texts")
@@ -1076,7 +1112,8 @@ def _cited_laws(ids) -> dict:
 
 def _review_bundle(case_id: int) -> dict:
     """檢核結果＋引用條文＋審核結果＋檢核條件（工作台與報告共用）。"""
-    rows = _all("SELECT r.file_id, f.name, r.status, r.error, r.result, r.svg_dir, r.created_at, f.cad_state FROM file_review r "
+    rows = _all("SELECT r.file_id, f.name, r.status, r.error, r.result, r.svg_dir, r.created_at, f.cad_state, "
+                f"{DS.CAD_AHEAD_SQL} AS cad_ahead FROM file_review r "
                 "JOIN case_file f ON f.id = r.file_id WHERE f.case_id = %s ORDER BY f.name, f.id", case_id)
     ids = set()
     for r in rows:
@@ -1101,9 +1138,17 @@ def _review_bundle(case_id: int) -> dict:
 def cases_reviews(case_id: int, user: dict = Depends(current_user)):
     _case_or_404(case_id)
     b = _review_bundle(case_id)
+    avg = None
+    if any(r.get("cad_ahead") for r in b["reviews"]):           # 有原圖在等才查（工作台重查時每次都會叫）
+        with pool.connection() as c:
+            avg = DS.recent_seconds(c)["cad"]
     for r in b["reviews"]:
         r.pop("svg_dir", None)
         r.pop("cad_state", None)
+        if wait := _cad_wait(r.pop("cad_ahead", None), avg):
+            for fl in (r["result"] or {}).get("floors", []):
+                if fl.get("cad") == "pending":
+                    fl["cad_wait"] = wait
     return b
 
 

@@ -367,10 +367,72 @@ def test_same_name_main_and_unreadable_base_notes():
     assert out[3]["note"] == "內容與「M.dwg」已併入的同名檔相同，照用原本那份"
 
 
+def test_xref_list_error_and_memory_error_notes():
+    # 讀不出主圖引用的外部參考：完成了也要講清楚這次沒有併入底圖；底圖記憶體不足：檔案沒壞，不叫使用者重新上傳
+    files = [_file(1, "M.dwg", stats={"sheets": 2, "xref": {"list_error": "MemoryError"}}),
+             _file(2, "N.dwg", stats={"xref": {"list_error": "逾時"}}),
+             _file(3, "P.dwg", stats={"xref": {"bound": [], "bound_files": [], "missing": ["B.dwg"],
+                                                "failed": ["004_B.dwg（MemoryError）"]}}),
+             _file(4, "B.dwg"),
+             _file(5, "Q.dwg", status="queued", stats={"xref": {"list_error": "逾時"}})]   # 重新處理中：舊的說明不寫
+    info = {1: _summary(1, "001_M.dwg", "done", 2, 5), 2: _summary(2, "002_N.dwg"), 3: _summary(3, "003_P.dwg", "done", 1, 0),
+            4: _summary(4, "004_B.dwg"), 5: _summary(5, "005_Q.dwg")}
+    out = {f["id"]: f for f in api._file_notes(files, info)}
+    assert out[1]["note"] == "已檢核 2 層，缺失 5 條；建築底圖（外部參考）讀取失敗（MemoryError），這次檢核沒有併入底圖，結果可能不準；請通知系統管理者"
+    assert out[2]["note"] == api.NO_FLOOR_NOTE + "；建築底圖（外部參考）讀取失敗（逾時），這次檢核沒有併入底圖，結果可能不準；請通知系統管理者"
+    assert out[4]["xref_warn"] and out[4]["note"] == "這份讀取時記憶體不足（圖太大，不是檔案壞掉），主圖沒有用到；不必重新上傳，請通知系統管理者"
+    assert out[3]["note"] == "已檢核 1 層，缺失 0 條" and out[5]["note"] is None
+
+
+def test_queued_files_show_position_and_estimate(client, monkeypatch):
+    # 排隊中：前面還有幾個（所有案件一起排，只給數字）＋照最近的處理時間估要等多久；沒有紀錄只寫個數；沒人在等不查
+    client.cookies.set("__Host-fr_session", "good-token")
+    files = [{**_file(1, "A.dwg", status="queued"), "ahead": 3}, {**_file(2, "B.dwg", status="queued"), "ahead": 0},
+             {**_file(3, "C.dwg", status="processing"), "ahead": None}, {**_file(4, "D.dwg", stats={"sheets": 1}), "ahead": None}]
+    med, calls = {"file": 240.0, "cad": 999.0}, []
+    monkeypatch.setattr(api.DS, "case_status", lambda c, cid: [dict(f) for f in files])
+    monkeypatch.setattr(api.DS, "file_reviews", lambda c, cid: [_summary(4, "004_D.dwg")])
+    monkeypatch.setattr(api.DS, "recent_seconds", lambda c: calls.append(1) or med)
+    monkeypatch.setattr(api, "_all", lambda sql, *a: [])
+    notes = lambda: {f["id"]: f["note"] for f in client.get("/api/cases/3").json()["files"]}
+    got = notes()
+    assert got[1] == "前面還有 3 個檔（所有案件一起排隊），約 12 分鐘後開始處理（依最近的處理時間估計）"
+    assert got[2] == "下一個處理" and got[3] is None and got[4] == api.NO_FLOOR_NOTE and calls == [1]
+    med["file"] = None
+    assert notes()[1] == "前面還有 3 個檔（所有案件一起排隊）"
+    files[0]["ahead"] = 0
+    calls.clear()
+    assert notes()[1] == "下一個處理" and calls == []
+    assert [api._about(s) for s in (20, 89, 3540, 5400, 7200)] == ["不到 1 分鐘", "約 1 分鐘", "約 59 分鐘", "約 1.5 小時", "約 2 小時"]
+
+
 def test_unreviewed_list_keeps_superseded_files_muted():
     html = _html()
     js = html[html.index("function unreviewedHtml("):html.index("function renderUnreviewed(")]
     assert "!f.xref_of && !f.superseded && !f.xref_warn" in js and "f.xref_of || f.superseded" in js and "f.xref_warn" in js
+
+
+def test_unreviewed_list_warns_when_xref_list_failed(tmp_path):
+    # 讀不出主圖引用的外部參考：檢核照常完成，但缺失清單上方要有紅字（不只檔案表格裡的小字）
+    import json
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("沒有 node，略過前端純函式測試")
+    html = _html()
+    funcs = html[html.index("function unreviewedHtml("):html.index("function renderUnreviewed(")] + \
+        html[html.index("function esc("):html.index("function lawHtml(")]
+    files = [{"name": "M<1>.dwg", "status": "done", "review": "done", "stats": {"xref": {"list_error": "被系統中斷（-9）"}}},
+             {"name": "Q.dwg", "status": "queued", "review": "done", "stats": {"xref": {"list_error": "逾時"}}},   # 重新處理中：不寫
+             {"name": "N.dwg", "status": "done", "review": "done", "stats": {"xref": {"bound": []}}}]
+    js = tmp_path / "t.js"
+    js.write_text(funcs + "\nprocess.stdout.write(unreviewedHtml(" + json.dumps(files, ensure_ascii=False) + "));\n",
+                  encoding="utf-8")
+    r = subprocess.run([node, str(js)], capture_output=True, timeout=60)
+    assert r.returncode == 0, r.stderr.decode("utf-8", "replace")
+    assert r.stdout.decode("utf-8") == '<p class="note err small">M&lt;1&gt;.dwg：建築底圖（外部參考）讀取失敗，' \
+        "這次檢核沒有併入底圖，結果可能不準；請通知系統管理者</p>"
 
 
 def test_xref_host_lists_every_main_file():

@@ -5,6 +5,7 @@
 
 import json
 import math
+import sys
 
 import ezdxf
 import pytest
@@ -290,8 +291,9 @@ def test_worker_queues_cad_before_marking_done(tmp_path, monkeypatch):
     p = tmp_path / "001_F-101.dxf"
     make_fire_dxf(p)
     W, reviews, failed, calls = _worker(monkeypatch, p)
+    monkeypatch.setitem(W._current, "job", None)
     assert W.run_once(_Conn(), tmp_path) is True
-    assert failed == [] and reviews == ["done"]
+    assert failed == [] and reviews == ["done"] and W._current["job"] is None          # 正常處理完：不再記著
     assert calls[0] == ("reset", 7) and calls.index(("queue", 7)) < calls.index(("mark", "done"))
     rd = tmp_path / "001_F-101.dxf.review"
     assert CV.read_status(rd)["state"] == "pending" and not (rd / "cad" / "1F-0").exists()
@@ -331,6 +333,7 @@ def test_sigterm_during_processing_is_not_a_file_failure(tmp_path, monkeypatch):
     p = tmp_path / "001_F-101.dxf"
     make_fire_dxf(p)
     W, reviews, failed, calls = _worker(monkeypatch, p)
+    monkeypatch.setitem(W._current, "job", None)
     seen = []
 
     def stop(*a):
@@ -340,7 +343,8 @@ def test_sigterm_during_processing_is_not_a_file_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(W, "process", stop)
     with pytest.raises(W.Stop):
         W.run_once(_Conn(), tmp_path)
-    assert failed == [] and seen == [7] and W._current["job"] is None
+    # Stop 丟出來之後還記著：main 的 except Stop 靠它把檔退回排隊、不算次數（清掉的話重新部署 3 次就變成永久失敗）
+    assert failed == [] and seen == [7] and W._current["job"]["id"] == 7
 
 
 def test_full_reprocess_cancels_running_render_of_same_file(tmp_path, monkeypatch):
@@ -785,6 +789,122 @@ def test_bind_xrefs_converts_newest_and_falls_back(tmp_path, monkeypatch):
     calls.clear()
     W.bind_xrefs(job, tmp_path / "001_main.converted.dxf", tmp_path, skip=["004_Area_1F.dwg"])
     assert calls == [("f7x0u3", "003_Area_1F.dwg")]                    # 較早的已轉好：最新的再試一次，失敗就用轉好的
+
+
+# ---------- 讀不出主圖的外部參考：不能悄悄當成沒有底圖 ----------
+
+def test_subprocess_failures_marked_transient(monkeypatch):
+    # 只有被系統砍掉（容器記憶體不足，stderr 多半是空的或只有警告）算暫時性：重試可能就好。
+    # MemoryError（子行程自己的記憶體上限）與其他錯誤：同一個檔重試結果一樣
+    from types import SimpleNamespace
+    from litian.drawing import worker as W
+    for rc, err, msg, transient in [(-9, "警告：字型\n", "外部參考讀取失敗：被系統中斷（-9）", True),
+                                    (1, "Traceback\nMemoryError\n", "外部參考讀取失敗：MemoryError", False),
+                                    (1, "Traceback\nezdxf.DXFStructureError: bad\n", "外部參考讀取失敗：ezdxf.DXFStructureError: bad", False),
+                                    (2, "", "外部參考讀取失敗：未知錯誤", False)]:
+        monkeypatch.setattr(W.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=rc, stderr=err, stdout=""))
+        with pytest.raises(RuntimeError) as e:
+            W._run(["litian.drawing.xref", "list", "x.dxf"], 5, "外部參考讀取")
+        assert str(e.value) == msg and e.value.transient is transient
+
+
+def _list_fails(monkeypatch, W, exc):
+    def run(args, timeout, what):
+        assert args[:2] == ["litian.drawing.xref", "list"]
+        raise exc
+    monkeypatch.setattr(W, "_run", run)
+
+
+@pytest.mark.parametrize("attempts,retry", [(1, True), (2, True), (3, False)])
+def test_xref_list_killed_retries_then_records(tmp_path, monkeypatch, attempts, retry):
+    from litian.drawing import worker as W
+    job = {"id": 7, "path": str(tmp_path / "001_main.dwg"), "attempts": attempts}
+    src = tmp_path / "001_main.converted.dxf"
+    err = RuntimeError("外部參考讀取失敗：被系統中斷（-9）")
+    err.transient = True
+    _list_fails(monkeypatch, W, err)
+    if retry:                                                          # 還有次數：退回排隊重試
+        with pytest.raises(W.RetryJob, match="被系統中斷"):
+            W.bind_xrefs(job, src, tmp_path)
+    else:                                                              # 次數用完：照常處理，但記下沒有併入底圖
+        assert W.bind_xrefs(job, src, tmp_path) == (src, {"list_error": "被系統中斷（-9）"})
+
+
+def test_xref_list_memory_error_or_timeout_does_not_retry(tmp_path, monkeypatch):
+    # 讀檔超過子行程記憶體上限、逾時：同一份圖重試結果一樣（抽取用同樣的上限、時限讀同一份圖），
+    # 第一次就記下、往下處理，不讓唯一的處理佇列空轉好幾輪
+    import subprocess
+    from litian.drawing import worker as W
+    job = {"id": 7, "path": str(tmp_path / "001_main.dwg"), "attempts": 1}
+    src = tmp_path / "001_main.converted.dxf"
+    mem = RuntimeError("外部參考讀取失敗：MemoryError")
+    mem.transient = False                                              # 同 _run：只有被系統砍掉才標 True
+    for exc, why in [(subprocess.TimeoutExpired("python", 600), "逾時"), (mem, "MemoryError")]:
+        _list_fails(monkeypatch, W, exc)
+        assert W.bind_xrefs(job, src, tmp_path) == (src, {"list_error": why})
+
+
+def test_xref_list_unreadable_records_error_without_retry(tmp_path, monkeypatch):
+    from litian.drawing import worker as W
+    _list_fails(monkeypatch, W, RuntimeError("外部參考讀取失敗：ezdxf.DXFStructureError: bad"))
+    src = tmp_path / "001_main.dxf"
+    job = {"id": 7, "path": str(src), "attempts": 1}
+    assert W.bind_xrefs(job, src, tmp_path) == (src, {"list_error": "ezdxf.DXFStructureError: bad"})
+
+
+def test_xref_list_failure_is_kept_in_stats_or_retried(tmp_path, monkeypatch):
+    # 整個流程：讀不了→照常抽取完成、stats.xref 記原因；暫時性的→退回排隊（save_failure retry）、不標完成
+    from litian.drawing import worker as W
+    p = tmp_path / "001_F.dxf"
+    p.write_text("x", encoding="utf-8")
+    saved, failures = [], []
+    monkeypatch.setattr(W.ST, "claim", lambda conn: {"id": 7, "case_id": 1, "name": p.name, "kind": "dxf", "path": str(p),
+                                                    "attempts": 1, "review_only": False})
+    monkeypatch.setattr(W.ST, "save_result", lambda conn, fid, ir, stats, status="done": saved.append((status, stats)))
+    monkeypatch.setattr(W.ST, "save_failure", lambda conn, fid, err, retry: failures.append((err, retry)))
+    monkeypatch.setattr(W, "extract_in_subprocess", lambda dxf, work, expand=(): ({"sheets": []}, {"sheets": 0, "texts": 0}))
+    monkeypatch.setitem(W._current, "job", None)
+    _list_fails(monkeypatch, W, RuntimeError("外部參考讀取失敗：ezdxf.DXFStructureError: bad"))
+    assert W.run_once(_Conn(), tmp_path) is True
+    assert failures == [] and saved == [("done", {"sheets": 0, "texts": 0, "xref": {"list_error": "ezdxf.DXFStructureError: bad"}})]
+    err = RuntimeError("外部參考讀取失敗：被系統中斷（-9）")
+    err.transient = True
+    _list_fails(monkeypatch, W, err)
+    saved.clear()
+    assert W.run_once(_Conn(), tmp_path) is True
+    assert saved == [] and failures == [("RetryJob: 外部參考讀取失敗（被系統中斷（-9）），退回排隊重試", True)]
+
+
+# ---------- 記憶體不夠時先砍畫圖子行程 ----------
+
+def test_cad_child_asks_to_be_killed_first(monkeypatch):
+    # 只在 Linux 子行程裡執行；這裡換掉 resource、os.nice、open 檢查寫入內容，寫不進去（非 Linux、權限）也照常畫
+    import io
+    from types import SimpleNamespace
+    from litian.drawing import worker as W
+    limits, files = [], {}
+    monkeypatch.setitem(sys.modules, "resource", SimpleNamespace(RLIMIT_AS="as", RLIMIT_CPU="cpu",
+                                                                 setrlimit=lambda k, v: limits.append(k)))
+    monkeypatch.setattr(W.os, "nice", lambda n: limits.append(("nice", n)), raising=False)
+
+    def fake_open(path, mode="r"):
+        files[path] = f = io.StringIO()
+        f.close = lambda: None                                         # 離開 with 之後還讀得到內容
+        return f
+    monkeypatch.setattr(W, "open", fake_open, raising=False)
+    W._cad_limits()
+    assert limits == ["as", "cpu", ("nice", 10)] and files["/proc/self/oom_score_adj"].getvalue() == "1000"
+    monkeypatch.setattr(W, "open", lambda *a: (_ for _ in ()).throw(PermissionError("唯讀")), raising=False)
+    W._cad_limits()                                                    # 設不了：不影響畫圖
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="只有 Linux 有 /proc/self/oom_score_adj")
+def test_cad_child_oom_score_adj_on_linux():
+    import subprocess
+    from litian.drawing import worker as W
+    r = subprocess.run([sys.executable, "-c", "print(open('/proc/self/oom_score_adj').read().strip())"],
+                       capture_output=True, text=True, preexec_fn=W._cad_limits, timeout=60)
+    assert r.returncode == 0 and r.stdout.strip() == "1000", r.stderr
 
 
 

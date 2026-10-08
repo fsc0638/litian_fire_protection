@@ -54,6 +54,11 @@ def _cad_limits():                    # 只在 Linux 子行程裡執行：限記
     resource.setrlimit(resource.RLIMIT_AS, (CAD_MEM, CAD_MEM))
     resource.setrlimit(resource.RLIMIT_CPU, (CAD_TIMEOUT, CAD_TIMEOUT + 60))
     os.nice(10)
+    try:   # 容器記憶體不夠時讓系統先砍畫圖（會自動重新排隊），不要砍到使用者在等的處理；設不了照常畫
+        with open("/proc/self/oom_score_adj", "w") as f:
+            f.write("1000")
+    except OSError:
+        pass
 
 
 def review_dir_of(path: str | Path) -> Path:
@@ -70,13 +75,21 @@ def drawing_source(job: dict) -> Path:
 
 
 def _run(args: list[str], timeout: int, what: str) -> str:
+    """子行程失敗丟 RuntimeError；被系統砍掉（容器記憶體不足，可能剛好和別的程序搶記憶體）時另標 transient（重試可能就好）。
+    MemoryError（子行程自己的記憶體上限）、逾時：同一個檔每次結果都一樣，不算暫時性。"""
     r = subprocess.run([sys.executable, "-m", *args], capture_output=True, text=True, encoding="utf-8",
                        errors="replace", timeout=timeout, env=SUBPROC_ENV,
                        preexec_fn=_limit_memory if os.name == "posix" else None)
     if r.returncode != 0:
-        last = (r.stderr.strip().splitlines() or ["未知錯誤"])[-1]
-        raise RuntimeError(f"{what}失敗：{last[:300]}")
+        last = (r.stderr.strip().splitlines() or ["未知錯誤"])[-1] if r.returncode > 0 else f"被系統中斷（{r.returncode}）"
+        e = RuntimeError(f"{what}失敗：{last[:300]}")
+        e.transient = r.returncode < 0
+        raise e
     return r.stdout
+
+
+class RetryJob(RuntimeError):
+    """暫時性的失敗：檔案退回排隊重試（id 不變，下一個就輪到它；算一次次數，用完照一般失敗處理）。"""
 
 
 def extract_in_subprocess(dxf: Path, workdir: Path, expand: list[str] | tuple = ()) -> tuple[dict, dict]:
@@ -98,14 +111,21 @@ def _convert(spool: Path, jid: str, dwg: Path, dst: Path) -> Path:
 def bind_xrefs(job: dict, src: Path, spool: Path, skip=()) -> tuple[Path, dict]:
     """主圖的外部參考（建築底圖等）在同一案件裡有上傳的話，綁定後另存 <檔名>.bound.dxf 供抽取與檢核。
     參考檔還沒轉檔的先送轉檔服務（同名的最新上傳先轉，轉不了改轉較早的）。skip：處理失敗的上傳檔名，不用。
-    讀 DXF 一律在子行程（限時、限記憶體）。"""
+    讀 DXF 一律在子行程（限時、限記憶體）。
+    讀不出主圖引用了哪些外部參考：被系統砍掉（transient）還有次數就丟 RetryJob（退回排隊重試）；
+    否則不綁定照常處理（讀不了的圖讓後面的抽取步驟回報真正原因：記憶體不夠、逾時時抽取同樣讀這份圖，多半也會失敗），
+    原因記在 list_error，工作台會提醒這次沒有併入底圖。"""
     skip = [str(s) for s in skip]
     skipped = {s.lower() for s in skip}
     path = Path(job["path"])
     try:
         refs = json.loads(_run(["litian.drawing.xref", "list", str(src)], BIND_TIMEOUT, "外部參考讀取") or "[]")
-    except Exception:
-        return src, {}                    # 讀不了的圖讓後面的抽取步驟回報真正原因
+    except Exception as e:
+        why = "逾時" if isinstance(e, subprocess.TimeoutExpired) else str(e).split("：", 1)[-1][:300]
+        if getattr(e, "transient", False) and job["attempts"] < ST.MAX_ATTEMPTS:
+            raise RetryJob(f"外部參考讀取失敗（{why}），退回排隊重試") from e
+        log.warning("xref list failed file=%s: %s", job["id"], why)
+        return src, {"list_error": why}
     if not refs:
         return src, {}
     cands = XR.case_candidates(path.parent, exclude=path)
@@ -535,22 +555,26 @@ def run_once(conn, spool: Path, cad: CadRunner | None = None) -> bool:
     if not job:
         return False
     _current["job"] = job
-    try:
-        return _run_job(conn, job, spool, cad)
-    finally:
-        _current["job"] = None
+    done = _run_job(conn, job, spool, cad)
+    # 正常結束才清掉：收到 SIGTERM（Stop 從處理中丟出來）時留著，main 才知道要把這個檔退回排隊、不算次數
+    _current["job"] = None
+    return done
 
 
 def _run_job(conn, job: dict, spool: Path, cad: CadRunner | None) -> bool:
+    t0 = time.monotonic()
     try:
         stats = process(conn, job, spool, cad)
+        if not stats.get("review_only"):           # 整個處理一次花的時間：工作台估排隊要等多久
+            ST.save_seconds(conn, job["id"], round(time.monotonic() - t0))
         log.info("done file=%s name=%s %s", job["id"], job["name"],
                  "review-only" if stats.get("review_only") else f"sheets={stats['sheets']} texts={stats['texts']}")
         if not stats.get("review_only") and (n := requeue_xref_dependents(conn, job)):
             log.info("requeued %s file(s) referencing %s", n, job["name"])
     except Exception as e:
-        # 只有「等轉檔逾時」值得重試（轉檔服務可能剛好在重啟）；其他錯誤重試結果相同
-        retry = isinstance(e, CC.ConvertError) and "逾時" in str(e) and job["attempts"] < ST.MAX_ATTEMPTS
+        # 只有「等轉檔逾時」（轉檔服務可能剛好在重啟）與暫時性的失敗（RetryJob）值得重試；其他錯誤重試結果相同
+        retry = (isinstance(e, RetryJob) or isinstance(e, CC.ConvertError) and "逾時" in str(e)) \
+            and job["attempts"] < ST.MAX_ATTEMPTS
         ST.save_failure(conn, job["id"], f"{type(e).__name__}: {e}", retry)
         log.warning("failed file=%s name=%s retry=%s error=%s", job["id"], job["name"], retry, type(e).__name__)
     return True

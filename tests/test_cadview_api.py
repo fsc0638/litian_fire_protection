@@ -138,7 +138,7 @@ def test_missing_files_and_dirs_outside_cases_are_404(client, tmp_path):
         assert client.get(u).status_code == 404, u
 
 
-def _bundle(client, monkeypatch, rows):
+def _bundle(client, monkeypatch, rows, field="cad"):
     def fake_all(sql, *a):
         if "FROM file_review" in sql:
             assert "ORDER BY f.name, f.id" in sql                    # 同名檔的順序固定：重查不會整頁重畫
@@ -150,8 +150,8 @@ def _bundle(client, monkeypatch, rows):
     client.cookies.set("__Host-fr_session", "good-token")
     r = client.get("/api/cases/3/reviews")
     assert r.status_code == 200
-    assert not any("svg_dir" in rv or "cad_state" in rv for rv in r.json()["reviews"])   # 內部欄位不外露
-    return {(rv["file_id"], fl["svg_name"]): fl["cad"] for rv in r.json()["reviews"] for fl in rv["result"]["floors"]}
+    assert not any("svg_dir" in rv or "cad_state" in rv or "cad_ahead" in rv for rv in r.json()["reviews"])   # 內部欄位不外露
+    return {(rv["file_id"], fl["svg_name"]): fl.get(field) for rv in r.json()["reviews"] for fl in rv["result"]["floors"]}
 
 
 def _row(fid, svg_dir, names, cad_state=None):
@@ -195,6 +195,25 @@ def test_review_bundle_cad_done_needs_meta(client, monkeypatch):
     # 狀態寫 done 但圖磚資訊不見了：不能叫前端去載
     rev = make_review_dir(client.cases, status={"state": "done", "sheets": {NAME: "done"}}, meta=False)
     assert _bundle(client, monkeypatch, [_row(1, str(rev), [NAME])]) == {(1, NAME): None}
+
+
+def test_review_bundle_cad_queue_position(client, monkeypatch):
+    # 原圖排隊中：前面還有幾個檔的原圖（只給數字；新的先畫，寫明個數可能變多）＋照最近畫圖的平均時間估多久；
+    # 前面沒有別的就照一般說明；沒人在等不查
+    rev = make_review_dir(client.cases, status={"state": "pending", "sheets": {}, "error": None})
+    med, calls = {"file": 1.0, "cad": 300.0}, []
+    monkeypatch.setattr(api.DS, "recent_seconds", lambda c: calls.append(1) or med)
+    rows = lambda: [{**_row(1, str(rev), [NAME, "2F-28"], "pending"), "cad_ahead": 2},
+                    {**_row(2, str(rev), [NAME], "pending"), "cad_ahead": 0}, {**_row(3, str(rev), [NAME], "done"), "cad_ahead": None}]
+    wait = "前面還有 2 個檔的原圖要產生（新上傳的先畫，個數可能變多），約 10 分鐘後開始（依最近的產生時間估計；有檔案在處理時會再晚一些）"
+    assert _bundle(client, monkeypatch, rows(), "cad_wait") == {(1, NAME): wait, (1, "2F-28"): wait, (2, NAME): None, (3, NAME): None}
+    assert calls == [1]
+    med["cad"] = None
+    assert _bundle(client, monkeypatch, rows(), "cad_wait")[(1, NAME)] == \
+        "前面還有 2 個檔的原圖要產生（新上傳的先畫，個數可能變多）；有檔案在處理時會再晚一些"
+    calls.clear()
+    assert set(_bundle(client, monkeypatch, [{**_row(2, str(rev), [NAME], "pending"), "cad_ahead": 0}], "cad_wait").values()) == {None}
+    assert calls == []
 
 
 # ---------- 工作台頁面（前端 JS 無法在這裡跑，只檢查必要元素） ----------
@@ -287,3 +306,17 @@ def test_decision_changes_only_visible_ones(tmp_path):
     }}, "return Object.fromEntries(Object.entries(D.cases).map(([n, c]) => [n, decisionChanges(D.base, c)]));")
     assert got == {"same": [], "other": [["7", "k2"]], "undo": [["7", "k1"]], "note": [["7", "k1"]],
                    "flip": [["7", "k1"]], "file": [["9", "k9"]]}
+
+
+def test_poll_key_ignores_cad_queue_text_but_patches_it(tmp_path):
+    # 原圖排隊說明（前面幾個、約多久）變了：不整頁重畫（檢視器、打到一半的備註不動），只換那一層的圖區
+    a, b = _rv("pending"), _rv("pending")
+    a["reviews"][0]["result"]["floors"][1]["cad_wait"] = "前面還有 2 個檔的原圖要產生"
+    b["reviews"][0]["result"]["floors"][1]["cad_wait"] = "前面還有 1 個檔的原圖要產生"
+    got = _run_js(tmp_path, {"a": a, "b": b, "c": _rv("pending")}, """
+        return { same: reviewsKey(D.a) === reviewsKey(D.b) && reviewsKey(D.a) === reviewsKey(D.c),
+                 wait: cadChanges(D.a, D.b), gone: cadChanges(D.a, D.c), none: cadChanges(D.a, D.a) };""")
+    assert got == {"same": True, "wait": [[0, 1]], "gone": [[0, 1]], "none": []}
+    html = api.WEB_WORKBENCH.read_text(encoding="utf-8")
+    note = html[html.index("function cadNote("):html.index("function setPlan(")]
+    assert '"原圖排隊中：" + fl.cad_wait' in note and "esc(note)" in html[html.index("function planHtml("):]

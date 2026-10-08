@@ -172,6 +172,115 @@ def test_cad_queue_backfill_claim_gen_and_recover(conn):
         "status": "queued", "review_only": True}
 
 
+def test_deploy_interruption_requeues_without_using_up_attempts(conn, monkeypatch):
+    """重新部署（SIGTERM）打斷處理中的檔：worker 的 main 把它退回排隊、不算次數。連續被打斷比次數上限還多次
+    也不會變成「處理逾時或中斷次數過多」（之前處理途中收到 Stop 時已清掉「處理中的檔」，退回排隊沒做，每次部署吃掉一次）。"""
+    from litian.drawing import store as ST
+    from litian.drawing import worker as W
+    cid = ST.create_case(conn, "部署", None)
+    fid = ST.add_file(conn, cid, "big.dwg", 1, "0" * 64, "/x/big.dwg")
+    monkeypatch.setenv("DATABASE_URL", URL)
+    monkeypatch.setattr(W.signal, "signal", lambda *a: None)                     # 不動測試程序本身的訊號處理
+    monkeypatch.setitem(W._current, "job", None)
+    seen, real_tick = [], W.tick
+
+    def interrupted(c, job, spool, cad=None):                                   # 處理到一半收到 SIGTERM
+        seen.append(c.execute("SELECT status, attempts FROM case_file WHERE id = %s", (job["id"],)).fetchone())
+        raise W.Stop()
+
+    def tick(*a):
+        if not real_tick(*a):
+            raise W.Stop()                                                      # 沒檔可處理：結束 main（測試不會卡住）
+        return True
+    monkeypatch.setattr(W, "process", interrupted)
+    monkeypatch.setattr(W, "tick", tick)
+    for _ in range(ST.MAX_ATTEMPTS + 1):
+        assert W.main() == 0
+    assert seen == [{"status": "processing", "attempts": 1}] * (ST.MAX_ATTEMPTS + 1)
+    assert conn.execute("SELECT status, attempts, error FROM case_file WHERE id = %s", (fid,)).fetchone() == {
+        "status": "queued", "attempts": 0, "error": None}
+
+
+def test_deploy_interrupting_review_only_job_keeps_it_review_only(conn, monkeypatch, tmp_path):
+    """只重跑檢核（改檢核條件）途中被重新部署打斷：退回排隊後仍只重跑檢核。之前標「檢核中」時就清掉 review_only，
+    退回排隊後變成整個重新處理（已畫好的原圖作廢、重新轉檔抽取重畫）。"""
+    from litian.drawing import store as ST
+    from litian.drawing import worker as W
+    path = tmp_path / "001_big.dwg"
+    path.write_bytes(b"x")
+    (tmp_path / "001_big.converted.dxf").write_text("x", encoding="utf-8")
+    cid = ST.create_case(conn, "改條件", None)
+    fid = ST.add_file(conn, cid, "big.dwg", 1, "0" * 64, str(path))
+    ST.save_result(conn, fid, {"sheets": []}, {"sheet_numbers": []})
+    ST.save_review(conn, fid, "done", {"floors": []}, None, None)
+    conn.execute("UPDATE case_file SET cad_state = 'done' WHERE id = %s", (fid,))
+    assert ST.requeue_reviews(conn, cid) == 1
+    monkeypatch.setenv("DATABASE_URL", URL)
+    monkeypatch.setattr(W.signal, "signal", lambda *a: None)
+    monkeypatch.setitem(W._current, "job", None)
+    seen, real_tick = [], W.tick
+
+    def interrupted(dxf, work, svg_dir, context=None):                          # 檢核子行程跑到一半收到 SIGTERM
+        seen.append(conn.execute("SELECT status, review_only FROM case_file WHERE id = %s", (fid,)).fetchone())
+        raise W.Stop()
+
+    def tick(*a):
+        if not real_tick(*a):
+            raise W.Stop()
+        return True
+    monkeypatch.setattr(W, "review_in_subprocess", interrupted)
+    monkeypatch.setattr(W, "tick", tick)
+    assert W.main() == 0
+    assert seen == [{"status": "reviewing", "review_only": True}]
+    job = ST.claim(conn)
+    assert job["id"] == fid and job["review_only"] is True and job["attempts"] == 1
+    assert conn.execute("SELECT cad_state FROM case_file WHERE id = %s", (fid,)).fetchone()["cad_state"] == "done"
+    ST.mark(conn, fid, "done")                                                 # 完成才清掉
+    assert conn.execute("SELECT review_only FROM case_file WHERE id = %s", (fid,)).fetchone()["review_only"] is False
+
+
+def test_queue_positions_and_recent_durations(conn, monkeypatch):
+    """工作台的排隊位置（所有案件一起排，只算個數）與預估用的平均處理時間。"""
+    import json
+    from litian.drawing import store as ST
+    mine, other = ST.create_case(conn, "我的", None), ST.create_case(conn, "別人的", None)
+    f = [ST.add_file(conn, cid, f"{k}.dwg", 1, "0" * 64, f"/x/{k}") for k, cid in enumerate([other, mine, other, mine, mine])]
+    assert ST.claim(conn)["id"] == f[0]                                          # 別的案件的檔處理中
+    conn.execute("UPDATE case_file SET status = 'done' WHERE id = %s", (f[4],))
+    assert {r["id"]: r["ahead"] for r in ST.case_status(conn, mine)} == {f[1]: 1, f[3]: 3, f[4]: None}   # 處理中＋排在前面的
+    conn.execute("UPDATE case_file SET status = 'reviewing' WHERE id = %s", (f[0],))
+    conn.execute("UPDATE case_file SET status = 'done' WHERE id = %s", (f[2],))
+    assert {r["id"]: r["ahead"] for r in ST.case_status(conn, mine)} == {f[1]: 1, f[3]: 2, f[4]: None}
+    # 原圖：id 大的先畫 → 排在前面的是 id 比較大、認領得到的排隊中（檔案完成、檢核成功，同 CAD_CLAIM_SQL）＋正在畫的
+    conn.execute("UPDATE case_file SET status = 'done' WHERE id = ANY(%s)", (f[1:4],))
+    for i, state in ((f[0], "rendering"), (f[1], "pending"), (f[2], "pending"), (f[3], "pending"), (f[4], "done")):
+        conn.execute("UPDATE case_file SET cad_state = %s WHERE id = %s", (state, i))
+        ST.save_review(conn, i, "done", {"floors": []}, None, None)
+    cad = lambda: {r["id"]: r["n"] for r in conn.execute(f"SELECT f.id, {ST.CAD_AHEAD_SQL} AS n FROM case_file f").fetchall()}
+    assert cad() == {f[0]: None, f[1]: 3, f[2]: 2, f[3]: 1, f[4]: None}
+    # f[3] 只重跑檢核失敗：原圖留在 pending 卻不會被畫 → 不算在別人前面（之前 f[2] 會一直顯示前面還有 2 個）
+    ST.save_review(conn, f[3], "failed", None, "x", None)
+    assert cad() == {f[0]: None, f[1]: 2, f[2]: 1, f[3]: 1, f[4]: None}
+    conn.execute("UPDATE case_file SET status = 'queued' WHERE id = %s", (f[2],))   # 只重跑檢核排隊中：暫時認領不到，也不算
+    assert cad()[f[1]] == 1
+    conn.execute("UPDATE case_file SET status = 'done' WHERE id = %s", (f[2],))
+    assert ST.claim_cad(conn)["id"] == f[2]                                       # 和實際認領的順序一致
+    # 平均：最近 RECENT_N 個完成的（id 大的）；沒有紀錄、還沒完成的、原圖沒畫好的不算
+    assert ST.recent_seconds(conn) == {"file": None, "cad": None}
+    more = [ST.add_file(conn, mine, f"m{k}.dwg", 1, "0" * 64, f"/x/m{k}") for k in range(6)]
+    for i, s in zip(more, (5, 10, 20, 30, 1000, 7)):
+        ST.save_seconds(conn, i, s)
+    conn.execute("UPDATE case_file SET status = 'done' WHERE id = ANY(%s)", (more[:5],))   # 最後一個還在排隊：不算
+    for i, (state, s) in zip(more, (("done", 100), ("done", 300), ("failed", 9), ("pending", 9), ("done", 600))):
+        conn.execute("UPDATE case_file SET cad_state = %s, stats = stats || jsonb_build_object('cad', %s::jsonb) WHERE id = %s",
+                     (state, json.dumps({"state": state, "seconds": s}), i))
+    # 估「前面 N 個加起來」用平均：大小檔混在一起時中位數（這裡是 20 秒）會估太短
+    assert ST.recent_seconds(conn) == {"file": 213.0, "cad": pytest.approx(1000 / 3)}
+    monkeypatch.setattr(ST, "RECENT_N", 2)
+    assert ST.recent_seconds(conn) == {"file": 515.0, "cad": 450.0}              # 最近 2 個：30、1000；原圖 300、600
+    assert conn.execute("SELECT stats FROM case_file WHERE id = %s", (more[0],)).fetchone()["stats"]["seconds"] == 5
+
+
 def test_requeue_main_when_same_name_base_reuploaded(conn):
     """同名底圖重新上傳、處理完：綁舊版的主圖排回完整重跑（排隊只重跑檢核的也改成完整重跑）；內容相同的不排。"""
     import json
