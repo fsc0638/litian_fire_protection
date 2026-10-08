@@ -813,9 +813,14 @@ ol.findings > li.flash { animation: liflash 2s ease-out; }
   function planHtml(r, fl) {
     if (fl.cad === "done") return '<div class="cadbox" data-base="/api/cases/' + currentCase + "/files/" + r.file_id + '" data-name="' + esc(fl.svg_name || fl.label) +
       '" data-svg="' + esc(fl.svg) + '" data-label="' + esc(fl.label) + '"></div>';
-    const note = CAD_WAIT[fl.cad] || (fl.cad === "failed" ? CAD_FAILED : "");
-    return (note ? '<p class="note info small">' + note + "</p>" : "") +
+    const note = cadNote(fl);
+    return (note ? '<p class="note info small">' + esc(note) + "</p>" : "") +
       '<a href="' + esc(fl.svg) + '" target="_blank" rel="noopener"><img class="plan" loading="lazy" alt="' + esc(fl.label) + ' 檢核標示圖" src="' + esc(fl.svg) + '"></a>';
+  }
+  // 原圖還沒好的說明；排隊中前面還有別的原圖時接上後端算好的 cad_wait（前面幾個、約多久）
+  function cadNote(fl) {
+    if (fl.cad === "pending" && fl.cad_wait) return "原圖排隊中：" + fl.cad_wait + "，先顯示簡化圖；每 30 秒自動檢查一次。";
+    return CAD_WAIT[fl.cad] || (fl.cad === "failed" ? CAD_FAILED : "");
   }
   // 只換掉這一層的圖區（缺失清單與輸入框不動）
   function setPlan(body, r, fl) {
@@ -842,10 +847,10 @@ ol.findings > li.flash { animation: liflash 2s ease-out; }
   }
 
   // ---------- 重查比對（純函式；tests/test_cadview_api.py 用 node 跑）----------
-  // 比對用的 key 不含審核結果與每層原圖狀態：這兩項變了只局部更新（整頁重畫會讓檢視器跳回全圖、打到一半的備註被清空）
+  // 比對用的 key 不含審核結果與每層原圖狀態（含排隊說明）：這些變了只局部更新（整頁重畫會讓檢視器跳回全圖、打到一半的備註被清空）
   function reviewsKey(d) {
     return JSON.stringify([d.laws, (d.reviews || []).map((r) => (r.result && Array.isArray(r.result.floors)
-      ? { ...r, result: { ...r.result, floors: r.result.floors.map((fl) => ({ ...fl, cad: null })) } } : r))]);
+      ? { ...r, result: { ...r.result, floors: r.result.floors.map((fl) => ({ ...fl, cad: null, cad_wait: null })) } } : r))]);
   }
   // 畫面上看得到的審核結果（決定＋備註）不同的 [檔案, 缺失 key]；伺服器多帶的 by、at 不算
   function decisionChanges(a, b) {
@@ -857,12 +862,12 @@ ol.findings > li.flash { animation: liflash 2s ease-out; }
     });
     return out;
   }
-  // 原圖狀態變了的樓層 [第幾個檔案, 第幾層]（兩份結果的 key 相同、樓層一一對應時才用）
+  // 原圖狀態或排隊說明變了的樓層 [第幾個檔案, 第幾層]（兩份結果的 key 相同、樓層一一對應時才用）
   function cadChanges(a, b) {
     const out = [];
     (b.reviews || []).forEach((r, ri) => ((r.result && r.result.floors) || []).forEach((fl, fi) => {
       const o = (a.reviews || [])[ri]?.result?.floors?.[fi];
-      if ((o?.cad ?? null) !== (fl.cad ?? null)) out.push([ri, fi]);
+      if ((o?.cad ?? null) !== (fl.cad ?? null) || (o?.cad_wait ?? null) !== (fl.cad_wait ?? null)) out.push([ri, fi]);
     }));
     return out;
   }

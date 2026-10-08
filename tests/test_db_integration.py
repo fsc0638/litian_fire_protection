@@ -172,6 +172,67 @@ def test_cad_queue_backfill_claim_gen_and_recover(conn):
         "status": "queued", "review_only": True}
 
 
+def test_deploy_interruption_requeues_without_using_up_attempts(conn, monkeypatch):
+    """重新部署（SIGTERM）打斷處理中的檔：worker 的 main 把它退回排隊、不算次數。連續被打斷比次數上限還多次
+    也不會變成「處理逾時或中斷次數過多」（之前處理途中收到 Stop 時已清掉「處理中的檔」，退回排隊沒做，每次部署吃掉一次）。"""
+    from litian.drawing import store as ST
+    from litian.drawing import worker as W
+    cid = ST.create_case(conn, "部署", None)
+    fid = ST.add_file(conn, cid, "big.dwg", 1, "0" * 64, "/x/big.dwg")
+    monkeypatch.setenv("DATABASE_URL", URL)
+    monkeypatch.setattr(W.signal, "signal", lambda *a: None)                     # 不動測試程序本身的訊號處理
+    monkeypatch.setitem(W._current, "job", None)
+    seen, real_tick = [], W.tick
+
+    def interrupted(c, job, spool, cad=None):                                   # 處理到一半收到 SIGTERM
+        seen.append(c.execute("SELECT status, attempts FROM case_file WHERE id = %s", (job["id"],)).fetchone())
+        raise W.Stop()
+
+    def tick(*a):
+        if not real_tick(*a):
+            raise W.Stop()                                                      # 沒檔可處理：結束 main（測試不會卡住）
+        return True
+    monkeypatch.setattr(W, "process", interrupted)
+    monkeypatch.setattr(W, "tick", tick)
+    for _ in range(ST.MAX_ATTEMPTS + 1):
+        assert W.main() == 0
+    assert seen == [{"status": "processing", "attempts": 1}] * (ST.MAX_ATTEMPTS + 1)
+    assert conn.execute("SELECT status, attempts, error FROM case_file WHERE id = %s", (fid,)).fetchone() == {
+        "status": "queued", "attempts": 0, "error": None}
+
+
+def test_queue_positions_and_recent_durations(conn, monkeypatch):
+    """工作台的排隊位置（所有案件一起排，只算個數）與預估用的處理時間中位數。"""
+    import json
+    from litian.drawing import store as ST
+    mine, other = ST.create_case(conn, "我的", None), ST.create_case(conn, "別人的", None)
+    f = [ST.add_file(conn, cid, f"{k}.dwg", 1, "0" * 64, f"/x/{k}") for k, cid in enumerate([other, mine, other, mine, mine])]
+    assert ST.claim(conn)["id"] == f[0]                                          # 別的案件的檔處理中
+    conn.execute("UPDATE case_file SET status = 'done' WHERE id = %s", (f[4],))
+    assert {r["id"]: r["ahead"] for r in ST.case_status(conn, mine)} == {f[1]: 1, f[3]: 3, f[4]: None}   # 處理中＋排在前面的
+    conn.execute("UPDATE case_file SET status = 'reviewing' WHERE id = %s", (f[0],))
+    conn.execute("UPDATE case_file SET status = 'done' WHERE id = %s", (f[2],))
+    assert {r["id"]: r["ahead"] for r in ST.case_status(conn, mine)} == {f[1]: 1, f[3]: 2, f[4]: None}
+    # 原圖：id 大的先畫 → 排在前面的是 id 比較大的排隊中＋正在畫的
+    for i, state in ((f[0], "rendering"), (f[1], "pending"), (f[2], "pending"), (f[3], "pending"), (f[4], "done")):
+        conn.execute("UPDATE case_file SET cad_state = %s WHERE id = %s", (state, i))
+    cad = {r["id"]: r["n"] for r in conn.execute(f"SELECT f.id, {ST.CAD_AHEAD_SQL} AS n FROM case_file f").fetchall()}
+    assert cad == {f[0]: None, f[1]: 3, f[2]: 2, f[3]: 1, f[4]: None}
+    # 中位數：最近 RECENT_N 個完成的（id 大的）；沒有紀錄、還沒完成的、原圖沒畫好的不算
+    assert ST.recent_seconds(conn) == {"file": None, "cad": None}
+    more = [ST.add_file(conn, mine, f"m{k}.dwg", 1, "0" * 64, f"/x/m{k}") for k in range(6)]
+    for i, s in zip(more, (5, 10, 20, 30, 1000, 7)):
+        ST.save_seconds(conn, i, s)
+    conn.execute("UPDATE case_file SET status = 'done' WHERE id = ANY(%s)", (more[:5],))   # 最後一個還在排隊：不算
+    for i, (state, s) in zip(more, (("done", 100), ("done", 300), ("failed", 9), ("pending", 9), ("done", 600))):
+        conn.execute("UPDATE case_file SET cad_state = %s, stats = stats || jsonb_build_object('cad', %s::jsonb) WHERE id = %s",
+                     (state, json.dumps({"state": state, "seconds": s}), i))
+    assert ST.recent_seconds(conn) == {"file": 20.0, "cad": 300.0}
+    monkeypatch.setattr(ST, "RECENT_N", 2)
+    assert ST.recent_seconds(conn) == {"file": 515.0, "cad": 450.0}              # 最近 2 個：30、1000；原圖 300、600
+    assert conn.execute("SELECT stats FROM case_file WHERE id = %s", (more[0],)).fetchone()["stats"]["seconds"] == 5
+
+
 def test_requeue_main_when_same_name_base_reuploaded(conn):
     """同名底圖重新上傳、處理完：綁舊版的主圖排回完整重跑（排隊只重跑檢核的也改成完整重跑）；內容相同的不排。"""
     import json

@@ -322,6 +322,33 @@ def load_ir(conn, file_id: int) -> dict | None:
     return row["ir"] if row else None
 
 
+def save_seconds(conn, file_id: int, seconds: int) -> None:
+    """整個處理一次花的秒數（stats.seconds，含轉檔、綁定外部參考、抽取、檢核）：估排隊要等多久用。"""
+    conn.execute("UPDATE case_file SET stats = COALESCE(stats, '{}'::jsonb) || jsonb_build_object('seconds', %s::int) "
+                 "WHERE id = %s", (seconds, file_id))
+
+
+# 排隊位置（工作台顯示「前面還有幾個」，只給數字、不透露別的案件）：主佇列所有案件一起排、一次處理一個、id 小的先
+# （CLAIM_SQL）→ 排在前面的＋正在處理的；原圖一次畫一個、id 大的先（CAD_CLAIM_SQL）→ 排在前面的＋正在畫的。
+# 用在 FROM case_file f 的查詢裡；只有排隊中的才算，走 case_file_queue（status, id）與 case_file_cad 索引。
+AHEAD_SQL = ("CASE WHEN f.status = 'queued' THEN (SELECT count(*) FROM case_file q WHERE q.status = 'queued' AND q.id < f.id)"
+             " + (SELECT count(*) FROM case_file q WHERE q.status IN ('processing', 'reviewing')) END")
+CAD_AHEAD_SQL = ("CASE WHEN f.cad_state = 'pending' THEN (SELECT count(*) FROM case_file q WHERE q.cad_state IN ('pending', 'rendering')"
+                 " AND (q.id > f.id OR q.cad_state = 'rendering')) END")
+RECENT_N = 20
+
+
+def recent_seconds(conn) -> dict:
+    """估等候時間用：最近 RECENT_N 個整個處理完的檔（stats.seconds）、最近 RECENT_N 張畫好的原圖（stats.cad.seconds）
+    花的秒數中位數（file、cad；沒有紀錄為 None）。從 id 大的往回找（索引倒著掃，湊滿就停，不掃整張表）。"""
+    return conn.execute(
+        "SELECT (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY s) FROM (SELECT (stats->>'seconds')::float AS s "
+        "  FROM case_file WHERE status = 'done' AND stats ? 'seconds' ORDER BY id DESC LIMIT %s) a) AS file, "
+        "(SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY s) FROM (SELECT (stats->'cad'->>'seconds')::float AS s "
+        "  FROM case_file WHERE status = 'done' AND cad_state = 'done' AND stats->'cad' ? 'seconds' "
+        "  ORDER BY id DESC LIMIT %s) b) AS cad", (RECENT_N, RECENT_N)).fetchone()
+
+
 def save_failure(conn, file_id: int, error: str, retry: bool) -> None:
     # 記失敗時原圖排隊一併取消（失敗的檔不會被畫，工作台不能一直顯示排隊中）；之後重跑成功會再排
     conn.execute("UPDATE case_file SET status = %s, error = %s, updated_at = now(), "
@@ -330,7 +357,8 @@ def save_failure(conn, file_id: int, error: str, retry: bool) -> None:
 
 
 def case_status(conn, case_id: int) -> list[dict]:
-    return conn.execute("SELECT id, name, kind, size, status, error, stats, attempts FROM case_file "
+    """ahead：排隊中的檔前面還有幾個（AHEAD_SQL；其他狀態為 None）。"""
+    return conn.execute(f"SELECT id, name, kind, size, status, error, stats, attempts, {AHEAD_SQL} AS ahead FROM case_file f "
                         "WHERE case_id = %s ORDER BY name, id", (case_id,)).fetchall()
 
 
