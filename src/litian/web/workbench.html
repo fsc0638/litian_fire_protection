@@ -260,6 +260,7 @@ ol.findings > li.flash { animation: liflash 2s ease-out; }
   </form>
 
   <section id="app" class="stack hidden">
+    <p id="disk-warn" class="note err hidden" role="alert"></p>
     <div id="admin-view" class="stack hidden">
       <div class="row"><button id="admin-back" type="button">← 回案件清單</button></div>
       <form id="inv-form" class="card stack">
@@ -312,7 +313,7 @@ ol.findings > li.flash { animation: liflash 2s ease-out; }
       <div class="card stack">
         <div id="drop" class="drop">
           把 DWG、DXF 檔拖到這裡，或 <label style="color:var(--accent-text);cursor:pointer;text-decoration:underline">選擇檔案<input id="pick" type="file" multiple accept=".dwg,.dxf,.pdf" class="hidden"></label>
-          <div class="small">單檔上限 200 MB；.dwl、.bak 等暫存檔會自動略過。</div>
+          <div class="small">單檔上限 200 MB、一次合計 1 GB；.dwl、.bak 等暫存檔會自動略過。</div>
         </div>
         <p id="upload-msg" class="note info hidden"></p>
       </div>
@@ -443,6 +444,10 @@ ol.findings > li.flash { animation: liflash 2s ease-out; }
     const who = $("#who"); who.textContent = user.username + (user.role === "admin" ? "（管理者）" : "");
     if (user.line_name) { const s = document.createElement("span"); s.className = "wide-only"; s.textContent = "｜LINE：" + user.line_name; who.append(s); }
     $("#logout").classList.remove("hidden"); $("#admin-link").classList.toggle("hidden", user.role !== "admin");
+    // 磁碟快滿（後端只回給管理者）：提醒清理；滿了資料庫寫不進去，整個網站會停擺
+    $("#disk-warn").textContent = user.disk_low ? "伺服器磁碟空間只剩 " + user.disk_free_gb + " GB，請盡快清理（做法見部署說明的「磁碟空間」）。" +
+      "空間再少一些就會暫停上傳；磁碟滿了整個網站都會停擺。" : "";
+    $("#disk-warn").classList.toggle("hidden", !user.disk_low);
     route();
   }
   async function showInvite(token, err) {
@@ -1261,7 +1266,11 @@ ol.findings > li.flash { animation: liflash 2s ease-out; }
     try {
       const r = await api("/api/cases/" + currentCase + "/files", { method: "POST", body: fd });
       msg.textContent = "已上傳 " + r.files.length + " 個檔案，排入處理。";
-    } catch (err) { msg.className = "note err"; msg.textContent = err.message; }
+    } catch (err) {
+      // 伺服器的拒收原因（磁碟空間不足、超過上限）照原文顯示；連線中斷時 fetch 丟 TypeError，訊息是英文，改寫成白話
+      msg.className = "note err";
+      msg.textContent = err instanceof TypeError ? "上傳沒有完成（連線中斷）。檔案很多或很大時請分批上傳；仍然失敗請稍後再試，或通知管理者。" : err.message;
+    }
     await refreshCase();
   }
   $("#pick").addEventListener("change", (e) => { upload(e.target.files); e.target.value = ""; });

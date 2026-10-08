@@ -2,6 +2,7 @@
 
 環境變數：DATABASE_URL、MEILI_URL、MEILI_MASTER_KEY
   法規問答（選填）：OPENAI_API_KEY（有才啟用 AI 回答，模型 gpt-5.6-sol）、ASK_ACCESS_CODE（選填，設定後才要求存取碼）、ASK_DAILY_LIMIT（每日 AI 問答上限，預設 500；台北時間每天 23:59 重新計算，計數存在資料庫）
+  磁碟（選填）：UPLOAD_MIN_FREE_GB（剩餘空間扣掉這次上傳後低於此數就拒收上傳，預設 3）、DISK_WARN_GB（低於此數時工作台提醒管理者，預設 8）
 啟動：uvicorn litian.api:app --host 0.0.0.0 --port 8000
 """
 
@@ -14,6 +15,8 @@ import logging
 import os
 import re
 import secrets
+import shutil
+import tempfile
 import time
 from collections import Counter, deque
 from contextlib import asynccontextmanager
@@ -23,8 +26,8 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 import openai
-from fastapi import Cookie, Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, Response, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi import Cookie, Depends, FastAPI, Form, Header, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 from psycopg.rows import dict_row
@@ -77,6 +80,26 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="消防圖審系統 API", version="0.1.0", lifespan=lifespan, root_path="")
+UPLOAD_PATH = re.compile(r"/api/cases/\d+/files")
+
+
+class MultipartOnlyForUpload:
+    """附檔案的表單（multipart）只有上傳端點收。有表單欄位的端點，框架都會先把附的檔案存進暫存區才執行程式，
+    不必登入的 POST /api/auth/line/start 也一樣，可被拿來塞滿磁碟；在讀內容前就拒收。"""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and not UPLOAD_PATH.fullmatch(scope["path"]):
+            ctype = next((v for k, v in scope["headers"] if k == b"content-type"), b"")
+            if ctype.lower().startswith(b"multipart/"):
+                await JSONResponse({"detail": "這個網址不接受上傳檔案"}, status_code=415)(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(MultipartOnlyForUpload)
 
 
 def _one(sql: str, *args):
@@ -561,6 +584,10 @@ async def ask(body: AskBody, request: Request, x_access_code: str = Header("")):
 
 CASES_DIR = Path(os.environ.get("CASES_DIR", "/data/cases"))
 UPLOAD_MAX = 200 * 1024 * 1024        # 單檔上限
+GB = 1024 ** 3
+UPLOAD_REQUEST_MAX = 1 * GB           # 一次上傳（整個請求）的上限：讀內容前就看 Content-Length 擋掉
+UPLOAD_MIN_FREE_GB = float(os.environ.get("UPLOAD_MIN_FREE_GB", "3"))   # 磁碟滿了資料庫寫不進去，整個網站會停擺
+DISK_WARN_GB = float(os.environ.get("DISK_WARN_GB", "8"))
 NO_STORE = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
 LOGIN_ERROR_RE = re.compile(r"[A-Za-z_]{1,40}")
 # 不因登入失敗封鎖來源 IP：state、邀請權杖都是 256 位元亂數，沒有猜測空間；而整間辦公室共用一個對外 IP，
@@ -741,7 +768,11 @@ def auth_logout(response: Response, session: str | None = Cookie(None, alias=AU.
 
 @app.get("/api/auth/me")
 def auth_me(user: dict = Depends(current_user)):
-    return user
+    if user["role"] != "admin":
+        return user
+    free = _disk_free_gb()                      # 管理者：磁碟快滿時工作台顯示提醒
+    return {**user, "disk_free_gb": None if free is None else round(free, 1),
+            "disk_low": free is not None and free < DISK_WARN_GB}
 
 
 # ---- 帳號管理（管理者）：發邀請、停用／啟用、改角色 ----
@@ -845,29 +876,54 @@ def _case_or_404(case_id: int) -> dict:
     return row
 
 
+def _disk_free_gb() -> float | None:
+    """案件資料夾與上傳暫存區（tempfile 的預設資料夾）較少的那邊還剩幾 GB；都查不到時回 None。"""
+    free = []
+    for p in (CASES_DIR, Path(tempfile.gettempdir())):
+        try:
+            free.append(shutil.disk_usage(p).free / GB)
+        except OSError:                          # 資料夾還不存在（本機開發）
+            pass
+    return min(free) if free else None
+
+
 @app.post("/api/cases/{case_id}/files")
-async def cases_upload(case_id: int, files: list[UploadFile] = File(...), user: dict = Depends(current_user)):
+async def cases_upload(case_id: int, request: Request, user: dict = Depends(current_user)):
+    # 不用 File(...) 參數：FastAPI 會先把整個上傳內容存到暫存區，才檢查登入與大小。
+    # 改成登入（current_user）、案件、整個請求大小、磁碟空間都過了，才開始讀內容
     _case_or_404(case_id)
-    d = CASES_DIR / str(case_id)
-    d.mkdir(parents=True, exist_ok=True)
-    start = _one("SELECT count(*) AS n FROM case_file WHERE case_id = %s", case_id)["n"]
-    out = []
-    for i, f in enumerate(files, start + 1):
-        name = (f.filename or "file")[:200]
-        dst = d / f"{i:03d}_{safe_name(name)}"
-        h, size = hashlib.sha256(), 0
-        with open(dst, "wb") as fh:
-            while chunk := await f.read(1 << 20):
-                size += len(chunk)
-                if size > UPLOAD_MAX:
-                    fh.close()
-                    dst.unlink(missing_ok=True)
-                    raise HTTPException(413, f"「{name}」超過單檔上限 {UPLOAD_MAX // (1024 * 1024)} MB")
-                h.update(chunk)
-                fh.write(chunk)
-        with pool.connection() as c:
-            fid = DS.add_file(c, case_id, name, size, h.hexdigest(), str(dst))
-        out.append({"id": fid, "name": name, "size": size})
+    cl = request.headers.get("content-length", "")
+    length = int(cl) if cl.isascii() and cl.isdigit() else 0   # 瀏覽器一定會帶；沒帶的照收（單檔上限照樣在下面擋）
+    if length > UPLOAD_REQUEST_MAX:
+        raise HTTPException(413, f"一次上傳合計超過 {UPLOAD_REQUEST_MAX / GB:g} GB，請分批上傳")
+    free = _disk_free_gb()
+    if free is not None and free - length / GB < UPLOAD_MIN_FREE_GB:
+        log.warning("upload refused: disk free %.1f GB, request %.1f MB", free, length / 1024 / 1024)
+        raise HTTPException(507, f"伺服器磁碟空間不足（剩 {free:.1f} GB），暫時不能上傳。請通知管理者清理空間後再試")
+    async with request.form() as form:
+        files = [f for f in form.getlist("files") if not isinstance(f, str)]
+        if not files:
+            raise HTTPException(422, "沒有收到檔案，請重新選擇檔案上傳")
+        d = CASES_DIR / str(case_id)
+        d.mkdir(parents=True, exist_ok=True)
+        start = _one("SELECT count(*) AS n FROM case_file WHERE case_id = %s", case_id)["n"]
+        out = []
+        for i, f in enumerate(files, start + 1):
+            name = (f.filename or "file")[:200]
+            dst = d / f"{i:03d}_{safe_name(name)}"
+            h, size = hashlib.sha256(), 0
+            with open(dst, "wb") as fh:
+                while chunk := await f.read(1 << 20):
+                    size += len(chunk)
+                    if size > UPLOAD_MAX:
+                        fh.close()
+                        dst.unlink(missing_ok=True)
+                        raise HTTPException(413, f"「{name}」超過單檔上限 {UPLOAD_MAX // (1024 * 1024)} MB")
+                    h.update(chunk)
+                    fh.write(chunk)
+            with pool.connection() as c:
+                fid = DS.add_file(c, case_id, name, size, h.hexdigest(), str(dst))
+            out.append({"id": fid, "name": name, "size": size})
     return {"files": out}
 
 

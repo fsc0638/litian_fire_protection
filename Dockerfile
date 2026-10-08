@@ -6,8 +6,14 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY pyproject.toml ./
+# 第三方套件先裝、自成一層：只有 pyproject.toml 改了才重裝。以前先複製程式再整包安裝，
+# 每次改程式都重裝全部套件，每次部署多留約 600 MB 的建置快取（tests/test_dockerfile.py 核對這裡與 pyproject 一致）
+RUN python -c "import tomllib; print(*tomllib.load(open('pyproject.toml', 'rb'))['project']['dependencies'], sep=chr(10))" >/tmp/requirements.txt \
+ && pip install --no-cache-dir -r /tmp/requirements.txt \
+ && rm /tmp/requirements.txt
 COPY src ./src
-RUN pip install --no-cache-dir .
+# 本系統自己的程式：套件上一層已裝好，不再重新解析（建置工具 setuptools 仍由 pip 臨時下載，用完即丟）
+RUN pip install --no-cache-dir --no-deps .
 COPY data/lawdb ./data/lawdb
 COPY data/tables ./data/tables
 COPY data/review ./data/review
