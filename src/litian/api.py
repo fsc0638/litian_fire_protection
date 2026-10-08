@@ -2,7 +2,8 @@
 
 環境變數：DATABASE_URL、MEILI_URL、MEILI_MASTER_KEY
   法規問答（選填）：OPENAI_API_KEY（有才啟用 AI 回答，模型 gpt-5.6-sol）、ASK_ACCESS_CODE（選填，設定後才要求存取碼）、ASK_DAILY_LIMIT（每日 AI 問答上限，預設 500；台北時間每天 23:59 重新計算，計數存在資料庫）
-  磁碟（選填）：UPLOAD_MIN_FREE_GB（剩餘空間扣掉這次上傳後低於此數就拒收上傳，預設 3）、DISK_WARN_GB（低於此數時工作台提醒管理者，預設 8）
+  磁碟（選填）：UPLOAD_MIN_FREE_GB（剩餘空間扣掉這次上傳大小的兩倍後低於此數就拒收上傳，預設 3）、DISK_WARN_GB（低於此數時工作台提醒管理者，預設 8）；
+    正式環境的 docker-compose.yml 沒有傳入這兩個，用預設值
 啟動：uvicorn litian.api:app --host 0.0.0.0 --port 8000
 """
 
@@ -585,7 +586,7 @@ async def ask(body: AskBody, request: Request, x_access_code: str = Header("")):
 CASES_DIR = Path(os.environ.get("CASES_DIR", "/data/cases"))
 UPLOAD_MAX = 200 * 1024 * 1024        # 單檔上限
 GB = 1024 ** 3
-UPLOAD_REQUEST_MAX = 1 * GB           # 一次上傳（整個請求）的上限：讀內容前就看 Content-Length 擋掉
+UPLOAD_REQUEST_MAX = 1 * GB           # 一次上傳（整個請求）的上限：讀內容前看 Content-Length 擋掉，讀的時候也邊讀邊數
 UPLOAD_MIN_FREE_GB = float(os.environ.get("UPLOAD_MIN_FREE_GB", "3"))   # 磁碟滿了資料庫寫不進去，整個網站會停擺
 DISK_WARN_GB = float(os.environ.get("DISK_WARN_GB", "8"))
 NO_STORE = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
@@ -892,15 +893,28 @@ async def cases_upload(case_id: int, request: Request, user: dict = Depends(curr
     # 不用 File(...) 參數：FastAPI 會先把整個上傳內容存到暫存區，才檢查登入與大小。
     # 改成登入（current_user）、案件、整個請求大小、磁碟空間都過了，才開始讀內容
     _case_or_404(case_id)
+    too_big = f"一次上傳合計超過 {UPLOAD_REQUEST_MAX / GB:g} GB，請分批上傳"
     cl = request.headers.get("content-length", "")
-    length = int(cl) if cl.isascii() and cl.isdigit() else 0   # 瀏覽器一定會帶；沒帶的照收（單檔上限照樣在下面擋）
+    # 瀏覽器一定會帶大小；沒帶的（chunked）空間照上限算，讀的時候再邊讀邊數
+    length = int(cl) if cl.isascii() and cl.isdigit() else UPLOAD_REQUEST_MAX
     if length > UPLOAD_REQUEST_MAX:
-        raise HTTPException(413, f"一次上傳合計超過 {UPLOAD_REQUEST_MAX / GB:g} GB，請分批上傳")
+        raise HTTPException(413, too_big)
     free = _disk_free_gb()
-    if free is not None and free - length / GB < UPLOAD_MIN_FREE_GB:
+    # 上傳內容先整份存進暫存區、再複製到案件資料夾，兩處通常在同一顆磁碟：照兩倍算
+    if free is not None and free - 2 * length / GB < UPLOAD_MIN_FREE_GB:
         log.warning("upload refused: disk free %.1f GB, request %.1f MB", free, length / 1024 / 1024)
         raise HTTPException(507, f"伺服器磁碟空間不足（剩 {free:.1f} GB），暫時不能上傳。請通知管理者清理空間後再試")
-    async with request.form() as form:
+    got = 0
+
+    async def receive():                     # 邊讀邊數：超過上限就停，不再往暫存區寫
+        nonlocal got
+        msg = await request.receive()
+        got += len(msg.get("body", b""))
+        if got > UPLOAD_REQUEST_MAX:
+            raise HTTPException(413, too_big)
+        return msg
+
+    async with Request(request.scope, receive).form() as form:
         files = [f for f in form.getlist("files") if not isinstance(f, str)]
         if not files:
             raise HTTPException(422, "沒有收到檔案，請重新選擇檔案上傳")

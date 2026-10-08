@@ -72,20 +72,23 @@ def test_upload_rejects_oversize_and_removes_partial(client, tmp_path, monkeypat
     assert not list((tmp_path / "4").iterdir())
 
 
-def _raw_upload(headers: dict, path: str = "/api/cases/3/files") -> tuple[int, dict, int]:
-    """直接呼叫 ASGI 程式上傳（預設到案件 3）：回（狀態碼, 內容, 讀了幾次請求內容）。讀 0 次＝拒收時完全沒碰上傳內容（沒有存到暫存區）。"""
+def _raw_upload(headers: dict, path: str = "/api/cases/3/files", chunks: tuple = (b"",)) -> tuple[int, dict, int]:
+    """直接呼叫 ASGI 程式上傳（預設到案件 3）：回（狀態碼, 內容, 讀了幾次請求內容）。讀 0 次＝拒收時完全沒碰上傳內容（沒有存到暫存區）。
+    headers 的值給 None＝不帶這個標頭；chunks＝請求內容分幾段送。"""
     import asyncio
     import json
-    reads, sent = [], []
+    reads, sent, todo = [], [], list(chunks)
 
     async def receive():
         reads.append(1)
-        return {"type": "http.request", "body": b"", "more_body": False}
+        body = todo.pop(0) if todo else b""
+        return {"type": "http.request", "body": body, "more_body": bool(todo)}
 
     async def send(m):
         sent.append(m)
 
-    hs = {"content-type": "multipart/form-data; boundary=x", "content-length": "1000", **headers}
+    hs = {k: v for k, v in {"content-type": "multipart/form-data; boundary=x", "content-length": "1000", **headers}.items()
+          if v is not None}
     scope = {"type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1", "method": "POST", "scheme": "http",
              "path": path, "raw_path": path.encode(), "root_path": "", "query_string": b"",
              "headers": [(k.encode(), v.encode()) for k, v in hs.items()], "client": ("127.0.0.1", 1), "server": ("testserver", 80)}
@@ -120,11 +123,14 @@ def test_upload_guard_counts_request_size_and_temp_dir(client, monkeypatch):
     import tempfile
     from pathlib import Path
     good = {"cookie": "__Host-fr_session=good-token"}
-    # 剩 3.5 GB：小檔照收（讀了內容，這裡內容是空的 → 400／422），600 MB 會讓剩餘低於 3 GB → 拒收
+    # 剩 3.5 GB：小檔照收（讀了內容，這裡內容是空的 → 400／422）。上傳先整份存進暫存區、再複製到案件資料夾，
+    # 空間照兩倍扣：200 MB（剩 3.1 GB）照收，300 MB（剩 2.9 GB）拒收
     monkeypatch.setattr(api.shutil, "disk_usage", lambda p: NS(free=3.5 * api.GB))
     status, _, reads = _raw_upload(good)
     assert status in (400, 422) and reads > 0
-    assert _raw_upload({**good, "content-length": str(600 * 1024 * 1024)})[0] == 507
+    status, _, reads = _raw_upload({**good, "content-length": str(200 * 1024 * 1024)})
+    assert status in (400, 422) and reads > 0
+    assert _raw_upload({**good, "content-length": str(300 * 1024 * 1024)})[::2] == (507, 0)
     # 上傳先存在暫存區（tempfile 的預設資料夾），那邊快滿也要擋
     tmp = Path(tempfile.gettempdir())
     monkeypatch.setattr(api.shutil, "disk_usage", lambda p: NS(free=(1 if Path(p) == tmp else 100) * api.GB))
@@ -137,6 +143,19 @@ def test_upload_guard_counts_request_size_and_temp_dir(client, monkeypatch):
     client.cookies.set("__Host-fr_session", "good-token")
     r = client.post("/api/cases/3/files", files=[("files", ("a.dwg", b"AC1027", "application/octet-stream"))])
     assert r.status_code == 200 and r.json()["files"][0]["size"] == 6
+
+
+def test_upload_without_content_length_is_capped(client, monkeypatch):
+    good = {"cookie": "__Host-fr_session=good-token", "content-length": None}     # chunked：沒帶大小
+    # 空間照上限（1 GB）的兩倍算：剩 4 GB 就拒收，內容不讀
+    monkeypatch.setattr(api.shutil, "disk_usage", lambda p: NS(free=4 * api.GB))
+    assert _raw_upload(good)[::2] == (507, 0)
+    # 空間夠：邊讀邊數，超過上限就停，後面的內容不再讀進暫存區
+    monkeypatch.setattr(api.shutil, "disk_usage", lambda p: NS(free=100 * api.GB))
+    monkeypatch.setattr(api, "UPLOAD_REQUEST_MAX", 1000)
+    head = b'--x\r\nContent-Disposition: form-data; name="files"; filename="a.dwg"\r\n\r\n'
+    status, body, reads = _raw_upload(good, chunks=(head + b"0" * 600, b"0" * 600, b"0" * 600, b"0" * 600))
+    assert (status, reads) == (413, 2) and "請分批上傳" in body["detail"]
 
 
 def test_upload_without_files_is_rejected_plainly(client):
